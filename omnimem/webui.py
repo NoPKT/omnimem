@@ -56,7 +56,7 @@ HTML_PAGE = """<!doctype html>
           <div class=\"small\" data-i18n=\"subtitle\">Simple mode: Status & Actions / Configuration / Memory</div>
         </div>
         <div>
-          <label class=\"small\" data-i18n=\"language\">Language</label>
+          <label class=\"small\"><span data-i18n=\"language\">Language</span></label>
           <select id=\"langSelect\" class=\"lang\">
             <option value=\"en\">English</option>
             <option value=\"zh\">中文</option>
@@ -107,14 +107,14 @@ HTML_PAGE = """<!doctype html>
         <div class=\"card wide\">
           <h3 data-i18n=\"config_title\">Configuration</h3>
           <form id=\"cfgForm\">
-            <label data-i18n=\"cfg_path\">Config Path<input name=\"config_path\" readonly /></label>
-            <label data-i18n=\"cfg_home\">Home<input name=\"home\" /></label>
-            <label data-i18n=\"cfg_markdown\">Markdown Path<input name=\"markdown\" /></label>
-            <label data-i18n=\"cfg_jsonl\">JSONL Path<input name=\"jsonl\" /></label>
-            <label data-i18n=\"cfg_sqlite\">SQLite Path<input name=\"sqlite\" /></label>
-            <label data-i18n=\"cfg_remote_name\">Git Remote Name<input name=\"remote_name\" /></label>
-            <label data-i18n=\"cfg_remote_url\">Git Remote URL<input name=\"remote_url\" placeholder=\"git@github.com:user/repo.git\" /></label>
-            <label data-i18n=\"cfg_branch\">Git Branch<input name=\"branch\" /></label>
+            <label><span data-i18n=\"cfg_path\">Config Path</span><input name=\"config_path\" readonly /></label>
+            <label><span data-i18n=\"cfg_home\">Home</span><input name=\"home\" /></label>
+            <label><span data-i18n=\"cfg_markdown\">Markdown Path</span><input name=\"markdown\" /></label>
+            <label><span data-i18n=\"cfg_jsonl\">JSONL Path</span><input name=\"jsonl\" /></label>
+            <label><span data-i18n=\"cfg_sqlite\">SQLite Path</span><input name=\"sqlite\" /></label>
+            <label><span data-i18n=\"cfg_remote_name\">Git Remote Name</span><input name=\"remote_name\" /></label>
+            <label><span data-i18n=\"cfg_remote_url\">Git Remote URL</span><input name=\"remote_url\" placeholder=\"git@github.com:user/repo.git\" /></label>
+            <label><span data-i18n=\"cfg_branch\">Git Branch</span><input name=\"branch\" /></label>
             <button type=\"submit\" data-i18n=\"btn_save\">Save Configuration</button>
           </form>
         </div>
