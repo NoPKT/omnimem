@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -127,6 +128,20 @@ HTML_PAGE = """<!doctype html>
         <div class=\"card wide\">
           <h3 data-i18n=\"project_title\">Project Integration</h3>
           <label><span data-i18n=\"project_path\">Project Path</span><input id=\"projectPath\" placeholder=\"/path/to/your/project\" /></label>
+          <div class=\"row-btn\">
+            <button id=\"btnBrowseProject\" data-i18n=\"btn_browse_project\">Browse Directory</button>
+            <button id=\"btnUseCwd\" data-i18n=\"btn_use_cwd\">Use Server CWD</button>
+          </div>
+          <div id=\"browserPanel\" class=\"card\" style=\"margin-top:10px; display:none;\">
+            <div class=\"small\" data-i18n=\"browser_title\">Directory Browser</div>
+            <div id=\"browserPath\" class=\"small\" style=\"margin:8px 0\"></div>
+            <div class=\"row-btn\">
+              <button id=\"btnBrowserUp\" data-i18n=\"btn_browser_up\">Up</button>
+              <button id=\"btnBrowserSelect\" data-i18n=\"btn_browser_select\">Select This Directory</button>
+              <button id=\"btnBrowserClose\" data-i18n=\"btn_browser_close\">Close</button>
+            </div>
+            <div id=\"browserList\" class=\"small\" style=\"margin-top:8px\"></div>
+          </div>
           <label><span data-i18n=\"project_id\">Project ID</span><input id=\"projectId\" placeholder=\"my-project\" /></label>
           <div class=\"row-btn\">
             <button id=\"btnProjectAttach\" data-i18n=\"btn_project_attach\">Attach Project + Install Agent Rules</button>
@@ -176,6 +191,8 @@ HTML_PAGE = """<!doctype html>
         mem_recent: 'Recent Memories', mem_hint: 'Click an ID to open full content', mem_content: 'Memory Content',
         th_id: 'ID', th_layer: 'Layer', th_kind: 'Kind', th_summary: 'Summary', th_updated: 'Updated At',
         project_title: 'Project Integration', project_path: 'Project Path', project_id: 'Project ID',
+        btn_browse_project: 'Browse Directory', btn_use_cwd: 'Use Server CWD',
+        browser_title: 'Directory Browser', btn_browser_up: 'Up', btn_browser_select: 'Select This Directory', btn_browser_close: 'Close',
         btn_project_attach: 'Attach Project + Install Agent Rules', btn_project_detach: 'Detach Project',
         project_hint: 'Attach will create .omnimem files and inject managed memory protocol blocks into AGENTS.md / CLAUDE.md / .cursorrules.',
         cfg_saved: 'Configuration saved', cfg_failed: 'Save failed',
@@ -293,6 +310,7 @@ HTML_PAGE = """<!doctype html>
     let currentLang = safeGetLang();
     if (!I18N[currentLang]) currentLang = 'en';
     let daemonCache = { running:false, enabled:false, initialized:false };
+    let browserPath = '';
 
     function t(key) {
       const dict = I18N[currentLang] || I18N.en;
@@ -401,6 +419,30 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('status').innerHTML = d.ok ? `<span class=\"ok\">${t('project_detach_ok')}</span>` : `<span class=\"err\">${t('project_failed')}</span>`;
     }
 
+    function escHtml(v) {
+      return String(v).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('\"', '&quot;');
+    }
+
+    async function listDirs(path) {
+      const d = await jget('/api/fs/list?path=' + encodeURIComponent(path || ''));
+      if (!d.ok) {
+        document.getElementById('browserList').innerHTML = `<span class=\"err\">${escHtml(d.error || 'list failed')}</span>`;
+        return;
+      }
+      browserPath = d.path || '';
+      document.getElementById('browserPath').textContent = browserPath;
+      const rows = (d.items || [])
+        .map(x => `<div><a href=\"#\" data-path=\"${escHtml(x.path)}\">${escHtml(x.name)}/</a></div>`)
+        .join('');
+      document.getElementById('browserList').innerHTML = rows || '<span class=\"small\">(empty)</span>';
+      document.querySelectorAll('#browserList a').forEach(a => {
+        a.onclick = (e) => {
+          e.preventDefault();
+          listDirs(a.dataset.path || '');
+        };
+      });
+    }
+
     function bindTabs() {
       const btns = document.querySelectorAll('.tab-btn');
       btns.forEach(btn => {
@@ -429,6 +471,39 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnDaemonOff').onclick = () => toggleDaemon(false);
       document.getElementById('btnProjectAttach').onclick = () => attachProject();
       document.getElementById('btnProjectDetach').onclick = () => detachProject();
+      document.getElementById('btnBrowseProject').onclick = async () => {
+        document.getElementById('browserPanel').style.display = 'block';
+        await listDirs(document.getElementById('projectPath').value.trim() || '');
+      };
+      document.getElementById('btnBrowserUp').onclick = async () => {
+        if (!browserPath) return;
+        const p = browserPath.replace(/\/+$/, '');
+        const i = p.lastIndexOf('/');
+        const up = i > 0 ? p.slice(0, i) : '/';
+        await listDirs(up);
+      };
+      document.getElementById('btnBrowserSelect').onclick = () => {
+        document.getElementById('projectPath').value = browserPath;
+        const pid = document.getElementById('projectId');
+        if (!pid.value.trim() && browserPath) {
+          const s = browserPath.replace(/\/+$/, '').split('/');
+          pid.value = s[s.length - 1] || 'project';
+        }
+      };
+      document.getElementById('btnBrowserClose').onclick = () => {
+        document.getElementById('browserPanel').style.display = 'none';
+      };
+      document.getElementById('btnUseCwd').onclick = async () => {
+        const d = await jget('/api/fs/cwd');
+        if (d.ok) {
+          document.getElementById('projectPath').value = d.cwd;
+          const pid = document.getElementById('projectId');
+          if (!pid.value.trim()) {
+            const s = d.cwd.replace(/\/+$/, '').split('/');
+            pid.value = s[s.length - 1] || 'project';
+          }
+        }
+      };
     }
 
     window.addEventListener('error', (e) => {
@@ -685,6 +760,30 @@ def run_webui(
 
             if parsed.path == "/api/daemon":
                 self._send_json({"ok": True, **daemon_state})
+                return
+
+            if parsed.path == "/api/fs/cwd":
+                self._send_json({"ok": True, "cwd": str(Path.cwd())})
+                return
+
+            if parsed.path == "/api/fs/list":
+                q = parse_qs(parsed.query)
+                raw_path = q.get("path", [""])[0].strip()
+                base = Path(raw_path).expanduser() if raw_path else Path.home()
+                try:
+                    p = base.resolve()
+                    if not p.exists() or not p.is_dir():
+                        self._send_json({"ok": False, "error": f"not a directory: {p}"}, 400)
+                        return
+                    items = []
+                    for child in sorted(p.iterdir(), key=lambda x: x.name.lower()):
+                        if child.is_dir() and not child.name.startswith("."):
+                            items.append({"name": child.name, "path": str(child)})
+                        if len(items) >= 200:
+                            break
+                    self._send_json({"ok": True, "path": str(p), "items": items})
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
 
             if parsed.path == "/api/project/defaults":
