@@ -88,14 +88,14 @@ HTML_PAGE = """<!doctype html>
         <div class=\"card\">
           <h3 data-i18n=\"actions\">Actions</h3>
           <div class=\"row-btn\">
-            <button onclick=\"runSync('github-status')\" data-i18n=\"btn_status\">Check Sync Status</button>
-            <button onclick=\"runSync('github-bootstrap')\" data-i18n=\"btn_bootstrap\">Bootstrap Device Sync</button>
-            <button onclick=\"runSync('github-push')\" data-i18n=\"btn_push\">Push</button>
-            <button onclick=\"runSync('github-pull')\" data-i18n=\"btn_pull\">Pull</button>
+            <button id=\"btnSyncStatus\" data-i18n=\"btn_status\">Check Sync Status</button>
+            <button id=\"btnSyncBootstrap\" data-i18n=\"btn_bootstrap\">Bootstrap Device Sync</button>
+            <button id=\"btnSyncPush\" data-i18n=\"btn_push\">Push</button>
+            <button id=\"btnSyncPull\" data-i18n=\"btn_pull\">Pull</button>
           </div>
           <div class=\"row-btn\">
-            <button onclick=\"toggleDaemon(true)\" data-i18n=\"btn_daemon_on\">Enable Daemon</button>
-            <button onclick=\"toggleDaemon(false)\" data-i18n=\"btn_daemon_off\">Disable Daemon</button>
+            <button id=\"btnDaemonOn\" data-i18n=\"btn_daemon_on\">Enable Daemon</button>
+            <button id=\"btnDaemonOff\" data-i18n=\"btn_daemon_off\">Disable Daemon</button>
           </div>
           <pre id=\"syncOut\" class=\"small\"></pre>
         </div>
@@ -263,7 +263,14 @@ HTML_PAGE = """<!doctype html>
       }
     };
 
-    let currentLang = localStorage.getItem('omnimem.lang') || 'en';
+    function safeGetLang() {
+      try { return localStorage.getItem('omnimem.lang') || 'en'; } catch (_) { return 'en'; }
+    }
+    function safeSetLang(v) {
+      try { localStorage.setItem('omnimem.lang', v); } catch (_) {}
+    }
+    let currentLang = safeGetLang();
+    if (!I18N[currentLang]) currentLang = 'en';
     let daemonCache = { running:false, enabled:false, initialized:false };
 
     function t(key) {
@@ -370,11 +377,26 @@ HTML_PAGE = """<!doctype html>
 
     document.getElementById('langSelect').onchange = (e) => {
       currentLang = e.target.value;
-      localStorage.setItem('omnimem.lang', currentLang);
+      safeSetLang(currentLang);
       applyI18n();
       loadCfg();
     };
 
+    function bindActions() {
+      document.getElementById('btnSyncStatus').onclick = () => runSync('github-status');
+      document.getElementById('btnSyncBootstrap').onclick = () => runSync('github-bootstrap');
+      document.getElementById('btnSyncPush').onclick = () => runSync('github-push');
+      document.getElementById('btnSyncPull').onclick = () => runSync('github-pull');
+      document.getElementById('btnDaemonOn').onclick = () => toggleDaemon(true);
+      document.getElementById('btnDaemonOff').onclick = () => toggleDaemon(false);
+    }
+
+    window.addEventListener('error', (e) => {
+      const s = document.getElementById('status');
+      if (s) s.innerHTML = `<span class=\"err\">UI error: ${e.message}</span>`;
+    });
+
+    bindActions();
     bindTabs();
     applyI18n();
     loadCfg();
