@@ -214,7 +214,7 @@ HTML_PAGE = """<!doctype html>
         config_title: 'Configuration', cfg_path: 'Chemin config', cfg_home: 'Home', cfg_markdown: 'Chemin Markdown', cfg_jsonl: 'Chemin JSONL', cfg_sqlite: 'Chemin SQLite', cfg_remote_name: 'Nom remote Git', cfg_remote_url: 'URL remote Git', cfg_branch: 'Branche Git', btn_save: 'Enregistrer',
         mem_recent: 'Mémoires récentes', mem_hint: 'Cliquez un ID pour ouvrir le contenu', mem_content: 'Contenu mémoire',
         th_id: 'ID', th_layer: 'Couche', th_kind: 'Type', th_summary: 'Résumé', th_updated: 'Mise à jour',
-        cfg_saved: 'Configuration enregistrée', cfg_failed: 'Échec de l\'enregistrement',
+        cfg_saved: 'Configuration enregistrée', cfg_failed: "Échec de l'enregistrement",
         init_ok: 'État config : initialisée', init_hint_ok: 'Le daemon synchronise en quasi temps réel.',
         init_missing: 'État config : non initialisée', init_hint_missing: 'Le daemon reste désactivé avant initialisation.',
         daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
@@ -244,7 +244,7 @@ HTML_PAGE = """<!doctype html>
         th_id: 'ID', th_layer: 'Livello', th_kind: 'Tipo', th_summary: 'Sommario', th_updated: 'Aggiornato',
         cfg_saved: 'Configurazione salvata', cfg_failed: 'Salvataggio fallito',
         init_ok: 'Stato config: inizializzata', init_hint_ok: 'Daemon sincronizza quasi in tempo reale.',
-        init_missing: 'Stato config: non inizializzata', init_hint_missing: 'Daemon disabilitato fino all\'inizializzazione.',
+        init_missing: 'Stato config: non inizializzata', init_hint_missing: "Daemon disabilitato fino all'inizializzazione.",
         daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
       },
       ko: {
