@@ -1,10 +1,10 @@
 {
   "version": "0.1.0",
   "project_id": "replace-with-project-id",
-  "memory_home": "~/.omnimemory",
+  "memory_home": "~/.omnimem",
   "default_tags": ["project:replace-with-project-id"],
   "collect": {
     "enabled": true,
-    "respect_ignore_file": ".omni-memory-ignore"
+    "respect_ignore_file": ".omnimem-ignore"
   }
 }

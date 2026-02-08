@@ -74,6 +74,7 @@ HTML_PAGE = """<!doctype html>
       <div class=\"tabs\">
         <button class=\"tab-btn active\" data-tab=\"statusTab\" data-i18n=\"tab_status\">Status & Actions</button>
         <button class=\"tab-btn\" data-tab=\"configTab\" data-i18n=\"tab_config\">Configuration</button>
+        <button class=\"tab-btn\" data-tab=\"projectTab\" data-i18n=\"tab_project\">Project Integration</button>
         <button class=\"tab-btn\" data-tab=\"memoryTab\" data-i18n=\"tab_memory\">Memory</button>
       </div>
     </div>
@@ -121,6 +122,22 @@ HTML_PAGE = """<!doctype html>
       </div>
     </div>
 
+    <div id=\"projectTab\" class=\"panel\">
+      <div class=\"grid\">
+        <div class=\"card wide\">
+          <h3 data-i18n=\"project_title\">Project Integration</h3>
+          <label><span data-i18n=\"project_path\">Project Path</span><input id=\"projectPath\" placeholder=\"/path/to/your/project\" /></label>
+          <label><span data-i18n=\"project_id\">Project ID</span><input id=\"projectId\" placeholder=\"my-project\" /></label>
+          <div class=\"row-btn\">
+            <button id=\"btnProjectAttach\" data-i18n=\"btn_project_attach\">Attach Project + Install Agent Rules</button>
+            <button id=\"btnProjectDetach\" data-i18n=\"btn_project_detach\">Detach Project</button>
+          </div>
+          <div class=\"small\" data-i18n=\"project_hint\">Attach will create .omnimem files and inject managed memory protocol blocks into AGENTS.md / CLAUDE.md / .cursorrules.</div>
+          <pre id=\"projectOut\" class=\"small\"></pre>
+        </div>
+      </div>
+    </div>
+
     <div id=\"memoryTab\" class=\"panel\">
       <div class=\"grid\">
         <div class=\"card wide\">
@@ -151,14 +168,18 @@ HTML_PAGE = """<!doctype html>
     const I18N = {
       en: {
         title: 'OmniMem WebUI', subtitle: 'Simple mode: Status & Actions / Configuration / Memory', language: 'Language',
-        tab_status: 'Status & Actions', tab_config: 'Configuration', tab_memory: 'Memory',
+        tab_status: 'Status & Actions', tab_config: 'Configuration', tab_project: 'Project Integration', tab_memory: 'Memory',
         system_status: 'System Status', actions: 'Actions',
         btn_status: 'Check Sync Status', btn_bootstrap: 'Bootstrap Device Sync', btn_push: 'Push', btn_pull: 'Pull',
         btn_daemon_on: 'Enable Daemon', btn_daemon_off: 'Disable Daemon',
         config_title: 'Configuration', cfg_path: 'Config Path', cfg_home: 'Home', cfg_markdown: 'Markdown Path', cfg_jsonl: 'JSONL Path', cfg_sqlite: 'SQLite Path', cfg_remote_name: 'Git Remote Name', cfg_remote_url: 'Git Remote URL', cfg_branch: 'Git Branch', btn_save: 'Save Configuration',
         mem_recent: 'Recent Memories', mem_hint: 'Click an ID to open full content', mem_content: 'Memory Content',
         th_id: 'ID', th_layer: 'Layer', th_kind: 'Kind', th_summary: 'Summary', th_updated: 'Updated At',
+        project_title: 'Project Integration', project_path: 'Project Path', project_id: 'Project ID',
+        btn_project_attach: 'Attach Project + Install Agent Rules', btn_project_detach: 'Detach Project',
+        project_hint: 'Attach will create .omnimem files and inject managed memory protocol blocks into AGENTS.md / CLAUDE.md / .cursorrules.',
         cfg_saved: 'Configuration saved', cfg_failed: 'Save failed',
+        project_attach_ok: 'Project attached', project_detach_ok: 'Project detached', project_failed: 'Project action failed',
         init_ok: 'Config state: initialized', init_hint_ok: 'Daemon runs quasi-realtime sync in background (can be disabled).',
         init_missing: 'Config state: not initialized (save configuration first)', init_hint_missing: 'Daemon is disabled until configuration is initialized.',
         daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
@@ -363,6 +384,23 @@ HTML_PAGE = """<!doctype html>
       await loadDaemon();
     }
 
+    async function attachProject() {
+      const project_path = document.getElementById('projectPath').value.trim();
+      const project_id = document.getElementById('projectId').value.trim();
+      const out = document.getElementById('projectOut');
+      const d = await jpost('/api/project/attach', {project_path, project_id});
+      out.textContent = JSON.stringify(d, null, 2);
+      document.getElementById('status').innerHTML = d.ok ? `<span class=\"ok\">${t('project_attach_ok')}</span>` : `<span class=\"err\">${t('project_failed')}</span>`;
+    }
+
+    async function detachProject() {
+      const project_path = document.getElementById('projectPath').value.trim();
+      const out = document.getElementById('projectOut');
+      const d = await jpost('/api/project/detach', {project_path});
+      out.textContent = JSON.stringify(d, null, 2);
+      document.getElementById('status').innerHTML = d.ok ? `<span class=\"ok\">${t('project_detach_ok')}</span>` : `<span class=\"err\">${t('project_failed')}</span>`;
+    }
+
     function bindTabs() {
       const btns = document.querySelectorAll('.tab-btn');
       btns.forEach(btn => {
@@ -389,6 +427,8 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnSyncPull').onclick = () => runSync('github-pull');
       document.getElementById('btnDaemonOn').onclick = () => toggleDaemon(true);
       document.getElementById('btnDaemonOff').onclick = () => toggleDaemon(false);
+      document.getElementById('btnProjectAttach').onclick = () => attachProject();
+      document.getElementById('btnProjectDetach').onclick = () => detachProject();
     }
 
     window.addEventListener('error', (e) => {
@@ -423,6 +463,137 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "remote_url": gh.get("remote_url", ""),
         "branch": gh.get("branch", "main"),
     }
+
+
+def _upsert_managed_block(path: Path, block: str) -> None:
+    start = "<!-- OMNIMEM:START -->"
+    end = "<!-- OMNIMEM:END -->"
+    managed = f"{start}\n{block.rstrip()}\n{end}\n"
+    if path.exists():
+        old = path.read_text(encoding="utf-8")
+        if start in old and end in old:
+            left = old.split(start, 1)[0].rstrip()
+            right = old.split(end, 1)[1].lstrip()
+            new_text = f"{left}\n\n{managed}"
+            if right:
+                new_text += f"\n{right}"
+            path.write_text(new_text, encoding="utf-8")
+            return
+        sep = "\n\n" if old and not old.endswith("\n\n") else ""
+        path.write_text(old + sep + managed, encoding="utf-8")
+        return
+    path.write_text(managed, encoding="utf-8")
+
+
+def _agent_protocol_block(project_id: str) -> str:
+    return (
+        "# OmniMem Memory Protocol\n"
+        "\n"
+        f"- Project ID: `{project_id}`\n"
+        "- Session start: run `omnimem brief --project-id <PROJECT_ID> --limit 8` and use it as active context.\n"
+        "- During task: when a stable decision/fact appears, run `omnimem write` with concise summary + evidence.\n"
+        "- Phase end: run `omnimem checkpoint` with goal/result/next-step/risks.\n"
+        "- If confidence is low or info is temporary, store in `instant`/`short`; promote to `long` only when repeated and stable.\n"
+        "- Never write raw secrets. Use credential references only (for example `op://...` or `env://...`).\n"
+    )
+
+
+def _attach_project_in_webui(project_path: str, project_id: str, cfg_home: str) -> dict[str, Any]:
+    if not project_path:
+        return {"ok": False, "error": "project_path is required"}
+    project = Path(project_path).expanduser().resolve()
+    if not project.exists() or not project.is_dir():
+        return {"ok": False, "error": f"project path not found: {project}"}
+    if not project_id:
+        project_id = project.name
+
+    repo_root = Path(__file__).resolve().parent.parent
+    tpl = repo_root / "templates" / "project-minimal"
+    created: list[str] = []
+    updated: list[str] = []
+
+    files = [
+        (tpl / ".omnimem.json", project / ".omnimem.json"),
+        (tpl / ".omnimem-session.md", project / ".omnimem-session.md"),
+        (tpl / ".omnimem-ignore", project / ".omnimem-ignore"),
+    ]
+    for src, dst in files:
+        text = src.read_text(encoding="utf-8")
+        text = text.replace("replace-with-project-id", project_id)
+        text = text.replace("~/.omnimem", cfg_home or "~/.omnimem")
+        exists = dst.exists()
+        dst.write_text(text, encoding="utf-8")
+        (updated if exists else created).append(str(dst))
+
+    block = _agent_protocol_block(project_id=project_id)
+    managed_targets = [
+        project / "AGENTS.md",
+        project / "CLAUDE.md",
+        project / ".cursorrules",
+    ]
+    for fp in managed_targets:
+        exists = fp.exists()
+        _upsert_managed_block(fp, block)
+        (updated if exists else created).append(str(fp))
+
+    cursor_rule = project / ".cursor" / "rules" / "omnimem.mdc"
+    cursor_exists = cursor_rule.exists()
+    cursor_rule.parent.mkdir(parents=True, exist_ok=True)
+    cursor_rule.write_text(
+        (
+            "---\n"
+            "description: OmniMem project memory protocol\n"
+            "alwaysApply: true\n"
+            "---\n\n"
+            + block
+        ),
+        encoding="utf-8",
+    )
+    (updated if cursor_exists else created).append(str(cursor_rule))
+
+    return {
+        "ok": True,
+        "project_path": str(project),
+        "project_id": project_id,
+        "created": created,
+        "updated": updated,
+    }
+
+
+def _detach_project_in_webui(project_path: str) -> dict[str, Any]:
+    if not project_path:
+        return {"ok": False, "error": "project_path is required"}
+    project = Path(project_path).expanduser().resolve()
+    if not project.exists() or not project.is_dir():
+        return {"ok": False, "error": f"project path not found: {project}"}
+
+    removed: list[str] = []
+    for name in [
+        ".omnimem.json",
+        ".omnimem-session.md",
+        ".omnimem-ignore",
+        ".cursorrules",
+        "CLAUDE.md",
+        "AGENTS.md",
+        ".cursor/rules/omnimem.mdc",
+    ]:
+        fp = project / name
+        if fp.exists():
+            txt = fp.read_text(encoding="utf-8", errors="ignore")
+            if "<!-- OMNIMEM:START -->" in txt and "<!-- OMNIMEM:END -->" in txt:
+                start = txt.index("<!-- OMNIMEM:START -->")
+                end = txt.index("<!-- OMNIMEM:END -->") + len("<!-- OMNIMEM:END -->")
+                new_txt = (txt[:start] + txt[end:]).strip()
+                if new_txt:
+                    fp.write_text(new_txt + "\n", encoding="utf-8")
+                else:
+                    fp.unlink()
+                removed.append(str(fp))
+                continue
+            if fp.name in {".omnimem.json", ".omnimem-session.md", ".omnimem-ignore", "omnimem.mdc"}:
+                fp.unlink()
+                removed.append(str(fp))
+    return {"ok": True, "project_path": str(project), "removed": removed}
 
 
 def run_webui(
@@ -514,6 +685,16 @@ def run_webui(
 
             if parsed.path == "/api/daemon":
                 self._send_json({"ok": True, **daemon_state})
+                return
+
+            if parsed.path == "/api/project/defaults":
+                self._send_json(
+                    {
+                        "ok": True,
+                        "project_path": "",
+                        "project_id": "",
+                    }
+                )
                 return
 
             if parsed.path == "/api/memories":
@@ -610,6 +791,26 @@ def run_webui(
                         "last_result": daemon_state.get("last_result", {}),
                     }
                 )
+                return
+
+            if parsed.path == "/api/project/attach":
+                try:
+                    out = _attach_project_in_webui(
+                        project_path=str(data.get("project_path", "")).strip(),
+                        project_id=str(data.get("project_id", "")).strip(),
+                        cfg_home=str(cfg.get("home", "")).strip(),
+                    )
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/project/detach":
+                try:
+                    out = _detach_project_in_webui(str(data.get("project_path", "")).strip())
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
 
             self._send_json({"ok": False, "error": "not found"}, 404)
