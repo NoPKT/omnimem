@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .core import ensure_storage, find_memories, resolve_paths, save_config
+from .core import ensure_storage, find_memories, resolve_paths, save_config, write_memory
 
 
 HTML_PAGE = """<!doctype html>
@@ -157,11 +157,16 @@ HTML_PAGE = """<!doctype html>
       <div class=\"grid\">
         <div class=\"card wide\">
           <h3 data-i18n=\"mem_recent\">Recent Memories</h3>
+          <label><span data-i18n=\"mem_project_filter\">Project ID Filter</span><input id=\"memProjectId\" placeholder=\"(empty = all projects)\" /></label>
+          <div class=\"row-btn\">
+            <button id=\"btnMemReload\" data-i18n=\"btn_mem_reload\">Reload</button>
+          </div>
           <div class=\"small\" data-i18n=\"mem_hint\">Click an ID to open full content</div>
           <table>
             <thead>
               <tr>
                 <th data-i18n=\"th_id\">ID</th>
+                <th data-i18n=\"th_project\">Project</th>
                 <th data-i18n=\"th_layer\">Layer</th>
                 <th data-i18n=\"th_kind\">Kind</th>
                 <th data-i18n=\"th_summary\">Summary</th>
@@ -189,7 +194,8 @@ HTML_PAGE = """<!doctype html>
         btn_daemon_on: 'Enable Daemon', btn_daemon_off: 'Disable Daemon',
         config_title: 'Configuration', cfg_path: 'Config Path', cfg_home: 'Home', cfg_markdown: 'Markdown Path', cfg_jsonl: 'JSONL Path', cfg_sqlite: 'SQLite Path', cfg_remote_name: 'Git Remote Name', cfg_remote_url: 'Git Remote URL', cfg_branch: 'Git Branch', btn_save: 'Save Configuration',
         mem_recent: 'Recent Memories', mem_hint: 'Click an ID to open full content', mem_content: 'Memory Content',
-        th_id: 'ID', th_layer: 'Layer', th_kind: 'Kind', th_summary: 'Summary', th_updated: 'Updated At',
+        mem_project_filter: 'Project ID Filter', btn_mem_reload: 'Reload',
+        th_id: 'ID', th_project: 'Project', th_layer: 'Layer', th_kind: 'Kind', th_summary: 'Summary', th_updated: 'Updated At',
         project_title: 'Project Integration', project_path: 'Project Path', project_id: 'Project ID',
         btn_browse_project: 'Browse Directory', btn_use_cwd: 'Use Server CWD',
         browser_title: 'Directory Browser', btn_browser_up: 'Up', btn_browser_select: 'Select This Directory', btn_browser_close: 'Close',
@@ -358,12 +364,13 @@ HTML_PAGE = """<!doctype html>
     }
 
     async function loadMem() {
-      const d = await jget('/api/memories?limit=20');
+      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
+      const d = await jget('/api/memories?limit=20&project_id=' + encodeURIComponent(project_id));
       const b = document.getElementById('memBody');
       b.innerHTML = '';
       (d.items || []).forEach(x => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td><a href=\"#\" data-id=\"${x.id}\">${x.id.slice(0,10)}...</a></td><td>${x.layer}</td><td>${x.kind}</td><td>${x.summary}</td><td>${x.updated_at}</td>`;
+        tr.innerHTML = `<td><a href=\"#\" data-id=\"${x.id}\">${x.id.slice(0,10)}...</a></td><td>${x.project_id || ''}</td><td>${x.layer}</td><td>${x.kind}</td><td>${x.summary}</td><td>${x.updated_at}</td>`;
         tr.querySelector('a').onclick = async (e) => {
           e.preventDefault();
           const m = await jget('/api/memory?id=' + encodeURIComponent(x.id));
@@ -471,6 +478,7 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnDaemonOff').onclick = () => toggleDaemon(false);
       document.getElementById('btnProjectAttach').onclick = () => attachProject();
       document.getElementById('btnProjectDetach').onclick = () => detachProject();
+      document.getElementById('btnMemReload').onclick = () => loadMem();
       document.getElementById('btnBrowseProject').onclick = async () => {
         document.getElementById('browserPanel').style.display = 'block';
         await listDirs(document.getElementById('projectPath').value.trim() || '');
@@ -799,7 +807,8 @@ def run_webui(
             if parsed.path == "/api/memories":
                 q = parse_qs(parsed.query)
                 limit = int(q.get("limit", ["20"])[0])
-                items = find_memories(paths, schema_sql_path, query="", layer=None, limit=limit)
+                project_id = q.get("project_id", [""])[0].strip()
+                items = find_memories(paths, schema_sql_path, query="", layer=None, limit=limit, project_id=project_id)
                 self._send_json({"ok": True, "items": items})
                 return
 
@@ -894,11 +903,42 @@ def run_webui(
 
             if parsed.path == "/api/project/attach":
                 try:
+                    project_path = str(data.get("project_path", "")).strip()
+                    project_id = str(data.get("project_id", "")).strip()
                     out = _attach_project_in_webui(
-                        project_path=str(data.get("project_path", "")).strip(),
-                        project_id=str(data.get("project_id", "")).strip(),
+                        project_path=project_path,
+                        project_id=project_id,
                         cfg_home=str(cfg.get("home", "")).strip(),
                     )
+                    if out.get("ok"):
+                        pid = str(out.get("project_id", "")).strip() or "global"
+                        write_memory(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            layer="short",
+                            kind="summary",
+                            summary=f"Project attached: {pid}",
+                            body=(
+                                "Project integration completed via WebUI.\n\n"
+                                f"- project_id: {pid}\n"
+                                f"- project_path: {project_path}\n"
+                            ),
+                            tags=[f"project:{pid}", "integration:webui"],
+                            refs=[],
+                            cred_refs=[],
+                            tool="webui",
+                            account="default",
+                            device="local",
+                            session_id="webui-session",
+                            project_id=pid,
+                            workspace=project_path,
+                            importance=0.7,
+                            confidence=0.9,
+                            stability=0.8,
+                            reuse_count=0,
+                            volatility=0.2,
+                            event_type="memory.write",
+                        )
                     self._send_json(out, 200 if out.get("ok") else 400)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)

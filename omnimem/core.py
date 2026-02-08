@@ -482,7 +482,14 @@ def write_memory(
     return {"memory": env, "event": evt}
 
 
-def find_memories(paths: MemoryPaths, schema_sql_path: Path, query: str, layer: str | None, limit: int) -> list[dict[str, Any]]:
+def find_memories(
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    query: str,
+    layer: str | None,
+    limit: int,
+    project_id: str = "",
+) -> list[dict[str, Any]]:
     ensure_storage(paths, schema_sql_path)
     with sqlite3.connect(paths.sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -490,37 +497,55 @@ def find_memories(paths: MemoryPaths, schema_sql_path: Path, query: str, layer: 
             if layer:
                 rows = conn.execute(
                     """
-                    SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path
+                    SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
+                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id
                     FROM memories_fts f
                     JOIN memories m ON m.id = f.id
                     WHERE f.memories_fts MATCH ? AND m.layer = ?
+                      AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
                     ORDER BY bm25(memories_fts), m.updated_at DESC
                     LIMIT ?
                     """,
-                    (query, layer, limit),
+                    (query, layer, project_id, project_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """
-                    SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path
+                    SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
+                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id
                     FROM memories_fts f
                     JOIN memories m ON m.id = f.id
                     WHERE f.memories_fts MATCH ?
+                      AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
                     ORDER BY bm25(memories_fts), m.updated_at DESC
                     LIMIT ?
                     """,
-                    (query, limit),
+                    (query, project_id, project_id, limit),
                 ).fetchall()
         else:
             if layer:
                 rows = conn.execute(
-                    "SELECT id, layer, kind, summary, updated_at, body_md_path FROM memories WHERE layer = ? ORDER BY updated_at DESC LIMIT ?",
-                    (layer, limit),
+                    """
+                    SELECT id, layer, kind, summary, updated_at, body_md_path,
+                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id
+                    FROM memories
+                    WHERE layer = ? AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (layer, project_id, project_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, layer, kind, summary, updated_at, body_md_path FROM memories ORDER BY updated_at DESC LIMIT ?",
-                    (limit,),
+                    """
+                    SELECT id, layer, kind, summary, updated_at, body_md_path,
+                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id
+                    FROM memories
+                    WHERE (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (project_id, project_id, limit),
                 ).fetchall()
 
     return [dict(r) for r in rows]
