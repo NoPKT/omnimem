@@ -1,0 +1,8 @@
+# Paths to ignore during memory extraction/indexing
+node_modules/
+dist/
+build/
+.cache/
+*.log
+.env
+.env.*

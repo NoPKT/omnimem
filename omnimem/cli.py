@@ -1,0 +1,579 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import shutil
+import sys
+from pathlib import Path
+
+from .adapters import (
+    notion_query_database,
+    notion_write_page,
+    r2_get_presigned,
+    r2_put_presigned,
+    resolve_cred_ref,
+)
+from .core import (
+    KIND_SET,
+    LAYER_SET,
+    build_brief,
+    find_memories,
+    load_config,
+    load_config_with_path,
+    parse_list_csv,
+    parse_ref,
+    resolve_paths,
+    run_sync_daemon,
+    sync_placeholder,
+    verify_storage,
+    write_memory,
+)
+from .webui import run_webui
+
+
+def schema_sql_path() -> Path:
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / "db" / "schema.sql",
+        here.parent.parent.parent / "db" / "schema.sql",
+        Path.cwd() / "db" / "schema.sql",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    raise FileNotFoundError("schema.sql not found in expected locations")
+
+
+def add_common_write_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--config", help="path to omnimem config json")
+    p.add_argument("--layer", choices=sorted(LAYER_SET), default="instant")
+    p.add_argument("--kind", choices=sorted(KIND_SET), default="note")
+    p.add_argument("--summary", required=True)
+    p.add_argument("--body", default="")
+    p.add_argument("--body-file")
+    p.add_argument("--tags", help="comma-separated")
+    p.add_argument("--ref", action="append", default=[], help="type:target[:note]")
+    p.add_argument("--cred-ref", action="append", default=[])
+    p.add_argument("--tool", default="cli")
+    p.add_argument("--account", default="default")
+    p.add_argument("--device", default="local")
+    p.add_argument("--session-id", default="session-local")
+    p.add_argument("--project-id", default="global")
+    p.add_argument("--workspace", default="")
+    p.add_argument("--importance", type=float, default=0.5)
+    p.add_argument("--confidence", type=float, default=0.5)
+    p.add_argument("--stability", type=float, default=0.5)
+    p.add_argument("--reuse-count", type=int, default=0)
+    p.add_argument("--volatility", type=float, default=0.5)
+
+
+def body_text(args: argparse.Namespace) -> str:
+    if args.body_file:
+        return Path(args.body_file).read_text(encoding="utf-8")
+    return args.body
+
+
+def print_json(obj: object) -> None:
+    print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+def cfg_path_arg(args: argparse.Namespace) -> Path | None:
+    raw = getattr(args, "config", None) or getattr(args, "global_config", None)
+    return Path(raw) if raw else None
+
+
+def cmd_write(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    refs = [parse_ref(x) for x in args.ref]
+    result = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        layer=args.layer,
+        kind=args.kind,
+        summary=args.summary,
+        body=body_text(args),
+        tags=parse_list_csv(args.tags),
+        refs=refs,
+        cred_refs=args.cred_ref,
+        tool=args.tool,
+        account=args.account,
+        device=args.device,
+        session_id=args.session_id,
+        project_id=args.project_id,
+        workspace=args.workspace,
+        importance=args.importance,
+        confidence=args.confidence,
+        stability=args.stability,
+        reuse_count=args.reuse_count,
+        volatility=args.volatility,
+        event_type="memory.write",
+    )
+    print_json({
+        "ok": True,
+        "memory_id": result["memory"]["id"],
+        "layer": result["memory"]["layer"],
+        "kind": result["memory"]["kind"],
+        "body_md_path": result["memory"]["body_md_path"],
+    })
+    return 0
+
+
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    body = (
+        "## Checkpoint\n\n"
+        f"- Session: {args.session_id}\n"
+        f"- Goal: {args.goal}\n"
+        f"- Result: {args.result}\n"
+        f"- Next: {args.next_step}\n"
+        f"- Risks: {args.risks}\n"
+    )
+    result = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        layer=args.layer,
+        kind="checkpoint",
+        summary=args.summary,
+        body=body,
+        tags=parse_list_csv(args.tags),
+        refs=[parse_ref(x) for x in args.ref],
+        cred_refs=args.cred_ref,
+        tool=args.tool,
+        account=args.account,
+        device=args.device,
+        session_id=args.session_id,
+        project_id=args.project_id,
+        workspace=args.workspace,
+        importance=args.importance,
+        confidence=args.confidence,
+        stability=args.stability,
+        reuse_count=args.reuse_count,
+        volatility=args.volatility,
+        event_type="memory.checkpoint",
+    )
+    print_json({
+        "ok": True,
+        "checkpoint_id": result["memory"]["id"],
+        "body_md_path": result["memory"]["body_md_path"],
+    })
+    return 0
+
+
+def cmd_find(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    rows = find_memories(paths, schema_sql_path(), args.query, args.layer, args.limit)
+    print_json({"ok": True, "count": len(rows), "items": rows})
+    return 0
+
+
+def cmd_brief(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    result = build_brief(paths, schema_sql_path(), args.project_id, args.limit)
+    print_json({"ok": True, **result})
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    result = verify_storage(paths, schema_sql_path())
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    sync_cfg = cfg.get("sync", {}).get("github", {})
+    remote_name = args.remote_name or sync_cfg.get("remote_name", "origin")
+    branch = args.branch or sync_cfg.get("branch", "main")
+    remote_url = args.remote_url or sync_cfg.get("remote_url")
+    out = sync_placeholder(
+        paths,
+        schema_sql_path(),
+        args.mode,
+        remote_name=remote_name,
+        branch=branch,
+        remote_url=remote_url,
+        commit_message=args.commit_message,
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_webui(args: argparse.Namespace) -> int:
+    cfg, cfg_path = load_config_with_path(cfg_path_arg(args))
+    run_webui(
+        host=args.host,
+        port=args.port,
+        cfg=cfg,
+        cfg_path=cfg_path,
+        schema_sql_path=schema_sql_path(),
+        sync_runner=sync_placeholder,
+        daemon_runner=run_sync_daemon,
+        enable_daemon=not args.no_daemon,
+        daemon_scan_interval=args.daemon_scan_interval,
+        daemon_pull_interval=args.daemon_pull_interval,
+    )
+    return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    return cmd_webui(args)
+
+
+def cmd_config_path(args: argparse.Namespace) -> int:
+    _, cfg_path = load_config_with_path(cfg_path_arg(args))
+    print_json({"ok": True, "config_path": str(cfg_path)})
+    return 0
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    cfg, cfg_path = load_config_with_path(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    target = paths.root
+
+    if not args.yes:
+        print_json(
+            {
+                "ok": False,
+                "error": "destructive action requires --yes",
+                "target": str(target),
+            }
+        )
+        return 1
+
+    # Safety rail: avoid catastrophic deletion.
+    if str(target) in {"/", str(Path.home().resolve())}:
+        print_json({"ok": False, "error": f"refuse to uninstall unsafe target: {target}"})
+        return 1
+
+    detached = False
+    if args.detach_project:
+        project = Path(args.detach_project).expanduser().resolve()
+        for name in [".omnimem.json", ".omnimem-session.md", ".omnimem-ignore", ".omnimem-hooks.sh"]:
+            fp = project / name
+            if fp.exists():
+                fp.unlink()
+        detached = True
+
+    if target.exists():
+        try:
+            shutil.rmtree(target)
+        except Exception:
+            # On some systems deleting the currently running install tree can fail.
+            # Fallback to detached delayed cleanup.
+            subprocess.Popen(
+                ["/bin/sh", "-c", f"sleep 1; rm -rf '{str(target)}'"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    if cfg_path.exists() and not str(cfg_path).startswith(str(target)):
+        cfg_path.unlink(missing_ok=True)
+
+    print_json(
+        {
+            "ok": True,
+            "uninstalled": str(target),
+            "project_detached": detached,
+        }
+    )
+    return 0
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    repo_root = Path(__file__).resolve().parent.parent
+    install_script = repo_root / "scripts" / "install.sh"
+    attach_script = repo_root / "scripts" / "attach_project.sh"
+
+    if not install_script.exists():
+        print_json({"ok": False, "error": f"install script not found: {install_script}"})
+        return 1
+
+    env = dict(os.environ)
+    if args.home:
+        env["OMNIMEM_HOME"] = str(Path(args.home).expanduser().resolve())
+
+    install_cmd = ["bash", str(install_script)]
+    if args.wizard:
+        install_cmd.append("--wizard")
+    if args.remote_name:
+        install_cmd.extend(["--remote-name", args.remote_name])
+    if args.branch:
+        install_cmd.extend(["--branch", args.branch])
+    if args.remote_url:
+        install_cmd.extend(["--remote-url", args.remote_url])
+    subprocess.run(install_cmd, check=True, env=env)
+
+    attached = False
+    if args.attach_project:
+        if not attach_script.exists():
+            print_json({"ok": False, "error": f"attach script not found: {attach_script}"})
+            return 1
+        project_id = args.project_id or Path(args.attach_project).name
+        subprocess.run(["bash", str(attach_script), args.attach_project, project_id], check=True)
+        attached = True
+
+    print_json(
+        {
+            "ok": True,
+            "installed_home": str(Path(args.home).expanduser().resolve()) if args.home else None,
+            "attached_project": attached,
+            "next": "~/.omnimem/bin/omnimem start --host 127.0.0.1 --port 8765",
+        }
+    )
+    return 0
+
+
+def cmd_adapter_cred_resolve(args: argparse.Namespace) -> int:
+    value = resolve_cred_ref(args.ref)
+    if args.mask:
+        shown = value[:2] + "***" + value[-2:] if len(value) >= 6 else "***"
+        print_json({"ok": True, "ref": args.ref, "value_preview": shown})
+    else:
+        print_json({"ok": True, "ref": args.ref, "value": value})
+    return 0
+
+
+def _resolve_token(args: argparse.Namespace) -> str:
+    if args.token:
+        return args.token
+    if args.token_ref:
+        return resolve_cred_ref(args.token_ref)
+    raise ValueError("token not provided, use --token or --token-ref")
+
+
+def _resolve_url(url: str | None, url_ref: str | None) -> str:
+    if url:
+        return url
+    if url_ref:
+        return resolve_cred_ref(url_ref)
+    raise ValueError("url not provided, use --url or --url-ref")
+
+
+def cmd_adapter_notion_write(args: argparse.Namespace) -> int:
+    token = ""
+    if not args.dry_run:
+        token = _resolve_token(args)
+    if args.content_file:
+        content = Path(args.content_file).read_text(encoding="utf-8")
+    else:
+        content = args.content
+    out = notion_write_page(
+        token=token,
+        database_id=args.database_id,
+        title=args.title,
+        content=content,
+        title_property=args.title_property,
+        dry_run=args.dry_run,
+    )
+    print_json(out)
+    return 0
+
+
+def cmd_adapter_notion_query(args: argparse.Namespace) -> int:
+    token = ""
+    if not args.dry_run:
+        token = _resolve_token(args)
+    out = notion_query_database(
+        token=token,
+        database_id=args.database_id,
+        page_size=args.page_size,
+        dry_run=args.dry_run,
+    )
+    print_json(out)
+    return 0
+
+
+def cmd_adapter_r2_put(args: argparse.Namespace) -> int:
+    out = r2_put_presigned(
+        file_path=Path(args.file),
+        presigned_url=_resolve_url(args.url, args.url_ref),
+        dry_run=args.dry_run,
+    )
+    print_json(out)
+    return 0
+
+
+def cmd_adapter_r2_get(args: argparse.Namespace) -> int:
+    out = r2_get_presigned(
+        presigned_url=_resolve_url(args.url, args.url_ref),
+        out_path=Path(args.out),
+        dry_run=args.dry_run,
+    )
+    print_json(out)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="omnimem")
+    p.add_argument("--config", dest="global_config", help="path to omnimem config json")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    p_write = sub.add_parser("write", help="write a memory")
+    add_common_write_args(p_write)
+    p_write.set_defaults(func=cmd_write)
+
+    p_find = sub.add_parser("find", help="find memories")
+    p_find.add_argument("--config", help="path to omnimem config json")
+    p_find.add_argument("query", nargs="?", default="")
+    p_find.add_argument("--layer", choices=sorted(LAYER_SET))
+    p_find.add_argument("--limit", type=int, default=10)
+    p_find.set_defaults(func=cmd_find)
+
+    p_checkpoint = sub.add_parser("checkpoint", help="create checkpoint memory")
+    p_checkpoint.add_argument("--config", help="path to omnimem config json")
+    p_checkpoint.add_argument("--summary", required=True)
+    p_checkpoint.add_argument("--goal", default="")
+    p_checkpoint.add_argument("--result", default="")
+    p_checkpoint.add_argument("--next-step", default="")
+    p_checkpoint.add_argument("--risks", default="")
+    p_checkpoint.add_argument("--layer", choices=sorted(LAYER_SET), default="short")
+    p_checkpoint.add_argument("--tags", help="comma-separated")
+    p_checkpoint.add_argument("--ref", action="append", default=[])
+    p_checkpoint.add_argument("--cred-ref", action="append", default=[])
+    p_checkpoint.add_argument("--tool", default="cli")
+    p_checkpoint.add_argument("--account", default="default")
+    p_checkpoint.add_argument("--device", default="local")
+    p_checkpoint.add_argument("--session-id", default="session-local")
+    p_checkpoint.add_argument("--project-id", default="global")
+    p_checkpoint.add_argument("--workspace", default="")
+    p_checkpoint.add_argument("--importance", type=float, default=0.7)
+    p_checkpoint.add_argument("--confidence", type=float, default=0.7)
+    p_checkpoint.add_argument("--stability", type=float, default=0.6)
+    p_checkpoint.add_argument("--reuse-count", type=int, default=0)
+    p_checkpoint.add_argument("--volatility", type=float, default=0.4)
+    p_checkpoint.set_defaults(func=cmd_checkpoint)
+
+    p_brief = sub.add_parser("brief", help="startup summary")
+    p_brief.add_argument("--config", help="path to omnimem config json")
+    p_brief.add_argument("--project-id", default="")
+    p_brief.add_argument("--limit", type=int, default=8)
+    p_brief.set_defaults(func=cmd_brief)
+
+    p_verify = sub.add_parser("verify", help="consistency verification")
+    p_verify.add_argument("--config", help="path to omnimem config json")
+    p_verify.set_defaults(func=cmd_verify)
+
+    p_sync = sub.add_parser("sync", help="sync actions")
+    p_sync.add_argument("--config", help="path to omnimem config json")
+    p_sync.add_argument(
+        "--mode",
+        choices=["noop", "git", "github-status", "github-push", "github-pull", "github-bootstrap"],
+        default="noop",
+    )
+    p_sync.add_argument("--remote-name", help="git remote name, default origin")
+    p_sync.add_argument("--remote-url", help="remote url (https://... or git@...); optional")
+    p_sync.add_argument("--branch", help="target branch, default main")
+    p_sync.add_argument("--commit-message", default="chore(memory): sync snapshot")
+    p_sync.set_defaults(func=cmd_sync)
+
+    p_webui = sub.add_parser("webui", help="start local web ui")
+    p_webui.add_argument("--config", help="path to omnimem config json")
+    p_webui.add_argument("--host", default="127.0.0.1")
+    p_webui.add_argument("--port", type=int, default=8765)
+    p_webui.add_argument("--no-daemon", action="store_true", help="disable background quasi-realtime sync")
+    p_webui.add_argument("--daemon-scan-interval", type=int, default=8)
+    p_webui.add_argument("--daemon-pull-interval", type=int, default=30)
+    p_webui.set_defaults(func=cmd_webui)
+
+    p_start = sub.add_parser("start", help="start app (webui + sync daemon)")
+    p_start.add_argument("--config", help="path to omnimem config json")
+    p_start.add_argument("--host", default="127.0.0.1")
+    p_start.add_argument("--port", type=int, default=8765)
+    p_start.add_argument("--no-daemon", action="store_true", help="disable background quasi-realtime sync")
+    p_start.add_argument("--daemon-scan-interval", type=int, default=8)
+    p_start.add_argument("--daemon-pull-interval", type=int, default=30)
+    p_start.set_defaults(func=cmd_start)
+
+    p_cfg_path = sub.add_parser("config-path", help="print active config path")
+    p_cfg_path.add_argument("--config", help="path to omnimem config json")
+    p_cfg_path.set_defaults(func=cmd_config_path)
+
+    p_uninstall = sub.add_parser("uninstall", help="uninstall local omnimem home")
+    p_uninstall.add_argument("--config", help="path to omnimem config json")
+    p_uninstall.add_argument("--yes", action="store_true", help="confirm deletion")
+    p_uninstall.add_argument("--detach-project", help="optional project path to detach omni files")
+    p_uninstall.set_defaults(func=cmd_uninstall)
+
+    p_bootstrap = sub.add_parser("bootstrap", help="install local runtime from packaged files")
+    p_bootstrap.add_argument("--config", help="path to omnimem config json")
+    p_bootstrap.add_argument("--wizard", action="store_true")
+    p_bootstrap.add_argument("--home", help="optional override via OMNIMEM_HOME")
+    p_bootstrap.add_argument("--remote-name", default="origin")
+    p_bootstrap.add_argument("--branch", default="main")
+    p_bootstrap.add_argument("--remote-url")
+    p_bootstrap.add_argument("--attach-project", help="optional project path to attach")
+    p_bootstrap.add_argument("--project-id", help="optional project id for attach")
+    p_bootstrap.set_defaults(func=cmd_bootstrap)
+
+    p_adapter = sub.add_parser("adapter", help="external adapters")
+    p_adapter.add_argument("--config", help="path to omnimem config json")
+    adapter_sub = p_adapter.add_subparsers(dest="adapter_cmd", required=True)
+
+    p_cred = adapter_sub.add_parser("cred-resolve", help="resolve credential reference")
+    p_cred.add_argument("--ref", required=True, help="env://KEY or op://vault/item/field")
+    p_cred.add_argument("--mask", action="store_true", help="hide sensitive value in output")
+    p_cred.set_defaults(func=cmd_adapter_cred_resolve)
+
+    p_notion_write = adapter_sub.add_parser("notion-write", help="write a page to notion database")
+    p_notion_write.add_argument("--database-id", required=True)
+    p_notion_write.add_argument("--title", required=True)
+    p_notion_write.add_argument("--content", default="")
+    p_notion_write.add_argument("--content-file")
+    p_notion_write.add_argument("--title-property", default="Name")
+    p_notion_write.add_argument("--token")
+    p_notion_write.add_argument("--token-ref")
+    p_notion_write.add_argument("--dry-run", action="store_true")
+    p_notion_write.set_defaults(func=cmd_adapter_notion_write)
+
+    p_notion_query = adapter_sub.add_parser("notion-query", help="query notion database")
+    p_notion_query.add_argument("--database-id", required=True)
+    p_notion_query.add_argument("--page-size", type=int, default=5)
+    p_notion_query.add_argument("--token")
+    p_notion_query.add_argument("--token-ref")
+    p_notion_query.add_argument("--dry-run", action="store_true")
+    p_notion_query.set_defaults(func=cmd_adapter_notion_query)
+
+    p_r2_put = adapter_sub.add_parser("r2-put", help="upload file via presigned PUT URL")
+    p_r2_put.add_argument("--file", required=True)
+    p_r2_put.add_argument("--url")
+    p_r2_put.add_argument("--url-ref")
+    p_r2_put.add_argument("--dry-run", action="store_true")
+    p_r2_put.set_defaults(func=cmd_adapter_r2_put)
+
+    p_r2_get = adapter_sub.add_parser("r2-get", help="download file via presigned GET URL")
+    p_r2_get.add_argument("--out", required=True)
+    p_r2_get.add_argument("--url")
+    p_r2_get.add_argument("--url-ref")
+    p_r2_get.add_argument("--dry-run", action="store_true")
+    p_r2_get.set_defaults(func=cmd_adapter_r2_get)
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    if not raw_argv:
+        raw_argv = ["start"]
+    elif raw_argv[0] in {"--host", "--port"} or raw_argv[0].startswith("--host=") or raw_argv[0].startswith("--port="):
+        raw_argv = ["start", *raw_argv]
+
+    parser = build_parser()
+    args = parser.parse_args(raw_argv)
+    try:
+        return args.func(args)
+    except Exception as exc:
+        print_json({"ok": False, "error": str(exc)})
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

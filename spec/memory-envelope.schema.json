@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnimem.dev/schema/memory-envelope.schema.json",
+  "title": "MemoryEnvelope",
+  "type": "object",
+  "required": [
+    "id",
+    "schema_version",
+    "created_at",
+    "updated_at",
+    "layer",
+    "kind",
+    "summary",
+    "body_md_path",
+    "tags",
+    "refs",
+    "signals",
+    "cred_refs",
+    "source",
+    "scope",
+    "integrity"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 8 },
+    "schema_version": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "layer": {
+      "type": "string",
+      "enum": ["instant", "short", "long", "archive"]
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["note", "decision", "task", "checkpoint", "summary", "evidence"]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "body_md_path": { "type": "string", "minLength": 1 },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "target"],
+        "properties": {
+          "type": { "type": "string", "enum": ["memory", "file", "url", "notion", "r2"] },
+          "target": { "type": "string" },
+          "note": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "default": []
+    },
+    "signals": {
+      "type": "object",
+      "required": [
+        "importance_score",
+        "confidence_score",
+        "stability_score",
+        "reuse_count",
+        "volatility_score"
+      ],
+      "properties": {
+        "importance_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "confidence_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "stability_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reuse_count": { "type": "integer", "minimum": 0 },
+        "volatility_score": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "cred_refs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^(op|env|aws-sm|gcp-sm)://.+" },
+      "default": []
+    },
+    "source": {
+      "type": "object",
+      "required": ["tool", "session_id"],
+      "properties": {
+        "tool": { "type": "string" },
+        "account": { "type": "string" },
+        "device": { "type": "string" },
+        "session_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "scope": {
+      "type": "object",
+      "required": ["project_id"],
+      "properties": {
+        "project_id": { "type": "string" },
+        "workspace": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "integrity": {
+      "type": "object",
+      "required": ["content_sha256", "envelope_version"],
+      "properties": {
+        "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "envelope_version": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

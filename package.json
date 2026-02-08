@@ -1,0 +1,37 @@
+{
+  "name": "omnimem",
+  "version": "0.1.0",
+  "private": false,
+  "description": "OmniMem CLI and bootstrap runner",
+  "license": "MIT",
+  "bin": {
+    "omnimem": "bin/omnimem"
+  },
+  "files": [
+    "bin",
+    "omnimem",
+    "scripts",
+    "templates",
+    "db",
+    "spec",
+    "README.md",
+    "docs/quickstart-10min.md"
+  ],
+  "scripts": {
+    "prepack": "find omnimem -name '__pycache__' -type d -prune -exec rm -rf {} +",
+    "start": "./bin/omnimem start --host 127.0.0.1 --port 8765",
+    "verify": "bash scripts/verify_phase_d.sh",
+    "pack:check": "npm pack --dry-run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NoPKT/omnimem.git"
+  },
+  "homepage": "https://github.com/NoPKT/omnimem#readme",
+  "bugs": {
+    "url": "https://github.com/NoPKT/omnimem/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
