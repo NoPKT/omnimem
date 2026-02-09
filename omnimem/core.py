@@ -1071,6 +1071,145 @@ def move_memory_layer(
     }
 
 
+def update_memory_content(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    memory_id: str,
+    summary: str,
+    body: str,
+    tags: list[str] | None = None,
+    tool: str = "cli",
+    account: str = "default",
+    device: str = "local",
+    session_id: str = "session-local",
+    event_type: str = "memory.update",
+) -> dict[str, Any]:
+    """
+    Edit an existing memory in-place.
+
+    This updates:
+    - Markdown body (rewritten as `# {summary}\n\n{body}\n`)
+    - SQLite row (summary, updated_at, body_text, tags_json, integrity_json)
+    - JSONL + SQLite event log (memory.update)
+
+    It intentionally preserves `created_at`, `layer`, `kind`, and the original `source_json`/`scope_json`
+    to keep provenance stable; the actor performing the edit is recorded in the update event payload.
+    """
+    ensure_storage(paths, schema_sql_path)
+    if event_type not in EVENT_SET:
+        raise ValueError(f"invalid event_type: {event_type}")
+
+    when_dt = datetime.now(timezone.utc)
+    when_iso = when_dt.replace(microsecond=0).isoformat()
+    summary = str(summary or "").strip()
+    if not summary:
+        raise ValueError("summary must be non-empty")
+    body = str(body or "").strip()
+    tags = [str(x).strip() for x in (tags or []) if str(x).strip()]
+
+    with sqlite3.connect(paths.sqlite_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        row = conn.execute(
+            """
+            SELECT id, schema_version, created_at, updated_at, layer, kind, summary, body_md_path, body_text,
+                   tags_json, importance_score, confidence_score, stability_score, reuse_count, volatility_score,
+                   cred_refs_json, source_json, scope_json, integrity_json
+            FROM memories
+            WHERE id = ?
+            """,
+            (memory_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"memory not found: {memory_id}")
+
+        rel = str(row["body_md_path"])
+        md_path = paths.markdown_root / rel
+        if not md_path.exists():
+            raise FileNotFoundError(f"markdown not found: {rel}")
+
+        body_md = f"# {summary}\n\n{body}\n"
+        md_path.write_text(body_md, encoding="utf-8")
+
+        integrity = json.loads(row["integrity_json"] or "{}")
+        integrity["content_sha256"] = sha256_text(body_md)
+        integrity["last_edit_at"] = when_iso
+
+        conn.execute(
+            """
+            UPDATE memories
+            SET summary = ?,
+                updated_at = ?,
+                body_text = ?,
+                tags_json = ?,
+                integrity_json = ?
+            WHERE id = ?
+            """,
+            (
+                summary,
+                when_iso,
+                body_md,
+                json.dumps(tags, ensure_ascii=False),
+                json.dumps(integrity, ensure_ascii=False),
+                memory_id,
+            ),
+        )
+
+        refs = conn.execute(
+            "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ? ORDER BY id",
+            (memory_id,),
+        ).fetchall()
+
+        cred_refs = json.loads(row["cred_refs_json"] or "[]")
+        scope = json.loads(row["scope_json"] or "{}")
+        source = json.loads(row["source_json"] or "{}")
+
+        env = {
+            "id": memory_id,
+            "schema_version": str(row["schema_version"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": when_iso,
+            "layer": str(row["layer"]),
+            "kind": str(row["kind"]),
+            "summary": summary,
+            "body_md_path": rel,
+            "tags": tags,
+            "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
+            "signals": {
+                "importance_score": float(row["importance_score"]),
+                "confidence_score": float(row["confidence_score"]),
+                "stability_score": float(row["stability_score"]),
+                "reuse_count": int(row["reuse_count"]),
+                "volatility_score": float(row["volatility_score"]),
+            },
+            "cred_refs": cred_refs,
+            "source": source,
+            "scope": scope,
+            "integrity": integrity,
+        }
+
+        evt = {
+            "event_id": make_id(),
+            "event_type": event_type,
+            "event_time": when_iso,
+            "memory_id": memory_id,
+            "payload": {
+                "summary": summary,
+                "tags": tags,
+                "body_md_path": rel,
+                "actor": {"tool": tool, "account": account, "device": device, "session_id": session_id},
+                "envelope": env,
+            },
+        }
+
+        append_jsonl(event_file_path(paths, when_dt), evt)
+        insert_event(conn, evt)
+        conn.commit()
+
+    return {"ok": True, "memory_id": memory_id, "updated_at": when_iso, "body_md_path": rel}
+
+
 def find_memories(
     paths: MemoryPaths,
     schema_sql_path: Path,

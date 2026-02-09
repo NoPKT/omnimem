@@ -17,6 +17,7 @@ from .core import (
     ensure_storage,
     find_memories,
     move_memory_layer,
+    update_memory_content,
     resolve_paths,
     save_config,
     sync_error_hint,
@@ -251,13 +252,14 @@ HTML_PAGE = """<!doctype html>
       backdrop-filter: blur(10px);
       z-index: 1;
     }
-    .drawer-title { font-size: 14px; font-weight: 650; letter-spacing: .2px; }
-    .drawer-sub { margin-top: 6px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    .drawer-body { padding: 14px; }
-    .sig-grid { display:grid; grid-template-columns: 1fr; gap: 10px; margin-top: 8px; }
-    .sig-row { display:flex; gap:10px; align-items:center; }
-    .sig-label { width: 96px; font-size: 12px; color: var(--muted); }
-    .sig-val { width: 54px; text-align:right; font-size: 12px; color: var(--muted); }
+	    .drawer-title { font-size: 14px; font-weight: 650; letter-spacing: .2px; }
+	    .drawer-sub { margin-top: 6px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+	    .drawer-body { padding: 14px; }
+	    .drawer-body textarea { width:100%; min-height: 260px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace; font-size: 12px; }
+	    .sig-grid { display:grid; grid-template-columns: 1fr; gap: 10px; margin-top: 8px; }
+	    .sig-row { display:flex; gap:10px; align-items:center; }
+	    .sig-label { width: 96px; font-size: 12px; color: var(--muted); }
+	    .sig-val { width: 54px; text-align:right; font-size: 12px; color: var(--muted); }
     .sig-row .bar { flex: 1; height: 10px; }
     .sig-row .bar > i { background: linear-gradient(90deg, rgba(14,165,233,.95), rgba(34,197,94,.85)); }
     .kv { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
@@ -719,9 +721,10 @@ HTML_PAGE = """<!doctype html>
 	              <option value=\"archive\">archive</option>
 	            </select>
 	          </label>
-	          <div class=\"row-btn\">
-	            <button id=\"btnMemReload\" data-i18n=\"btn_mem_reload\">Reload</button>
-	          </div>
+		          <div class=\"row-btn\">
+		            <button id=\"btnMemReload\" data-i18n=\"btn_mem_reload\">Reload</button>
+		            <button id=\"btnMemOpenBoard\" class=\"secondary\" style=\"margin-top:0\">Layer Board</button>
+		          </div>
 	          <div class=\"small\" data-i18n=\"mem_hint\">Click an ID to open full content</div>
           <table>
             <thead>
@@ -796,14 +799,17 @@ HTML_PAGE = """<!doctype html>
           <div class=\"small\" id=\"dReco\" style=\"margin-top:8px\"></div>
         </div>
         <button id=\"btnDrawerClose\" class=\"secondary\" style=\"margin-top:0\">Close</button>
-      </div>
-      <div class=\"row-btn\" style=\"margin-top:10px\">
-        <button id=\"btnPromote\" style=\"margin-top:0\">Promote → long</button>
-        <button id=\"btnDemote\" class=\"secondary\" style=\"margin-top:0\">Demote → short</button>
-        <button id=\"btnArchive\" class=\"secondary\" style=\"margin-top:0\">Archive</button>
-      </div>
-    </div>
-    <div class=\"drawer-body\">
+	      </div>
+	      <div class=\"row-btn\" style=\"margin-top:10px\">
+	        <button id=\"btnEdit\" class=\"secondary\" style=\"margin-top:0\">Edit</button>
+	        <button id=\"btnSave\" style=\"margin-top:0; display:none\">Save</button>
+	        <button id=\"btnCancel\" class=\"secondary\" style=\"margin-top:0; display:none\">Cancel</button>
+	        <button id=\"btnPromote\" style=\"margin-top:0\">Promote → long</button>
+	        <button id=\"btnDemote\" class=\"secondary\" style=\"margin-top:0\">Demote → short</button>
+	        <button id=\"btnArchive\" class=\"secondary\" style=\"margin-top:0\">Archive</button>
+	      </div>
+	    </div>
+	    <div class=\"drawer-body\">
       <div class=\"muted-box\">
         <div class=\"small\"><b>Signals</b></div>
         <div class=\"sig-grid\" id=\"dSignals\"></div>
@@ -811,12 +817,23 @@ HTML_PAGE = """<!doctype html>
       <div class=\"kv\" id=\"dMeta\"></div>
       <div class=\"divider\"></div>
       <div class=\"small\"><b>Refs</b></div>
-      <div id=\"dRefs\" class=\"small\"></div>
-      <div class=\"divider\"></div>
-      <div class=\"small\"><b>Body</b></div>
-      <pre id=\"dBody\" class=\"mono\" style=\"white-space:pre-wrap; margin-top:8px\"></pre>
-    </div>
-  </div>
+	      <div id=\"dRefs\" class=\"small\"></div>
+	      <div class=\"divider\"></div>
+	      <div class=\"small\"><b>Body</b></div>
+	      <div id=\"dEditBox\" style=\"margin-top:8px; display:none\">
+	        <label style=\"margin-top:0\">Summary
+	          <input id=\"dEditSummary\" />
+	        </label>
+	        <label>Tags (comma-separated)
+	          <input id=\"dEditTags\" placeholder=\"tag1,tag2\" />
+	        </label>
+	        <label>Body (markdown)
+	          <textarea id=\"dEditBody\" class=\"mono\"></textarea>
+	        </label>
+	      </div>
+	      <pre id=\"dBodyView\" class=\"mono\" style=\"white-space:pre-wrap; margin-top:8px\"></pre>
+	    </div>
+	  </div>
 
   <script>
     const I18N = {
@@ -1159,19 +1176,67 @@ HTML_PAGE = """<!doctype html>
       return `<span class="pill">${strong ? '<b>' + escHtml(text) + '</b>' : escHtml(text)}</span>`;
     }
 
-    function kvRow(k, v) {
-      return `<div><div class="k">${escHtml(k)}</div><div class="v mono">${escHtml(v || '')}</div></div>`;
-    }
+	    function kvRow(k, v) {
+	      return `<div><div class="k">${escHtml(k)}</div><div class="v mono">${escHtml(v || '')}</div></div>`;
+	    }
 
-    async function openMemory(id) {
-      const d = await jget('/api/memory?id=' + encodeURIComponent(id));
-      if (!d.ok || !d.memory) {
-        toast('Memory', d.error || 'not found', false);
-        return;
-      }
-      const m = d.memory;
-      const sig = m.signals || {};
-      document.getElementById('dTitle').textContent = m.summary || 'Memory';
+	    let drawerMem = null;
+	    let drawerEditMode = false;
+
+	    function stripMdTitle(body) {
+	      const s = String(body || '');
+	      // Canonical bodies are stored as "# {summary}\n\n{content}\n".
+	      const m = s.match(/^# .*\n\n([\s\S]*)$/);
+	      return m ? m[1] : s;
+	    }
+
+	    function setDrawerEditMode(on) {
+	      drawerEditMode = !!on;
+	      const eb = document.getElementById('dEditBox');
+	      const bv = document.getElementById('dBodyView');
+	      const btnE = document.getElementById('btnEdit');
+	      const btnS = document.getElementById('btnSave');
+	      const btnC = document.getElementById('btnCancel');
+	      if (eb) eb.style.display = drawerEditMode ? 'block' : 'none';
+	      if (bv) bv.style.display = drawerEditMode ? 'none' : 'block';
+	      if (btnE) btnE.style.display = drawerEditMode ? 'none' : 'inline-block';
+	      if (btnS) btnS.style.display = drawerEditMode ? 'inline-block' : 'none';
+	      if (btnC) btnC.style.display = drawerEditMode ? 'inline-block' : 'none';
+	      const btnPromote = document.getElementById('btnPromote');
+	      const btnDemote = document.getElementById('btnDemote');
+	      const btnArchive = document.getElementById('btnArchive');
+	      [btnPromote, btnDemote, btnArchive].forEach(b => { if (b) b.disabled = drawerEditMode; });
+	    }
+
+	    async function saveDrawerEdit() {
+	      const m = drawerMem;
+	      if (!m || !m.id) return;
+	      const summary = document.getElementById('dEditSummary')?.value?.trim() || '';
+	      const tags_csv = document.getElementById('dEditTags')?.value || '';
+	      const body = document.getElementById('dEditBody')?.value || '';
+	      const r = await jpost('/api/memory/update', { id: m.id, summary, body, tags_csv });
+	      if (!r || !r.ok) {
+	        toast('Edit', r?.error || 'update failed', false);
+	        return;
+	      }
+	      toast('Edit', 'saved', true);
+	      setDrawerEditMode(false);
+	      await loadInsights();
+	      await loadLayerStats();
+	      await loadMem();
+	      await openMemory(m.id);
+	    }
+
+	    async function openMemory(id) {
+	      const d = await jget('/api/memory?id=' + encodeURIComponent(id));
+	      if (!d.ok || !d.memory) {
+	        toast('Memory', d.error || 'not found', false);
+	        return;
+	      }
+	      const m = d.memory;
+	      drawerMem = m;
+	      const sig = m.signals || {};
+	      document.getElementById('dTitle').textContent = m.summary || 'Memory';
       document.getElementById('dPills').innerHTML = [
         pill((m.scope||{}).project_id || 'global', true),
         pill(m.layer || ''),
@@ -1201,15 +1266,22 @@ HTML_PAGE = """<!doctype html>
       ].join('');
 
       const refs = (m.refs || []);
-      document.getElementById('dRefs').innerHTML = refs.length
-        ? refs.map(r => `<div class="mono">${escHtml(r.type || '')}:${escHtml(r.target || '')}${r.note ? ' ' + escHtml(r.note) : ''}</div>`).join('')
-        : '<span class="small">(none)</span>';
+	      document.getElementById('dRefs').innerHTML = refs.length
+	        ? refs.map(r => `<div class="mono">${escHtml(r.type || '')}:${escHtml(r.target || '')}${r.note ? ' ' + escHtml(r.note) : ''}</div>`).join('')
+	        : '<span class="small">(none)</span>';
 
-      document.getElementById('dBody').textContent = d.body || '';
+	      document.getElementById('dBodyView').textContent = d.body || '';
+	      const edS = document.getElementById('dEditSummary');
+	      const edT = document.getElementById('dEditTags');
+	      const edB = document.getElementById('dEditBody');
+	      if (edS) edS.value = m.summary || '';
+	      if (edT) edT.value = (m.tags || []).join(',');
+	      if (edB) edB.value = stripMdTitle(d.body || '');
+	      setDrawerEditMode(false);
 
-      // Wire action buttons based on current layer.
-      const btnPromote = document.getElementById('btnPromote');
-      const btnDemote = document.getElementById('btnDemote');
+	      // Wire action buttons based on current layer.
+	      const btnPromote = document.getElementById('btnPromote');
+	      const btnDemote = document.getElementById('btnDemote');
       const btnArchive = document.getElementById('btnArchive');
       const reco = document.getElementById('dReco');
       const layer = m.layer || '';
@@ -1514,17 +1586,34 @@ HTML_PAGE = """<!doctype html>
       renderDaemonState();
     }
 
-	    async function loadLayerStats() {
-	      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
-	      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
-	      const d = await jget('/api/layer-stats?project_id=' + encodeURIComponent(project_id) + '&session_id=' + encodeURIComponent(session_id));
-	      if (!d.ok) {
-	        document.getElementById('layerStats').textContent = d.error || 'layer stats failed';
-	        return;
-	      }
-      const parts = (d.items || []).map(x => `${x.layer}:${x.count}`);
-      document.getElementById('layerStats').textContent = parts.join(' | ') || '(empty)';
-    }
+		    async function loadLayerStats() {
+		      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
+		      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
+		      const d = await jget('/api/layer-stats?project_id=' + encodeURIComponent(project_id) + '&session_id=' + encodeURIComponent(session_id));
+		      if (!d.ok) {
+		        document.getElementById('layerStats').textContent = d.error || 'layer stats failed';
+		        return;
+		      }
+	      const el = document.getElementById('layerStats');
+	      const items = (d.items || []);
+	      if (!el) return;
+	      if (!items.length) { el.textContent = '(empty)'; return; }
+	      el.innerHTML = items.map(x => {
+	        const layer = String(x.layer || '');
+	        const count = Number(x.count || 0);
+	        const title = layerDesc(layer);
+	        return `<a href=\"#\" class=\"pill\" data-layer=\"${escHtml(layer)}\" title=\"${escHtml(title)}\"><b>${escHtml(layer)}</b><span class=\"mono\">${escHtml(String(count))}</span></a>`;
+	      }).join(' ');
+	      el.querySelectorAll('a[data-layer]').forEach(a => {
+	        a.onclick = async (e) => {
+	          e.preventDefault();
+	          const layer = a.dataset.layer || '';
+	          const sel = document.getElementById('memLayer');
+	          if (sel) sel.value = layer;
+	          await loadMem();
+	        };
+	      });
+	    }
 
     function layerDesc(layer) {
       if (layer === 'instant') return 'noisy, short-lived trial context';
@@ -2550,17 +2639,23 @@ HTML_PAGE = """<!doctype html>
       });
     }
 
-    function bindTabs() {
-      const btns = document.querySelectorAll('.tab-btn');
-      btns.forEach(btn => {
-        btn.onclick = () => {
-          btns.forEach(x => x.classList.remove('active'));
-          btn.classList.add('active');
-          document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-          document.getElementById(btn.dataset.tab).classList.add('active');
-        };
-      });
-    }
+	    function bindTabs() {
+	      const btns = document.querySelectorAll('.tab-btn');
+	      btns.forEach(btn => {
+	        btn.onclick = () => {
+	          btns.forEach(x => x.classList.remove('active'));
+	          btn.classList.add('active');
+	          document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+	          document.getElementById(btn.dataset.tab).classList.add('active');
+	        };
+	      });
+	    }
+
+	    function setActiveTab(tabId) {
+	      const btns = document.querySelectorAll('.tab-btn');
+	      btns.forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+	      document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === tabId));
+	    }
 
     document.getElementById('langSelect').onchange = (e) => {
       currentLang = e.target.value;
@@ -2577,10 +2672,11 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnDaemonOn').onclick = () => toggleDaemon(true);
       document.getElementById('btnDaemonOff').onclick = () => toggleDaemon(false);
       document.getElementById('btnConflictRecovery').onclick = () => runConflictRecovery();
-      document.getElementById('btnProjectAttach').onclick = () => attachProject();
-          document.getElementById('btnProjectDetach').onclick = () => detachProject();
-          document.getElementById('btnMemReload').onclick = () => loadMem();
-          document.getElementById('memLayer').onchange = () => loadMem();
+	          document.getElementById('btnProjectAttach').onclick = () => attachProject();
+	          document.getElementById('btnProjectDetach').onclick = () => detachProject();
+	          document.getElementById('btnMemReload').onclick = () => loadMem();
+	          document.getElementById('btnMemOpenBoard').onclick = async () => { setActiveTab('insightsTab'); await loadInsights(); };
+	          document.getElementById('memLayer').onchange = () => loadMem();
           document.getElementById('memSessionId').onchange = () => { loadMem(); loadLayerStats(); };
           document.getElementById('memProjectId').onchange = () => { loadMem(); loadLayerStats(); };
           const mq = document.getElementById('memQuery');
@@ -2641,9 +2737,15 @@ HTML_PAGE = """<!doctype html>
           }
         }
       };
-	      document.getElementById('btnDrawerClose').onclick = () => showDrawer(false);
-	      document.getElementById('overlay').onclick = () => showDrawer(false);
-	      const mo = document.getElementById('modalOverlay');
+		      document.getElementById('btnDrawerClose').onclick = () => { setDrawerEditMode(false); showDrawer(false); };
+		      document.getElementById('overlay').onclick = () => { setDrawerEditMode(false); showDrawer(false); };
+		      const bEdit = document.getElementById('btnEdit');
+		      const bSave = document.getElementById('btnSave');
+		      const bCancel = document.getElementById('btnCancel');
+		      if (bEdit) bEdit.onclick = () => setDrawerEditMode(true);
+		      if (bCancel) bCancel.onclick = () => setDrawerEditMode(false);
+		      if (bSave) bSave.onclick = () => saveDrawerEdit();
+		      const mo = document.getElementById('modalOverlay');
 	      if (mo) mo.onclick = () => { showWsModal(false); clearWsHash(); };
 	      const mclose = document.getElementById('btnWsModalClose');
 	      if (mclose) mclose.onclick = () => { showWsModal(false); clearWsHash(); };
@@ -4328,6 +4430,40 @@ def run_webui(
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
 
+            if parsed.path == "/api/memory/update":
+                try:
+                    mem_id = str(data.get("id", "")).strip()
+                    summary = str(data.get("summary", "")).strip()
+                    body = str(data.get("body", ""))
+                    raw_tags = data.get("tags")
+                    if raw_tags is None:
+                        raw = str(data.get("tags_csv", "") or "")
+                        tags = [x.strip() for x in raw.split(",") if x.strip()]
+                    else:
+                        if not isinstance(raw_tags, list):
+                            self._send_json({"ok": False, "error": "tags must be a list of strings"}, 400)
+                            return
+                        tags = [str(x).strip() for x in raw_tags if str(x).strip()]
+                    if not mem_id:
+                        self._send_json({"ok": False, "error": "id is required"}, 400)
+                        return
+                    out = update_memory_content(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        memory_id=mem_id,
+                        summary=summary,
+                        body=body,
+                        tags=tags,
+                        tool="webui",
+                        account="default",
+                        device="local",
+                        session_id="webui-session",
+                    )
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
             if parsed.path == "/api/session/archive":
                 try:
                     project_id = str(data.get("project_id", "")).strip()
@@ -4394,22 +4530,22 @@ def run_webui(
                             paths=paths,
                             schema_sql_path=schema_sql_path,
                             layer="archive",
-                            kind="summary",
-                            summary=f"Session archived: {session_id[:12]}… ({moved}/{len(ids)})",
-                            body=(
-                                "Session archive executed via WebUI.\n\n"
-                                f"- project_id: {project_id or '(all)'}\n"
-                                f"- session_id: {session_id}\n"
-                                f"- from_layers: {', '.join(from_layers)}\n"
-                                f"- to_layer: {to_layer}\n"
-                                f"- requested: {len(ids)}\n"
-                                f"- moved: {moved}\n"
-                                f"- failed_first20: {failed[:20]}\n"
-                            ),
+	                            kind="summary",
+	                            summary=f"Session archived: {session_id[:12]}… ({moved}/{len(ids)})",
+	                            body=(
+	                                "Session archive executed via WebUI.\n\n"
+	                                f"- project_id: {project_id or '(all)'}\n"
+	                                f"- session_id: {session_id}\n"
+	                                f"- from_layers: {', '.join(from_layers)}\n"
+	                                f"- to_layer: {to_layer}\n"
+	                                f"- requested: {len(ids)}\n"
+	                                f"- moved: {moved}\n"
+	                                f"- failed_first20: {failed[:20]}\n"
+	                            ),
                             tags=[
                                 "governance:session-archive",
                                 f"session:{session_id}",
-                                *( [f"project:{project_id}"] if project_id else [] ),
+                                *([f"project:{project_id}"] if project_id else []),
                             ],
                             refs=[],
                             cred_refs=[],
