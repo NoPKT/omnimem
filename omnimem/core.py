@@ -8,13 +8,15 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "0.1.0"
 LAYER_SET = {"instant", "short", "long", "archive"}
-KIND_SET = {"note", "decision", "task", "checkpoint", "summary", "evidence"}
+# Keep KIND_SET permissive for internal instrumentation (e.g. retrieve traces) while
+# still validating obvious typos.
+KIND_SET = {"note", "decision", "task", "checkpoint", "summary", "evidence", "retrieve"}
 EVENT_SET = {
     "memory.write",
     "memory.update",
@@ -22,6 +24,9 @@ EVENT_SET = {
     "memory.promote",
     "memory.verify",
     "memory.sync",
+    "memory.retrieve",
+    "memory.reuse",
+    "memory.decay",
 }
 
 
@@ -129,6 +134,209 @@ def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
 
     with sqlite3.connect(paths.sqlite_path) as conn:
         conn.executescript(schema_sql_path.read_text(encoding="utf-8"))
+        _maybe_migrate_memories_table(conn)
+        _maybe_repair_fk_targets(conn)
+
+
+def _memories_table_sql(conn: sqlite3.Connection) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'"
+    ).fetchone()
+    return str(row[0] or "") if row else ""
+
+
+def _maybe_migrate_memories_table(conn: sqlite3.Connection) -> None:
+    """Migrate memories table when DB-level CHECK constraints lag behind app kinds.
+
+    This is needed because schema.sql uses CREATE TABLE IF NOT EXISTS, so older installs may
+    keep stricter CHECK constraints that reject new kinds (e.g. 'retrieve').
+    """
+    sql = _memories_table_sql(conn)
+    if not sql:
+        return
+    if "CHECK" in sql and "'retrieve'" not in sql:
+        _rebuild_memories_table(conn)
+
+
+def _table_sql(conn: sqlite3.Connection, name: str) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
+    ).fetchone()
+    return str(row[0] or "") if row else ""
+
+
+def _maybe_repair_fk_targets(conn: sqlite3.Connection) -> None:
+    """Repair legacy DBs whose FK constraints reference the transient "memories_old" table."""
+    refs_sql = _table_sql(conn, "memory_refs")
+    ev_sql = _table_sql(conn, "memory_events")
+    if "memories_old" not in (refs_sql + ev_sql):
+        return
+    _rebuild_child_tables(conn)
+
+
+def _rebuild_child_tables(conn: sqlite3.Connection) -> None:
+    """Recreate child tables so their foreign keys reference the current `memories` table."""
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DROP INDEX IF EXISTS idx_memory_refs_memory_id")
+        conn.execute("DROP INDEX IF EXISTS idx_memory_refs_target")
+        conn.execute("DROP INDEX IF EXISTS idx_memory_events_type_time")
+
+        conn.execute("ALTER TABLE memory_refs RENAME TO memory_refs_old")
+        conn.execute("ALTER TABLE memory_events RENAME TO memory_events_old")
+
+        conn.execute(
+            """
+            CREATE TABLE memory_refs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              memory_id TEXT NOT NULL,
+              ref_type TEXT NOT NULL,
+              target TEXT NOT NULL,
+              note TEXT,
+              FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE memory_events (
+              event_id TEXT PRIMARY KEY,
+              event_type TEXT NOT NULL,
+              event_time TEXT NOT NULL,
+              memory_id TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        # Preserve existing ids / event ids.
+        conn.execute(
+            """
+            INSERT INTO memory_refs(id, memory_id, ref_type, target, note)
+            SELECT id, memory_id, ref_type, target, note FROM memory_refs_old
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_events(event_id, event_type, event_time, memory_id, payload_json)
+            SELECT event_id, event_type, event_time, memory_id, payload_json FROM memory_events_old
+            """
+        )
+
+        conn.execute("DROP TABLE memory_refs_old")
+        conn.execute("DROP TABLE memory_events_old")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_refs_memory_id ON memory_refs(memory_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_refs_target ON memory_refs(target)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_events_type_time ON memory_events(event_type, event_time)")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _rebuild_memories_table(conn: sqlite3.Connection) -> None:
+    # Keep this DDL in sync with db/schema.sql columns and indexes.
+    kinds = ", ".join([f"'{k}'" for k in sorted(KIND_SET)])
+    layers = ", ".join([f"'{l}'" for l in sorted(LAYER_SET)])
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DROP TRIGGER IF EXISTS memories_ai")
+        conn.execute("DROP TRIGGER IF EXISTS memories_ad")
+        conn.execute("DROP TRIGGER IF EXISTS memories_au")
+        conn.execute("DROP INDEX IF EXISTS idx_memories_layer")
+        conn.execute("DROP INDEX IF EXISTS idx_memories_kind")
+        conn.execute("DROP INDEX IF EXISTS idx_memories_updated_at")
+        conn.execute("DROP INDEX IF EXISTS idx_memories_importance")
+        conn.execute("DROP INDEX IF EXISTS idx_memories_reuse_count")
+
+        conn.execute("ALTER TABLE memories RENAME TO memories_old")
+        conn.execute(
+            f"""
+            CREATE TABLE memories (
+              id TEXT PRIMARY KEY,
+              schema_version TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              layer TEXT NOT NULL CHECK (layer IN ({layers})),
+              kind TEXT NOT NULL CHECK (kind IN ({kinds})),
+              summary TEXT NOT NULL,
+              body_md_path TEXT NOT NULL,
+              body_text TEXT NOT NULL DEFAULT '',
+              tags_json TEXT NOT NULL DEFAULT '[]',
+              importance_score REAL NOT NULL DEFAULT 0.5 CHECK (importance_score >= 0 AND importance_score <= 1),
+              confidence_score REAL NOT NULL DEFAULT 0.5 CHECK (confidence_score >= 0 AND confidence_score <= 1),
+              stability_score REAL NOT NULL DEFAULT 0.5 CHECK (stability_score >= 0 AND stability_score <= 1),
+              reuse_count INTEGER NOT NULL DEFAULT 0 CHECK (reuse_count >= 0),
+              volatility_score REAL NOT NULL DEFAULT 0.5 CHECK (volatility_score >= 0 AND volatility_score <= 1),
+              cred_refs_json TEXT NOT NULL DEFAULT '[]',
+              source_json TEXT NOT NULL,
+              scope_json TEXT NOT NULL,
+              integrity_json TEXT NOT NULL
+            )
+            """
+        )
+        cols = (
+            "id,schema_version,created_at,updated_at,layer,kind,summary,body_md_path,body_text,"
+            "tags_json,importance_score,confidence_score,stability_score,reuse_count,volatility_score,"
+            "cred_refs_json,source_json,scope_json,integrity_json"
+        )
+        conn.execute(f"INSERT INTO memories({cols}) SELECT {cols} FROM memories_old")
+        # memory_refs/memory_events foreign keys are rewritten by SQLite to reference memories_old
+        # after the rename; rebuild them so they reference the new `memories` table.
+        _rebuild_child_tables(conn)
+        conn.execute("DROP TABLE memories_old")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(layer)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(kind)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance_score)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_reuse_count ON memories(reuse_count)")
+
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories
+            BEGIN
+              INSERT INTO memories_fts(id, summary, body_text, tags)
+              VALUES (new.id, new.summary, new.body_text, new.tags_json);
+            END;
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories
+            BEGIN
+              DELETE FROM memories_fts WHERE id = old.id;
+            END;
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories
+            BEGIN
+              DELETE FROM memories_fts WHERE id = old.id;
+              INSERT INTO memories_fts(id, summary, body_text, tags)
+              VALUES (new.id, new.summary, new.body_text, new.tags_json);
+            END;
+            """
+        )
+        # Rebuild FTS table to be safe.
+        conn.execute("DELETE FROM memories_fts")
+        conn.execute(
+            "INSERT INTO memories_fts(id, summary, body_text, tags) SELECT id, summary, body_text, tags_json FROM memories"
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def ensure_system_memory(paths: MemoryPaths, schema_sql_path: Path) -> str:
@@ -239,6 +447,205 @@ def insert_memory(conn: sqlite3.Connection, envelope: dict[str, Any], body_text:
             "INSERT INTO memory_refs(memory_id, ref_type, target, note) VALUES (?, ?, ?, ?)",
             (envelope["id"], ref.get("type", "memory"), ref.get("target", ""), ref.get("note")),
         )
+
+
+def bump_reuse_counts(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    ids: list[str],
+    delta: int = 1,
+    tool: str = "omnimem",
+    session_id: str = "session-local",
+    project_id: str = "",
+) -> dict[str, Any]:
+    """Increment reuse_count for a set of memories.
+
+    Intended to be called when memories are retrieved/used, so governance has a concrete reuse signal.
+    """
+    ensure_storage(paths, schema_sql_path)
+    if not ids:
+        return {"ok": True, "updated": 0}
+    delta = int(delta)
+    if delta <= 0:
+        return {"ok": True, "updated": 0}
+    when = utc_now()
+    try:
+        with sqlite3.connect(paths.sqlite_path) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            n = 0
+            for mid in ids:
+                # Reuse should gently increase stability/confidence and reduce volatility.
+                cur = conn.execute(
+                    """
+                    UPDATE memories
+                    SET reuse_count = reuse_count + ?,
+                        stability_score = min(1.0, stability_score + (0.03 * ?)),
+                        confidence_score = min(1.0, confidence_score + (0.01 * ?)),
+                        volatility_score = max(0.0, volatility_score - (0.02 * ?)),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (delta, delta, delta, delta, when, mid),
+                )
+                n += int(cur.rowcount or 0)
+            conn.commit()
+        log_system_event(
+            paths,
+            schema_sql_path,
+            "memory.reuse",
+            {"tool": tool, "session_id": session_id, "project_id": project_id, "delta": delta, "count": n},
+        )
+        return {"ok": True, "updated": n}
+    except Exception as exc:  # pragma: no cover
+        return {"ok": False, "error": str(exc), "updated": 0}
+
+
+def apply_decay(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    days: int = 14,
+    limit: int = 200,
+    project_id: str = "",
+    layers: list[str] | None = None,
+    dry_run: bool = True,
+    tool: str = "omnimem",
+    session_id: str = "system",
+) -> dict[str, Any]:
+    """Apply time-based signal decay for stale memories.
+
+    Decay targets "recent working sets" more than cold archive, and is dampened by reuse_count.
+    We avoid changing updated_at; instead we store last_decay_at in integrity_json to prevent
+    repeated decay in short intervals.
+    """
+    ensure_storage(paths, schema_sql_path)
+    days = max(1, int(days))
+    limit = max(1, min(2000, int(limit)))
+    if layers is None:
+        layers = ["instant", "short", "long"]
+    layers = [x for x in (str(l).strip() for l in layers) if x]
+    for l in layers:
+        if l not in LAYER_SET:
+            raise ValueError(f"invalid layer: {l}")
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cutoff = (now - timedelta(days=days)).isoformat()
+    placeholders = ",".join(["?"] * len(layers))
+
+    with sqlite3.connect(paths.sqlite_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""
+            SELECT id, layer, kind, summary, updated_at,
+                   importance_score, confidence_score, stability_score, reuse_count, volatility_score,
+                   integrity_json,
+                   COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id
+            FROM memories
+            WHERE layer IN ({placeholders})
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND COALESCE(json_extract(integrity_json, '$.last_decay_at'), updated_at) < ?
+            ORDER BY updated_at ASC
+            LIMIT ?
+            """,
+            (*layers, project_id, project_id, cutoff, limit),
+        ).fetchall()
+
+        changes: list[dict[str, Any]] = []
+        moved = 0
+        for r in rows:
+            try:
+                updated_at = datetime.fromisoformat(str(r["updated_at"]))
+            except Exception:
+                continue
+            age_days = max(0, int((now - updated_at).total_seconds() // 86400))
+            if age_days < days:
+                continue
+            reuse = int(r["reuse_count"] or 0)
+            # Decay strength increases with age, but dampens with reuse.
+            age_factor = min(1.0, (age_days - days) / 30.0)
+            damp = 1.0 / (1.0 + (reuse / 6.0))
+            strength = age_factor * damp
+
+            old = {
+                "confidence": float(r["confidence_score"]),
+                "stability": float(r["stability_score"]),
+                "volatility": float(r["volatility_score"]),
+            }
+            new_conf = max(0.0, min(1.0, old["confidence"] - (0.02 * strength)))
+            new_stab = max(0.0, min(1.0, old["stability"] - (0.03 * strength)))
+            new_vol = max(0.0, min(1.0, old["volatility"] + (0.02 * strength)))
+
+            if (
+                abs(new_conf - old["confidence"]) < 1e-6
+                and abs(new_stab - old["stability"]) < 1e-6
+                and abs(new_vol - old["volatility"]) < 1e-6
+            ):
+                continue
+
+            integrity = {}
+            try:
+                integrity = json.loads(r["integrity_json"] or "{}")
+            except Exception:
+                integrity = {}
+            integrity["last_decay_at"] = now.isoformat()
+
+            change = {
+                "id": r["id"],
+                "layer": r["layer"],
+                "kind": r["kind"],
+                "project_id": r["project_id"],
+                "updated_at": r["updated_at"],
+                "age_days": age_days,
+                "reuse_count": reuse,
+                "old": old,
+                "new": {"confidence": new_conf, "stability": new_stab, "volatility": new_vol},
+            }
+            changes.append(change)
+
+            if not dry_run:
+                conn.execute(
+                    """
+                    UPDATE memories
+                    SET confidence_score = ?,
+                        stability_score = ?,
+                        volatility_score = ?,
+                        integrity_json = ?
+                    WHERE id = ?
+                    """,
+                    (new_conf, new_stab, new_vol, json.dumps(integrity, ensure_ascii=False), r["id"]),
+                )
+                moved += 1
+
+        if not dry_run:
+            conn.commit()
+
+    if not dry_run and changes:
+        log_system_event(
+            paths,
+            schema_sql_path,
+            "memory.decay",
+            {
+                "tool": tool,
+                "session_id": session_id,
+                "project_id": project_id,
+                "days": days,
+                "layers": layers,
+                "changed": len(changes),
+                "applied": moved,
+                "sample": changes[:20],
+            },
+        )
+
+    return {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "project_id": project_id,
+        "days": days,
+        "layers": layers,
+        "count": len(changes),
+        "items": changes,
+    }
 
 
 def insert_event(conn: sqlite3.Connection, evt: dict[str, Any]) -> None:
@@ -482,6 +889,144 @@ def write_memory(
     return {"memory": env, "event": evt}
 
 
+def move_memory_layer(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    memory_id: str,
+    new_layer: str,
+    tool: str = "cli",
+    account: str = "default",
+    device: str = "local",
+    session_id: str = "session-local",
+    event_type: str = "memory.promote",
+) -> dict[str, Any]:
+    """
+    Promote/demote an existing memory by moving it to a different layer.
+
+    This updates:
+    - Markdown path (moves file to the new layer directory)
+    - SQLite row (layer, updated_at, body_md_path)
+    - JSONL + SQLite event log (memory.promote)
+    """
+    ensure_storage(paths, schema_sql_path)
+    if new_layer not in LAYER_SET:
+        raise ValueError(f"invalid layer: {new_layer}")
+    if event_type not in EVENT_SET:
+        raise ValueError(f"invalid event_type: {event_type}")
+
+    when_dt = datetime.now(timezone.utc)
+    when_iso = when_dt.replace(microsecond=0).isoformat()
+
+    with sqlite3.connect(paths.sqlite_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        row = conn.execute(
+            """
+            SELECT id, schema_version, created_at, updated_at, layer, kind, summary, body_md_path, body_text,
+                   tags_json, importance_score, confidence_score, stability_score, reuse_count, volatility_score,
+                   cred_refs_json, source_json, scope_json, integrity_json
+            FROM memories
+            WHERE id = ?
+            """,
+            (memory_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"memory not found: {memory_id}")
+
+        old_layer = str(row["layer"])
+        if old_layer == new_layer:
+            return {"ok": True, "memory_id": memory_id, "from_layer": old_layer, "to_layer": new_layer, "changed": False}
+
+        old_rel = str(row["body_md_path"])
+        old_md = paths.markdown_root / old_rel
+        if not old_md.exists():
+            raise FileNotFoundError(f"markdown not found: {old_rel}")
+
+        body_md = old_md.read_text(encoding="utf-8")
+        new_rel = md_rel_path(new_layer, memory_id, when_dt)
+        new_md = paths.markdown_root / new_rel
+        new_md.parent.mkdir(parents=True, exist_ok=True)
+        new_md.write_text(body_md, encoding="utf-8")
+        old_md.unlink(missing_ok=True)
+
+        # Keep created_at stable; only update updated_at, layer, and path.
+        conn.execute(
+            "UPDATE memories SET layer = ?, updated_at = ?, body_md_path = ? WHERE id = ?",
+            (new_layer, when_iso, new_rel, memory_id),
+        )
+
+        refs = conn.execute(
+            "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ? ORDER BY id",
+            (memory_id,),
+        ).fetchall()
+
+        tags = json.loads(row["tags_json"] or "[]")
+        cred_refs = json.loads(row["cred_refs_json"] or "[]")
+        scope = json.loads(row["scope_json"] or "{}")
+        integrity = json.loads(row["integrity_json"] or "{}")
+        # Recompute hash after move to be defensive (content should be identical).
+        integrity["content_sha256"] = sha256_text(body_md)
+
+        env = {
+            "id": memory_id,
+            "schema_version": str(row["schema_version"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": when_iso,
+            "layer": new_layer,
+            "kind": str(row["kind"]),
+            "summary": str(row["summary"]),
+            "body_md_path": new_rel,
+            "tags": tags,
+            "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
+            "signals": {
+                "importance_score": float(row["importance_score"]),
+                "confidence_score": float(row["confidence_score"]),
+                "stability_score": float(row["stability_score"]),
+                "reuse_count": int(row["reuse_count"]),
+                "volatility_score": float(row["volatility_score"]),
+            },
+            "cred_refs": cred_refs,
+            # Preserve scope; source points to the actor performing the move.
+            "source": {
+                "tool": tool,
+                "account": account,
+                "device": device,
+                "session_id": session_id,
+            },
+            "scope": scope,
+            "integrity": integrity,
+        }
+
+        evt = {
+            "event_id": make_id(),
+            "event_type": event_type,
+            "event_time": when_iso,
+            "memory_id": memory_id,
+            "payload": {
+                "from_layer": old_layer,
+                "to_layer": new_layer,
+                "old_body_md_path": old_rel,
+                "new_body_md_path": new_rel,
+                "envelope": env,
+            },
+        }
+
+        append_jsonl(event_file_path(paths, when_dt), evt)
+        insert_event(conn, evt)
+        conn.commit()
+
+    return {
+        "ok": True,
+        "memory_id": memory_id,
+        "from_layer": old_layer,
+        "to_layer": new_layer,
+        "old_body_md_path": old_rel,
+        "new_body_md_path": new_rel,
+        "changed": True,
+    }
+
+
 def find_memories(
     paths: MemoryPaths,
     schema_sql_path: Path,
@@ -489,6 +1034,7 @@ def find_memories(
     layer: str | None,
     limit: int,
     project_id: str = "",
+    session_id: str = "",
 ) -> list[dict[str, Any]]:
     ensure_storage(paths, schema_sql_path)
     with sqlite3.connect(paths.sqlite_path) as conn:
@@ -498,57 +1044,80 @@ def find_memories(
                 rows = conn.execute(
                     """
                     SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
-                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id
+                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
+                           COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
+                           m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
                     FROM memories_fts f
                     JOIN memories m ON m.id = f.id
                     WHERE f.memories_fts MATCH ? AND m.layer = ?
                       AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
+                      AND (COALESCE(json_extract(m.source_json, '$.session_id'), '') = ? OR ? = '')
                     ORDER BY bm25(memories_fts), m.updated_at DESC
                     LIMIT ?
                     """,
-                    (query, layer, project_id, project_id, limit),
+                    (query, layer, project_id, project_id, session_id, session_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """
                     SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
-                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id
+                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
+                           COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
+                           m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
                     FROM memories_fts f
                     JOIN memories m ON m.id = f.id
                     WHERE f.memories_fts MATCH ?
                       AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
+                      AND (COALESCE(json_extract(m.source_json, '$.session_id'), '') = ? OR ? = '')
                     ORDER BY bm25(memories_fts), m.updated_at DESC
                     LIMIT ?
                     """,
-                    (query, project_id, project_id, limit),
+                    (query, project_id, project_id, session_id, session_id, limit),
                 ).fetchall()
         else:
             if layer:
                 rows = conn.execute(
                     """
                     SELECT id, layer, kind, summary, updated_at, body_md_path,
-                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id
+                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                           COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
+                           importance_score, confidence_score, stability_score, reuse_count, volatility_score
                     FROM memories
                     WHERE layer = ? AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                      AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
                     ORDER BY updated_at DESC
                     LIMIT ?
                     """,
-                    (layer, project_id, project_id, limit),
+                    (layer, project_id, project_id, session_id, session_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """
                     SELECT id, layer, kind, summary, updated_at, body_md_path,
-                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id
+                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                           COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
+                           importance_score, confidence_score, stability_score, reuse_count, volatility_score
                     FROM memories
                     WHERE (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                      AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
                     ORDER BY updated_at DESC
                     LIMIT ?
                     """,
-                    (project_id, project_id, limit),
+                    (project_id, project_id, session_id, session_id, limit),
                 ).fetchall()
 
-    return [dict(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["signals"] = {
+            "importance_score": float(d.pop("importance_score", 0.0) or 0.0),
+            "confidence_score": float(d.pop("confidence_score", 0.0) or 0.0),
+            "stability_score": float(d.pop("stability_score", 0.0) or 0.0),
+            "reuse_count": int(d.pop("reuse_count", 0) or 0),
+            "volatility_score": float(d.pop("volatility_score", 0.0) or 0.0),
+        }
+        out.append(d)
+    return out
 
 
 def build_brief(paths: MemoryPaths, schema_sql_path: Path, project_id: str, limit: int) -> dict[str, Any]:

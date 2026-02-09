@@ -1,6 +1,6 @@
 {
   "name": "omnimem",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": false,
   "description": "OmniMem CLI and bootstrap runner",
   "license": "MIT",
@@ -15,7 +15,8 @@
     "db",
     "spec",
     "README.md",
-    "docs/quickstart-10min.md"
+    "docs/quickstart-10min.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "prepack": "find omnimem -name '__pycache__' -type d -prune -exec rm -rf {} +",

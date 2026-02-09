@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS memories (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   layer TEXT NOT NULL CHECK (layer IN ('instant', 'short', 'long', 'archive')),
-  kind TEXT NOT NULL CHECK (kind IN ('note', 'decision', 'task', 'checkpoint', 'summary', 'evidence')),
+  kind TEXT NOT NULL CHECK (kind IN ('note', 'decision', 'task', 'checkpoint', 'summary', 'evidence', 'retrieve')),
   summary TEXT NOT NULL,
   body_md_path TEXT NOT NULL,
   body_text TEXT NOT NULL DEFAULT '',

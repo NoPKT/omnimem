@@ -14,6 +14,7 @@ from typing import Any
 
 from .core import (
     build_brief,
+    bump_reuse_counts,
     find_memories,
     load_config,
     resolve_paths,
@@ -191,6 +192,45 @@ def run_turn(
 
     brief = build_brief(paths, schema, project_id, limit=6)
     rel = find_memories(paths, schema, query=user_prompt, layer=None, limit=limit, project_id=project_id)
+    bump_reuse_counts(
+        paths=paths,
+        schema_sql_path=schema,
+        ids=[m.get("id", "") for m in rel if m.get("id")],
+        delta=1,
+        tool="omnimem-agent",
+        session_id=st.session_id,
+        project_id=project_id,
+    )
+    write_memory(
+        paths=paths,
+        schema_sql_path=schema,
+        layer="instant",
+        kind="retrieve",
+        summary=f"Retrieved {len(rel)} memories for context",
+        body=(
+            "Automatic retrieval trace created by omnimem agent.\n\n"
+            f"- project_id: {project_id}\n"
+            f"- session_id: {st.session_id}\n"
+            f"- query: {user_prompt}\n"
+            f"- retrieved_count: {len(rel)}\n"
+            + "\n".join([f"- memory_id: {m.get('id','')}" for m in rel[:20]])
+        ),
+        tags=[f"project:{project_id}", "auto:retrieve", f"tool:{tool}"],
+        refs=[],
+        cred_refs=[],
+        tool="omnimem-agent",
+        account="default",
+        device="local",
+        session_id=st.session_id,
+        project_id=project_id,
+        workspace=cwd or "",
+        importance=0.25,
+        confidence=0.9,
+        stability=0.2,
+        reuse_count=0,
+        volatility=0.8,
+        event_type="memory.retrieve",
+    )
     injected = _build_injected_prompt(project_id=project_id, user_prompt=user_prompt, brief=brief, mems=rel)
 
     cmd = _tool_command(tool, injected)

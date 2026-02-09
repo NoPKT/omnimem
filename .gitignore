@@ -13,3 +13,7 @@
 # Python cache
 __pycache__/
 *.pyc
+
+# Local omnimem home for sandbox runs
+.omnimem_local/
+.npm-cache/

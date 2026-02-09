@@ -21,6 +21,7 @@ from .adapters import (
 from .core import (
     KIND_SET,
     LAYER_SET,
+    apply_decay,
     build_brief,
     find_memories,
     load_config,
@@ -85,6 +86,15 @@ def print_json(obj: object) -> None:
 def cfg_path_arg(args: argparse.Namespace) -> Path | None:
     raw = getattr(args, "config", None) or getattr(args, "global_config", None)
     return Path(raw) if raw else None
+
+
+def cli_error_hint(msg: str) -> str:
+    m = (msg or "").lower()
+    if "readonly database" in m or "attempt to write a readonly database" in m or "unable to open database file" in m:
+        return "Set OMNIMEM_HOME to a writable directory, e.g. `OMNIMEM_HOME=$PWD/.omnimem_local`."
+    if "permission denied" in m and ".npm" in m:
+        return "Set npm cache to a writable dir, e.g. `NPM_CONFIG_CACHE=$PWD/.npm-cache`."
+    return ""
 
 
 def cmd_write(args: argparse.Namespace) -> int:
@@ -205,6 +215,27 @@ def cmd_sync(args: argparse.Namespace) -> int:
         branch=branch,
         remote_url=remote_url,
         commit_message=args.commit_message,
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_decay(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    layers = None
+    if args.layers:
+        layers = [x.strip() for x in str(args.layers).split(",") if x.strip()]
+    out = apply_decay(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        days=args.days,
+        limit=args.limit,
+        project_id=str(args.project_id or "").strip(),
+        layers=layers,
+        dry_run=not bool(args.apply),
+        tool="cli",
+        session_id=str(args.session_id or "system"),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -463,6 +494,35 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
     cwd = args.cwd
     project_id = infer_project_id(cwd, args.project_id)
 
+    run_cwd_path = Path(cwd).expanduser().resolve() if cwd else Path.cwd().resolve()
+
+    def _can_write_dir(p: Path) -> bool:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".omnimem-probe.tmp"
+            probe.write_text("ok\n", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
+    chosen_home: str | None = None
+    if getattr(args, "home", None):
+        chosen_home = str(Path(args.home).expanduser().resolve())
+    else:
+        mode = getattr(args, "home_mode", "auto")
+        global_home = Path.home().expanduser().resolve() / ".omnimem"
+        workspace_home = run_cwd_path / ".omnimem-home"
+        if mode == "global":
+            chosen_home = str(global_home)
+        elif mode == "workspace":
+            chosen_home = str(workspace_home)
+        else:
+            # auto: prefer global if writable, else fall back to workspace-local.
+            chosen_home = str(global_home if _can_write_dir(global_home) else workspace_home)
+    if chosen_home:
+        os.environ["OMNIMEM_HOME"] = chosen_home
+
     # Optional one-shot path kept for automation scripts.
     if args.oneshot:
         prompt = " ".join(args.prompt).strip()
@@ -510,6 +570,27 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         print(f"[omnimem] WebUI: http://{args.webui_host}:{args.webui_port}")
 
     prompt = " ".join(args.prompt).strip()
+    if not getattr(args, "native", False):
+        # Default: agent orchestrator for automatic memory read/write + drift checkpoints.
+        if prompt:
+            out = run_turn(
+                tool=tool,
+                project_id=project_id,
+                user_prompt=prompt,
+                drift_threshold=args.drift_threshold,
+                cwd=cwd,
+                limit=args.retrieve_limit,
+            )
+            print(out["answer"])
+            return 0
+        return interactive_chat(
+            tool=tool,
+            project_id=project_id,
+            drift_threshold=args.drift_threshold,
+            cwd=cwd,
+        )
+
+    # Legacy/native mode: launch tool once with injected system prompt only.
     if tool == "codex":
         native_cmd = ["codex", f"{memory_context}\n\nUser request: {prompt}" if prompt else memory_context]
     else:
@@ -518,12 +599,14 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
             native_cmd.append(prompt)
 
     run_env = dict(os.environ)
+    if chosen_home:
+        run_env["OMNIMEM_HOME"] = chosen_home
     if cfg_path_arg(args):
         run_env["OMNIMEM_CONFIG"] = str(cfg_path_arg(args))
     if cwd:
-        run_cwd = str(Path(cwd).expanduser().resolve())
+        run_cwd = str(run_cwd_path)
     else:
-        run_cwd = str(Path.cwd())
+        run_cwd = str(run_cwd_path)
     print(f"[omnimem] launching native {tool} in {run_cwd} (project_id={project_id})")
     return subprocess.call(native_cmd, cwd=run_cwd, env=run_env)
 
@@ -624,6 +707,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--branch", help="target branch, default main")
     p_sync.add_argument("--commit-message", default="chore(memory): sync snapshot")
     p_sync.set_defaults(func=cmd_sync)
+
+    p_decay = sub.add_parser("decay", help="apply or preview time-based signal decay")
+    p_decay.add_argument("--config", help="path to omnimem config json")
+    p_decay.add_argument("--project-id", default="")
+    p_decay.add_argument("--session-id", default="system")
+    p_decay.add_argument("--days", type=int, default=14)
+    p_decay.add_argument("--layers", default="instant,short,long", help="comma-separated layers, default instant,short,long")
+    p_decay.add_argument("--limit", type=int, default=200)
+    p_decay.add_argument("--apply", action="store_true", help="apply decay (default is preview/dry-run)")
+    p_decay.set_defaults(func=cmd_decay)
 
     p_webui = sub.add_parser("webui", help="start local web ui")
     p_webui.add_argument("--config", help="path to omnimem config json")
@@ -752,6 +845,14 @@ def build_parser() -> argparse.ArgumentParser:
         p_short.add_argument("--cwd", help="optional working directory for underlying tool")
         p_short.add_argument("--retrieve-limit", type=int, default=8)
         p_short.add_argument("--oneshot", action="store_true", help="use internal one-shot orchestrator path")
+        p_short.add_argument("--native", action="store_true", help="launch native tool directly (no per-turn memory orchestration)")
+        p_short.add_argument(
+            "--home-mode",
+            choices=["auto", "global", "workspace"],
+            default="auto",
+            help="where to store OMNIMEM_HOME: auto picks global if writable else workspace-local",
+        )
+        p_short.add_argument("--home", help="explicit OMNIMEM_HOME override (wins over --home-mode)")
         p_short.add_argument("--no-webui", action="store_true", help="do not auto-start webui sidecar")
         p_short.add_argument("--webui-host", default="127.0.0.1")
         p_short.add_argument("--webui-port", type=int, default=8765)
@@ -774,7 +875,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except Exception as exc:
-        print_json({"ok": False, "error": str(exc)})
+        hint = cli_error_hint(str(exc))
+        out: dict[str, object] = {"ok": False, "error": str(exc)}
+        if hint:
+            out["hint"] = hint
+        print_json(out)
         return 1
 
 
