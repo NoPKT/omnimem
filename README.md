@@ -69,7 +69,37 @@ bash scripts/detach_project.sh /path/to/project
 After publishing to npm, end users can run:
 
 ```bash
-npx -y omnimem
+npm exec -y --package=omnimem --call "omnimem start"
+```
+
+Or install globally once:
+
+```bash
+npm i -g omnimem
+omnimem start
+```
+
+## Auto Agent Mode (Codex / Claude)
+
+Interactive mode (automatic retrieve + write + drift check):
+
+```bash
+omnimem codex
+omnimem claude
+```
+
+Single turn:
+
+```bash
+omnimem codex "your request"
+omnimem claude "your request"
+```
+
+Advanced controls (optional):
+
+```bash
+omnimem codex --project-id <project_id> --drift-threshold 0.62 --cwd /path/to/project
+omnimem claude --project-id <project_id> --drift-threshold 0.62 --cwd /path/to/project
 ```
 
 ## Verification

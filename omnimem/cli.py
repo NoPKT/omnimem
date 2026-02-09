@@ -8,6 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from .agent import interactive_chat, run_turn
 from .adapters import (
     notion_query_database,
     notion_write_page,
@@ -412,6 +413,68 @@ def cmd_adapter_r2_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_agent_run(args: argparse.Namespace) -> int:
+    out = run_turn(
+        tool=args.tool,
+        project_id=args.project_id,
+        user_prompt=args.prompt,
+        drift_threshold=args.drift_threshold,
+        cwd=args.cwd,
+        limit=args.retrieve_limit,
+    )
+    print_json(out)
+    return 0
+
+
+def cmd_agent_chat(args: argparse.Namespace) -> int:
+    return interactive_chat(
+        tool=args.tool,
+        project_id=args.project_id,
+        drift_threshold=args.drift_threshold,
+        cwd=args.cwd,
+    )
+
+
+def infer_project_id(cwd: str | None, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    base = Path(cwd or Path.cwd()).resolve()
+    cfg = base / ".omnimem.json"
+    if cfg.exists():
+        try:
+            obj = json.loads(cfg.read_text(encoding="utf-8"))
+            pid = str(obj.get("project_id", "")).strip()
+            if pid:
+                return pid
+        except Exception:
+            pass
+    return base.name or "global"
+
+
+def cmd_tool_shortcut(args: argparse.Namespace) -> int:
+    tool = args.cmd
+    cwd = args.cwd
+    project_id = infer_project_id(cwd, args.project_id)
+    prompt = " ".join(args.prompt).strip() if args.prompt else ""
+    if prompt:
+        out = run_turn(
+            tool=tool,
+            project_id=project_id,
+            user_prompt=prompt,
+            drift_threshold=args.drift_threshold,
+            cwd=cwd,
+            limit=args.retrieve_limit,
+        )
+        print_json(out)
+        return 0
+    return interactive_chat(
+        tool=tool,
+        project_id=project_id,
+        drift_threshold=args.drift_threshold,
+        cwd=cwd,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omnimem")
     p.add_argument("--config", dest="global_config", help="path to omnimem config json")
@@ -555,6 +618,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_r2_get.add_argument("--url-ref")
     p_r2_get.add_argument("--dry-run", action="store_true")
     p_r2_get.set_defaults(func=cmd_adapter_r2_get)
+
+    p_agent = sub.add_parser("agent", help="automatic memory orchestration wrappers")
+    p_agent.add_argument("--config", help="path to omnimem config json")
+    agent_sub = p_agent.add_subparsers(dest="agent_cmd", required=True)
+
+    p_agent_run = agent_sub.add_parser("run", help="single-turn auto-memory call")
+    p_agent_run.add_argument("--tool", choices=["codex", "claude"], required=True)
+    p_agent_run.add_argument("--project-id", required=True)
+    p_agent_run.add_argument("--prompt", required=True)
+    p_agent_run.add_argument("--drift-threshold", type=float, default=0.62)
+    p_agent_run.add_argument("--cwd", help="optional working directory for underlying tool")
+    p_agent_run.add_argument("--retrieve-limit", type=int, default=8)
+    p_agent_run.set_defaults(func=cmd_agent_run)
+
+    p_agent_chat = agent_sub.add_parser("chat", help="interactive auto-memory chat loop")
+    p_agent_chat.add_argument("--tool", choices=["codex", "claude"], required=True)
+    p_agent_chat.add_argument("--project-id", required=True)
+    p_agent_chat.add_argument("--drift-threshold", type=float, default=0.62)
+    p_agent_chat.add_argument("--cwd", help="optional working directory for underlying tool")
+    p_agent_chat.set_defaults(func=cmd_agent_chat)
+
+    for tool_name in ["codex", "claude"]:
+        p_short = sub.add_parser(tool_name, help=f"shortcut: auto-memory wrapper for {tool_name}")
+        p_short.add_argument("prompt", nargs="*", help="optional single-turn prompt; empty starts interactive mode")
+        p_short.add_argument("--project-id", help="defaults to .omnimem.json project_id or cwd basename")
+        p_short.add_argument("--drift-threshold", type=float, default=0.62)
+        p_short.add_argument("--cwd", help="optional working directory for underlying tool")
+        p_short.add_argument("--retrieve-limit", type=int, default=8)
+        p_short.set_defaults(func=cmd_tool_shortcut)
 
     return p
 

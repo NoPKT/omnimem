@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .core import ensure_storage, find_memories, resolve_paths, save_config, write_memory
+from .core import ensure_storage, find_memories, resolve_paths, save_config, utc_now, write_memory
 
 
 HTML_PAGE = """<!doctype html>
@@ -150,6 +150,23 @@ HTML_PAGE = """<!doctype html>
           <div class=\"small\" data-i18n=\"project_hint\">Attach will create .omnimem files and inject managed memory protocol blocks into AGENTS.md / CLAUDE.md / .cursorrules.</div>
           <pre id=\"projectOut\" class=\"small\"></pre>
         </div>
+        <div class=\"card wide\">
+          <h3 data-i18n=\"project_list_title\">Attached Projects (Local)</h3>
+          <div class=\"row-btn\">
+            <button id=\"btnProjectsReload\" data-i18n=\"btn_projects_reload\">Reload Projects</button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n=\"th_project\">Project</th>
+                <th data-i18n=\"project_path\">Project Path</th>
+                <th data-i18n=\"th_updated\">Updated At</th>
+                <th data-i18n=\"th_actions\">Actions</th>
+              </tr>
+            </thead>
+            <tbody id=\"projectsBody\"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -200,9 +217,11 @@ HTML_PAGE = """<!doctype html>
         btn_browse_project: 'Browse Directory', btn_use_cwd: 'Use Server CWD',
         browser_title: 'Directory Browser', btn_browser_up: 'Up', btn_browser_select: 'Select This Directory', btn_browser_close: 'Close',
         btn_project_attach: 'Attach Project + Install Agent Rules', btn_project_detach: 'Detach Project',
+        project_list_title: 'Attached Projects (Local)', btn_projects_reload: 'Reload Projects',
         project_hint: 'Attach will create .omnimem files and inject managed memory protocol blocks into AGENTS.md / CLAUDE.md / .cursorrules.',
         cfg_saved: 'Configuration saved', cfg_failed: 'Save failed',
         project_attach_ok: 'Project attached', project_detach_ok: 'Project detached', project_failed: 'Project action failed',
+        th_actions: 'Actions', btn_use: 'Use', btn_detach: 'Detach',
         init_ok: 'Config state: initialized', init_hint_ok: 'Daemon runs quasi-realtime sync in background (can be disabled).',
         init_missing: 'Config state: not initialized (save configuration first)', init_hint_missing: 'Daemon is disabled until configuration is initialized.',
         daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
@@ -416,6 +435,11 @@ HTML_PAGE = """<!doctype html>
       const d = await jpost('/api/project/attach', {project_path, project_id});
       out.textContent = JSON.stringify(d, null, 2);
       document.getElementById('status').innerHTML = d.ok ? `<span class=\"ok\">${t('project_attach_ok')}</span>` : `<span class=\"err\">${t('project_failed')}</span>`;
+      if (d.ok) {
+        document.getElementById('memProjectId').value = d.project_id || project_id || '';
+      }
+      await loadMem();
+      await loadProjects();
     }
 
     async function detachProject() {
@@ -424,6 +448,7 @@ HTML_PAGE = """<!doctype html>
       const d = await jpost('/api/project/detach', {project_path});
       out.textContent = JSON.stringify(d, null, 2);
       document.getElementById('status').innerHTML = d.ok ? `<span class=\"ok\">${t('project_detach_ok')}</span>` : `<span class=\"err\">${t('project_failed')}</span>`;
+      await loadProjects();
     }
 
     function escHtml(v) {
@@ -446,6 +471,34 @@ HTML_PAGE = """<!doctype html>
         a.onclick = (e) => {
           e.preventDefault();
           listDirs(a.dataset.path || '');
+        };
+      });
+    }
+
+    async function loadProjects() {
+      const d = await jget('/api/projects');
+      const b = document.getElementById('projectsBody');
+      b.innerHTML = '';
+      (d.items || []).forEach(x => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escHtml(x.project_id || '')}</td><td>${escHtml(x.project_path || '')}</td><td>${escHtml(x.updated_at || '')}</td><td><button data-action=\"use\" data-path=\"${escHtml(x.project_path || '')}\" data-id=\"${escHtml(x.project_id || '')}\">${t('btn_use')}</button> <button data-action=\"detach\" data-path=\"${escHtml(x.project_path || '')}\">${t('btn_detach')}</button></td>`;
+        b.appendChild(tr);
+      });
+      document.querySelectorAll('#projectsBody button').forEach(btn => {
+        btn.onclick = async () => {
+          const action = btn.dataset.action || '';
+          const path = btn.dataset.path || '';
+          if (action === 'use') {
+            document.getElementById('projectPath').value = path;
+            document.getElementById('projectId').value = btn.dataset.id || '';
+            document.getElementById('memProjectId').value = btn.dataset.id || '';
+            await loadMem();
+            return;
+          }
+          if (action === 'detach') {
+            document.getElementById('projectPath').value = path;
+            await detachProject();
+          }
         };
       });
     }
@@ -479,6 +532,7 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnProjectAttach').onclick = () => attachProject();
       document.getElementById('btnProjectDetach').onclick = () => detachProject();
       document.getElementById('btnMemReload').onclick = () => loadMem();
+      document.getElementById('btnProjectsReload').onclick = () => loadProjects();
       document.getElementById('btnBrowseProject').onclick = async () => {
         document.getElementById('browserPanel').style.display = 'block';
         await listDirs(document.getElementById('projectPath').value.trim() || '');
@@ -525,6 +579,7 @@ HTML_PAGE = """<!doctype html>
     loadCfg();
     loadMem();
     loadDaemon();
+    loadProjects();
   </script>
 </body>
 </html>
@@ -546,6 +601,58 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "remote_url": gh.get("remote_url", ""),
         "branch": gh.get("branch", "main"),
     }
+
+
+def _projects_registry_path(home: str) -> Path:
+    base = Path(home).expanduser().resolve() if home else (Path.home() / ".omnimem")
+    return base / "projects.local.json"
+
+
+def _load_projects_registry(home: str) -> list[dict[str, Any]]:
+    fp = _projects_registry_path(home)
+    if not fp.exists():
+        return []
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+    except Exception:
+        return []
+    return []
+
+
+def _save_projects_registry(home: str, items: list[dict[str, Any]]) -> None:
+    fp = _projects_registry_path(home)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _register_project(home: str, project_id: str, project_path: str) -> None:
+    now = utc_now()
+    target = str(Path(project_path).expanduser().resolve())
+    items = _load_projects_registry(home)
+    for it in items:
+        if str(it.get("project_path", "")) == target:
+            it["project_id"] = project_id
+            it["updated_at"] = now
+            _save_projects_registry(home, items)
+            return
+    items.append(
+        {
+            "project_id": project_id,
+            "project_path": target,
+            "attached_at": now,
+            "updated_at": now,
+        }
+    )
+    _save_projects_registry(home, items)
+
+
+def _unregister_project(home: str, project_path: str) -> None:
+    target = str(Path(project_path).expanduser().resolve())
+    items = _load_projects_registry(home)
+    kept = [x for x in items if str(x.get("project_path", "")) != target]
+    _save_projects_registry(home, kept)
 
 
 def _upsert_managed_block(path: Path, block: str) -> None:
@@ -804,6 +911,15 @@ def run_webui(
                 )
                 return
 
+            if parsed.path == "/api/projects":
+                items = _load_projects_registry(str(cfg.get("home", "")))
+                for it in items:
+                    p = Path(str(it.get("project_path", ""))).expanduser()
+                    it["exists"] = p.exists() and p.is_dir()
+                items.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
+                self._send_json({"ok": True, "items": items})
+                return
+
             if parsed.path == "/api/memories":
                 q = parse_qs(parsed.query)
                 limit = int(q.get("limit", ["20"])[0])
@@ -912,6 +1028,7 @@ def run_webui(
                     )
                     if out.get("ok"):
                         pid = str(out.get("project_id", "")).strip() or "global"
+                        _register_project(str(cfg.get("home", "")), pid, str(out.get("project_path", project_path)))
                         write_memory(
                             paths=paths,
                             schema_sql_path=schema_sql_path,
@@ -946,7 +1063,10 @@ def run_webui(
 
             if parsed.path == "/api/project/detach":
                 try:
-                    out = _detach_project_in_webui(str(data.get("project_path", "")).strip())
+                    proj_path = str(data.get("project_path", "")).strip()
+                    out = _detach_project_in_webui(proj_path)
+                    if out.get("ok"):
+                        _unregister_project(str(cfg.get("home", "")), proj_path)
                     self._send_json(out, 200 if out.get("ok") else 400)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
