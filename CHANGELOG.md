@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7
+
+- WebUI: fix a JS syntax error in the in-place editor (`stripMdTitle`) that could break all UI actions and i18n.
+
 ## 0.2.6
 
 - Sync: `github-pull` now uses `git pull --rebase --autostash` to avoid failures when the memory repo has local modifications.

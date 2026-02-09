@@ -1183,12 +1183,12 @@ HTML_PAGE = """<!doctype html>
 	    let drawerMem = null;
 	    let drawerEditMode = false;
 
-	    function stripMdTitle(body) {
-	      const s = String(body || '');
-	      // Canonical bodies are stored as "# {summary}\n\n{content}\n".
-	      const m = s.match(/^# .*\n\n([\s\S]*)$/);
-	      return m ? m[1] : s;
-	    }
+		    function stripMdTitle(body) {
+		      const s = String(body || '');
+		      // Canonical bodies are stored as: "# {summary}" + blank line + content.
+		      const m = s.match(/^# .*\\n\\n([\\s\\S]*)$/);
+		      return m ? m[1] : s;
+		    }
 
 	    function setDrawerEditMode(on) {
 	      drawerEditMode = !!on;
