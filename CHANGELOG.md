@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.6
+
+- Sync: `github-pull` now uses `git pull --rebase --autostash` to avoid failures when the memory repo has local modifications.
+- WebUI: add in-place editing for memory `summary/tags/body` with a new `POST /api/memory/update`.
+- WebUI: improve layer visibility with clickable layer stats pills and a shortcut to the Insights Layer Board.
+
 ## 0.2.5
 
 - Codex UX: `omnimem codex` now defaults to a smart start mode that keeps native interaction while enabling OmniMem guidance and context.
