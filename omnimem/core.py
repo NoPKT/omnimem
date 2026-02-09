@@ -1346,7 +1346,10 @@ def sync_git(
             _ensure_git_repo(paths)
             _ensure_remote(paths, remote_name, remote_url)
             _run_git(paths, ["fetch", remote_name, branch])
-            _run_git(paths, ["pull", "--rebase", remote_name, branch])
+            # Memory home can be "dirty" (e.g., sqlite/jsonl updated) even when the user
+            # is only trying to pull. Use autostash so pull works without requiring a
+            # manual commit/stash, and to keep bootstrap (pull -> reindex -> push) robust.
+            _run_git(paths, ["pull", "--rebase", "--autostash", remote_name, branch])
             message = "github pull ok"
             ok = True
             detail = _run_git(paths, ["status", "--short"]).stdout.strip()
