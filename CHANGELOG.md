@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.8
+
+- WebUI: fix another JS syntax error (`lines.join('\n')` in Python triple-quoted HTML emitted a literal newline in a JS string).
+
 ## 0.2.7
 
 - WebUI: fix a JS syntax error in the in-place editor (`stripMdTitle`) that could break all UI actions and i18n.

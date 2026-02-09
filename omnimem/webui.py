@@ -2421,7 +2421,7 @@ HTML_PAGE = """<!doctype html>
 	      if (String(p.evt_sort || '').trim() !== String(cur.prefs.evt_sort || '').trim()) lines.push(`evtSort: ${cur.prefs.evt_sort} -> ${p.evt_sort || cur.prefs.evt_sort}`);
 	      if (typeof p.live_on === 'boolean' && p.live_on !== cur.prefs.live_on) lines.push(`live: ${cur.prefs.live_on ? 'on' : 'off'} -> ${p.live_on ? 'on' : 'off'}`);
 	      if (Number(p.live_ms || 0) && Number(p.live_ms) !== Number(cur.prefs.live_ms)) lines.push(`liveInterval: ${Math.round(cur.prefs.live_ms/1000)}s -> ${Math.round(Number(p.live_ms)/1000)}s`);
-	      return lines.length ? lines.join('\n') : '(no changes)';
+	      return lines.length ? lines.join('\\n') : '(no changes)';
 	    }
 
 	    function applyInitialScope() {
