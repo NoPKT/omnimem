@@ -17,3 +17,10 @@ __pycache__/
 # Local omnimem home for sandbox runs
 .omnimem_local/
 .npm-cache/
+
+# Project attach artifacts (repo-root only; don't ignore templates/)
+/.omnimem-home/
+/.omnimem.json
+/.omnimem-session.md
+/.omnimem-ignore
+/AGENTS.md

@@ -18,6 +18,7 @@ fi
 cp -f "$ROOT_DIR/templates/project-minimal/.omnimem.json" "$PROJECT_PATH/.omnimem.json"
 cp -f "$ROOT_DIR/templates/project-minimal/.omnimem-session.md" "$PROJECT_PATH/.omnimem-session.md"
 cp -f "$ROOT_DIR/templates/project-minimal/.omnimem-ignore" "$PROJECT_PATH/.omnimem-ignore"
+cp -f "$ROOT_DIR/templates/project-minimal/AGENTS.md" "$PROJECT_PATH/AGENTS.md"
 
 sed -i.bak "s/replace-with-project-id/$PROJECT_ID/g" "$PROJECT_PATH/.omnimem.json"
 rm -f "$PROJECT_PATH/.omnimem.json.bak"

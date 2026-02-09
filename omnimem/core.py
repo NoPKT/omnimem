@@ -166,6 +166,14 @@ def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
                 time.sleep(0.2)
                 continue
             raise
+
+    with sqlite3.connect(paths.sqlite_path, timeout=2.0) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 1500")
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.OperationalError:
+            pass
         _maybe_migrate_memories_table(conn)
         _maybe_repair_fk_targets(conn)
 
@@ -209,8 +217,10 @@ def _maybe_repair_fk_targets(conn: sqlite3.Connection) -> None:
 
 def _rebuild_child_tables(conn: sqlite3.Connection) -> None:
     """Recreate child tables so their foreign keys reference the current `memories` table."""
+    needs_txn = not conn.in_transaction
     conn.execute("PRAGMA foreign_keys = OFF")
-    conn.execute("BEGIN")
+    if needs_txn:
+        conn.execute("BEGIN")
     try:
         conn.execute("DROP INDEX IF EXISTS idx_memory_refs_memory_id")
         conn.execute("DROP INDEX IF EXISTS idx_memory_refs_target")
@@ -264,9 +274,11 @@ def _rebuild_child_tables(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_refs_memory_id ON memory_refs(memory_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_refs_target ON memory_refs(target)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_events_type_time ON memory_events(event_type, event_time)")
-        conn.execute("COMMIT")
+        if needs_txn:
+            conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        if needs_txn:
+            conn.execute("ROLLBACK")
         raise
     finally:
         conn.execute("PRAGMA foreign_keys = ON")

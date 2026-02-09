@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
+from datetime import datetime, timezone
 import subprocess
 import shutil
 import sys
@@ -11,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 from .agent import interactive_chat, run_turn
+from .codex_watch import WatchOptions
 from .adapters import (
     notion_query_database,
     notion_write_page,
@@ -489,10 +492,42 @@ def infer_project_id(cwd: str | None, explicit: str | None) -> str:
     return base.name or "global"
 
 
+def _ensure_project_files(project_dir: Path, project_id: str) -> None:
+    """Create minimal integration files if missing (never overwrites)."""
+    root = Path(__file__).resolve().parent.parent
+    # Avoid polluting the OmniMem source repo when running from this checkout.
+    if project_dir.resolve() == root.resolve():
+        return
+    tmpl = root / "templates" / "project-minimal"
+    if not tmpl.exists():
+        return
+
+    def _copy_if_missing(name: str, dest_name: str | None = None) -> None:
+        src = tmpl / name
+        if not src.exists():
+            return
+        dst = project_dir / (dest_name or name)
+        if dst.exists():
+            return
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    _copy_if_missing(".omnimem-session.md")
+    _copy_if_missing(".omnimem-ignore")
+    _copy_if_missing("AGENTS.md")
+
+    cfg_dst = project_dir / ".omnimem.json"
+    if not cfg_dst.exists():
+        src = tmpl / ".omnimem.json"
+        if src.exists():
+            txt = src.read_text(encoding="utf-8").replace("replace-with-project-id", project_id)
+            cfg_dst.write_text(txt, encoding="utf-8")
+
+
 def cmd_tool_shortcut(args: argparse.Namespace) -> int:
     tool = args.cmd
     cwd = args.cwd
     project_id = infer_project_id(cwd, args.project_id)
+    tool_args = list(getattr(args, "tool_args", []) or [])
 
     run_cwd_path = Path(cwd).expanduser().resolve() if cwd else Path.cwd().resolve()
 
@@ -523,6 +558,22 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
     if chosen_home:
         os.environ["OMNIMEM_HOME"] = chosen_home
 
+    # Make the "smart + auto-write" path the default for codex interactive use, so users can
+    # just run `omnimem codex` and get stronger memory without extra steps.
+    if tool == "codex":
+        if not getattr(args, "smart", False) and not getattr(args, "inject", False) and not getattr(args, "agent", False):
+            if not getattr(args, "native", False) and not getattr(args, "oneshot", False):
+                args.smart = True
+        if not getattr(args, "auto_write", False) and not getattr(args, "agent", False):
+            if not getattr(args, "native", False) and not getattr(args, "oneshot", False):
+                args.auto_write = True
+
+    # Auto-create project integration files if missing (no overwrites).
+    try:
+        _ensure_project_files(run_cwd_path, project_id)
+    except Exception:
+        pass
+
     # Optional one-shot path kept for automation scripts.
     if args.oneshot:
         prompt = " ".join(args.prompt).strip()
@@ -540,38 +591,15 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         print_json(out)
         return 0
 
-    cfg = load_config(cfg_path_arg(args))
-    paths = resolve_paths(cfg)
-    schema = schema_sql_path()
-    brief = build_brief(paths, schema, project_id, limit=6)
-    mems = find_memories(paths, schema, query="", layer=None, limit=args.retrieve_limit, project_id=project_id)
-
-    lines = [
-        "OmniMem sidecar is enabled for this session.",
-        f"Project ID: {project_id}",
-        "Use memory protocol automatically:",
-        "- On stable decisions/facts, call `omnimem write`.",
-        "- On topic drift or phase switch, call `omnimem checkpoint` and start a new thread.",
-        "- Prefer short-term first; promote to long-term only when repeated and stable.",
-        "- Never store raw secrets; only credential refs.",
-    ]
-    if brief.get("checkpoints"):
-        lines.append("Recent checkpoints:")
-        for x in brief["checkpoints"][:3]:
-            lines.append(f"- {x.get('updated_at','')}: {x.get('summary','')}")
-    if mems:
-        lines.append("Recent memories:")
-        for x in mems[:6]:
-            lines.append(f"- [{x.get('project_id','')}/{x.get('layer','')}/{x.get('kind','')}] {x.get('summary','')}")
-    memory_context = "\n".join(lines)
-
     if not args.no_webui:
         ensure_webui_running(cfg_path_arg(args), args.webui_host, args.webui_port, args.no_daemon)
-        print(f"[omnimem] WebUI: http://{args.webui_host}:{args.webui_port}")
 
     prompt = " ".join(args.prompt).strip()
-    if not getattr(args, "native", False):
-        # Default: agent orchestrator for automatic memory read/write + drift checkpoints.
+    use_agent = bool(getattr(args, "agent", False))
+    if getattr(args, "native", False):
+        use_agent = False
+    if use_agent:
+        # OmniMem agent orchestrator for automatic memory read/write + drift checkpoints.
         if prompt:
             out = run_turn(
                 tool=tool,
@@ -590,24 +618,99 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
             cwd=cwd,
         )
 
-    # Legacy/native mode: launch tool once with injected system prompt only.
+    smart = bool(getattr(args, "smart", False))
+    inject = bool(getattr(args, "inject", False) or smart)
+    if getattr(args, "native", False):
+        inject = False
+
+    memory_context = ""
+    if inject:
+        cfg = load_config(cfg_path_arg(args))
+        paths = resolve_paths(cfg)
+        schema = schema_sql_path()
+        brief = build_brief(paths, schema, project_id, limit=6)
+        mems = find_memories(paths, schema, query="", layer=None, limit=args.retrieve_limit, project_id=project_id)
+
+        lines = [
+            "OmniMem sidecar is enabled for this session.",
+            f"Project ID: {project_id}",
+            "Use memory protocol automatically:",
+            "- On stable decisions/facts, call `omnimem write`.",
+            "- On topic drift or phase switch, call `omnimem checkpoint` and start a new thread.",
+            "- Prefer short-term first; promote to long-term only when repeated and stable.",
+            "- Never store raw secrets; only credential refs.",
+        ]
+        if brief.get("checkpoints"):
+            lines.append("Recent checkpoints:")
+            for x in brief["checkpoints"][:3]:
+                lines.append(f"- {x.get('updated_at','')}: {x.get('summary','')}")
+        if mems:
+            lines.append("Recent memories:")
+            for x in mems[:6]:
+                lines.append(f"- [{x.get('project_id','')}/{x.get('layer','')}/{x.get('kind','')}] {x.get('summary','')}")
+        memory_context = "\n".join(lines)
+
+    # Native mode: launch the underlying tool with as little interference as possible.
     if tool == "codex":
-        native_cmd = ["codex", f"{memory_context}\n\nUser request: {prompt}" if prompt else memory_context]
+        if inject:
+            if not prompt:
+                # Start an interactive session with an initial prompt (Codex CLI supports `codex [OPTIONS] [PROMPT]`).
+                native_cmd = ["codex", *tool_args, memory_context]
+            else:
+                native_cmd = ["codex", "exec", *tool_args, f"{memory_context}\n\nUser request: {prompt}"]
+        else:
+            native_cmd = ["codex", *tool_args] if not prompt else ["codex", "exec", *tool_args, prompt]
     else:
-        native_cmd = ["claude", "--append-system-prompt", memory_context]
-        if prompt:
-            native_cmd.append(prompt)
+        # claude: best-effort parity with agent.py defaults.
+        if inject and memory_context:
+            native_cmd = ["claude", *tool_args, "--append-system-prompt", memory_context]
+            if prompt:
+                native_cmd.extend(["-p", prompt])
+        else:
+            native_cmd = ["claude", *tool_args] if not prompt else ["claude", *tool_args, "-p", prompt]
 
     run_env = dict(os.environ)
     if chosen_home:
         run_env["OMNIMEM_HOME"] = chosen_home
     if cfg_path_arg(args):
         run_env["OMNIMEM_CONFIG"] = str(cfg_path_arg(args))
-    if cwd:
-        run_cwd = str(run_cwd_path)
-    else:
-        run_cwd = str(run_cwd_path)
-    print(f"[omnimem] launching native {tool} in {run_cwd} (project_id={project_id})")
+    run_cwd = str(run_cwd_path)
+
+    # Optional background capture: write assistant turns into OmniMem without requiring the model
+    # to explicitly call omnimem CLI. This keeps the native Codex UI unchanged.
+    auto_write = bool(getattr(args, "auto_write", False)) and tool == "codex"
+    inject_or_prompt = bool(prompt or inject)
+    if auto_write and not inject_or_prompt:
+        # Spawn watcher as a separate process, then exec codex to preserve native UX.
+        started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        watch_cmd = [
+            sys.executable,
+            "-m",
+            "omnimem.codex_watch",
+            "--project-id",
+            project_id,
+            "--workspace",
+            run_cwd,
+            "--parent-pid",
+            str(os.getpid()),
+            "--started-at",
+            started_at,
+        ]
+        if cfg_path_arg(args):
+            watch_cmd.extend(["--config", str(cfg_path_arg(args))])
+        # Run watcher in background, discard output.
+        subprocess.Popen(
+            watch_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            env=run_env,
+        )
+        os.chdir(run_cwd)
+        os.execvpe(native_cmd[0], native_cmd, run_env)
+        raise RuntimeError("unreachable")  # pragma: no cover
+
     return subprocess.call(native_cmd, cwd=run_cwd, env=run_env)
 
 
@@ -846,6 +949,17 @@ def build_parser() -> argparse.ArgumentParser:
         p_short.add_argument("--retrieve-limit", type=int, default=8)
         p_short.add_argument("--oneshot", action="store_true", help="use internal one-shot orchestrator path")
         p_short.add_argument("--native", action="store_true", help="launch native tool directly (no per-turn memory orchestration)")
+        p_short.add_argument("--agent", action="store_true", help="run the OmniMem agent for auto memory context and checkpoints")
+        p_short.add_argument(
+            "--inject",
+            action="store_true",
+            help="inject OmniMem context into the first call (changes native UX)",
+        )
+        p_short.add_argument(
+            "--smart",
+            action="store_true",
+            help="start native tool with OmniMem protocol + recent memory context (more automatic; changes session by adding an initial prompt)",
+        )
         p_short.add_argument(
             "--home-mode",
             choices=["auto", "global", "workspace"],
@@ -857,6 +971,11 @@ def build_parser() -> argparse.ArgumentParser:
         p_short.add_argument("--webui-host", default="127.0.0.1")
         p_short.add_argument("--webui-port", type=int, default=8765)
         p_short.add_argument("--no-daemon", action="store_true", help="when auto-starting webui, disable sync daemon")
+        p_short.add_argument(
+            "--auto-write",
+            action="store_true",
+            help="auto-capture Codex assistant turns from ~/.codex/sessions into OmniMem (skips obvious secrets; still use with care)",
+        )
         p_short.add_argument("--config", help="path to omnimem config json")
         p_short.set_defaults(func=cmd_tool_shortcut)
 
@@ -871,7 +990,14 @@ def main(argv: list[str] | None = None) -> int:
         raw_argv = ["start", *raw_argv]
 
     parser = build_parser()
+    tool_args: list[str] = []
+    if raw_argv and raw_argv[0] in {"codex", "claude"} and "--" in raw_argv:
+        i = raw_argv.index("--")
+        tool_args = raw_argv[i + 1 :]
+        raw_argv = raw_argv[:i]
     args = parser.parse_args(raw_argv)
+    if getattr(args, "cmd", "") in {"codex", "claude"}:
+        setattr(args, "tool_args", tool_args)
     try:
         return args.func(args)
     except Exception as exc:

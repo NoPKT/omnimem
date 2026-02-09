@@ -3710,13 +3710,17 @@ def run_webui(
                             """,
                             (mem_id,),
                         ).fetchone()
+                        refs = (
+                            conn.execute(
+                                "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ?",
+                                (mem_id,),
+                            ).fetchall()
+                            if row
+                            else []
+                        )
                     if not row:
                         self._send_json({"ok": False, "error": "not found"}, 404)
                         return
-                    refs = conn.execute(
-                        "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ?",
-                        (mem_id,),
-                    ).fetchall()
 
                     md_path = paths.markdown_root / row["body_md_path"]
                     body = md_path.read_text(encoding="utf-8")
