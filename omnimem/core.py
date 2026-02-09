@@ -132,8 +132,40 @@ def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
     paths.jsonl_root.mkdir(parents=True, exist_ok=True)
     paths.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
-        conn.executescript(schema_sql_path.read_text(encoding="utf-8"))
+    def has_schema(conn: sqlite3.Connection) -> bool:
+        rows = conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type IN ('table','view','trigger')
+              AND name IN ('memories','memory_refs','memory_events','memories_fts','memories_ai','memories_ad','memories_au')
+            """
+        ).fetchall()
+        names = {r[0] for r in rows}
+        required = {"memories", "memory_refs", "memory_events", "memories_fts"}
+        return required.issubset(names)
+
+    schema_sql = schema_sql_path.read_text(encoding="utf-8")
+    # Avoid re-applying DDL on every call. This also reduces cross-process startup races
+    # when WebUI and CLI hit ensure_storage concurrently.
+    for attempt in range(2):
+        try:
+            with sqlite3.connect(paths.sqlite_path, timeout=2.0) as conn:
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("PRAGMA busy_timeout = 1500")
+                try:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                except sqlite3.OperationalError:
+                    # Some environments/filesystems may not support WAL; keep default.
+                    pass
+                if not has_schema(conn):
+                    conn.executescript(schema_sql)
+            break
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if attempt == 0 and ("cannot start a transaction within a transaction" in msg or "database is locked" in msg):
+                time.sleep(0.2)
+                continue
+            raise
         _maybe_migrate_memories_table(conn)
         _maybe_repair_fk_targets(conn)
 
