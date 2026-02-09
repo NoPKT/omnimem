@@ -14,6 +14,43 @@ OMNIMEM_HOME="$TMP_HOME" bash "$ROOT_DIR/scripts/install.sh" \
 
 CFG="$TMP_HOME/omnimem.config.json"
 CLI="$TMP_HOME/bin/omnimem"
+DAEMON_SCHEMA="$ROOT_DIR/spec/daemon-state.schema.json"
+
+assert_daemon_contract() {
+  local payload="$1"
+  python3 - "$payload" "$DAEMON_SCHEMA" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+schema = json.loads(open(sys.argv[2], "r", encoding="utf-8").read())
+
+required = schema.get("required", [])
+props = schema.get("properties", {})
+
+for key in required:
+    if key not in payload:
+        raise SystemExit(f"[FAIL] daemon contract missing key: {key}")
+
+def is_type(val, typ):
+    if typ == "boolean":
+        return isinstance(val, bool)
+    if typ == "string":
+        return isinstance(val, str)
+    if typ == "object":
+        return isinstance(val, dict)
+    if typ == "integer":
+        return isinstance(val, int) and not isinstance(val, bool)
+    return True
+
+for key, rule in props.items():
+    if key not in payload:
+        continue
+    typ = rule.get("type")
+    if typ and not is_type(payload[key], typ):
+        raise SystemExit(f"[FAIL] daemon contract type mismatch: {key} expected {typ}")
+PY
+}
 
 # config-path should be deterministic
 "$CLI" --config "$CFG" config-path | rg 'omnimem.config.json' >/dev/null
@@ -25,7 +62,7 @@ WEBUI_PID=$!
 # wait server
 server_ok=0
 for _ in {1..20}; do
-  if curl -sS "http://127.0.0.1:$PORT/api/config" >/dev/null 2>&1; then
+  if curl -sS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
     server_ok=1
     break
   fi
@@ -44,11 +81,31 @@ if [[ "$server_ok" -eq 1 ]]; then
 
   cfg_json2="$(curl -sS "http://127.0.0.1:$PORT/api/config")"
   echo "$cfg_json2" | rg '"branch": "dev"' >/dev/null
+  daemon_json="$(curl -sS "http://127.0.0.1:$PORT/api/daemon")"
+  assert_daemon_contract "$daemon_json"
 
   # create memory and verify memory list in webui
   "$CLI" --config "$CFG" write --summary 'webui test memory' --body 'hello webui' >/dev/null
   mem_json="$(curl -sS "http://127.0.0.1:$PORT/api/memories?limit=5")"
   echo "$mem_json" | rg '"items"' >/dev/null
+
+  # restart with token auth and verify API protection
+  kill "$WEBUI_PID" >/dev/null 2>&1 || true
+  unset WEBUI_PID
+  OMNIMEM_WEBUI_TOKEN='phase-d-token' "$CLI" --config "$CFG" start --host 127.0.0.1 --port "$PORT" >"$TMP_BASE/webui-auth.log" 2>&1 &
+  WEBUI_PID=$!
+  for _ in {1..20}; do
+    if curl -sS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.2
+  done
+  unauth_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/config")"
+  [[ "$unauth_code" == "401" ]] || { echo "[FAIL] expected 401 without token, got $unauth_code"; exit 1; }
+  auth_code="$(curl -s -o /dev/null -w '%{http_code}' -H 'X-OmniMem-Token: phase-d-token' "http://127.0.0.1:$PORT/api/config")"
+  [[ "$auth_code" == "200" ]] || { echo "[FAIL] expected 200 with token, got $auth_code"; exit 1; }
+  daemon_auth_json="$(curl -sS -H 'X-OmniMem-Token: phase-d-token' "http://127.0.0.1:$PORT/api/daemon")"
+  assert_daemon_contract "$daemon_auth_json"
 else
   # Some sandbox environments forbid binding local ports; keep validating non-web path.
   rg 'Operation not permitted' "$TMP_BASE/webui.log" >/dev/null || true

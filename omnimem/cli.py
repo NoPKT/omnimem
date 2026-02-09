@@ -29,7 +29,7 @@ from .core import (
     parse_ref,
     resolve_paths,
     run_sync_daemon,
-    sync_placeholder,
+    sync_git,
     verify_storage,
     write_memory,
 )
@@ -197,7 +197,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     remote_name = args.remote_name or sync_cfg.get("remote_name", "origin")
     branch = args.branch or sync_cfg.get("branch", "main")
     remote_url = args.remote_url or sync_cfg.get("remote_url")
-    out = sync_placeholder(
+    out = sync_git(
         paths,
         schema_sql_path(),
         args.mode,
@@ -218,11 +218,16 @@ def cmd_webui(args: argparse.Namespace) -> int:
         cfg=cfg,
         cfg_path=cfg_path,
         schema_sql_path=schema_sql_path(),
-        sync_runner=sync_placeholder,
+        sync_runner=sync_git,
         daemon_runner=run_sync_daemon,
         enable_daemon=not args.no_daemon,
         daemon_scan_interval=args.daemon_scan_interval,
         daemon_pull_interval=args.daemon_pull_interval,
+        daemon_retry_max_attempts=args.daemon_retry_max_attempts,
+        daemon_retry_initial_backoff=args.daemon_retry_initial_backoff,
+        daemon_retry_max_backoff=args.daemon_retry_max_backoff,
+        auth_token=args.webui_token,
+        allow_non_localhost=args.allow_non_localhost,
     )
     return 0
 
@@ -524,7 +529,7 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
 
 
 def webui_alive(host: str, port: int) -> bool:
-    url = f"http://{host}:{port}/api/config"
+    url = f"http://{host}:{port}/api/health"
     try:
         with urllib.request.urlopen(url, timeout=0.6) as resp:
             return resp.status == 200
@@ -627,6 +632,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_webui.add_argument("--no-daemon", action="store_true", help="disable background quasi-realtime sync")
     p_webui.add_argument("--daemon-scan-interval", type=int, default=8)
     p_webui.add_argument("--daemon-pull-interval", type=int, default=30)
+    p_webui.add_argument("--daemon-retry-max-attempts", type=int, default=3)
+    p_webui.add_argument("--daemon-retry-initial-backoff", type=int, default=1)
+    p_webui.add_argument("--daemon-retry-max-backoff", type=int, default=8)
+    p_webui.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
+    p_webui.add_argument(
+        "--allow-non-localhost",
+        action="store_true",
+        help="allow binding to non-local host (requires explicit opt-in)",
+    )
     p_webui.set_defaults(func=cmd_webui)
 
     p_start = sub.add_parser("start", help="start app (webui + sync daemon)")
@@ -636,6 +650,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--no-daemon", action="store_true", help="disable background quasi-realtime sync")
     p_start.add_argument("--daemon-scan-interval", type=int, default=8)
     p_start.add_argument("--daemon-pull-interval", type=int, default=30)
+    p_start.add_argument("--daemon-retry-max-attempts", type=int, default=3)
+    p_start.add_argument("--daemon-retry-initial-backoff", type=int, default=1)
+    p_start.add_argument("--daemon-retry-max-backoff", type=int, default=8)
+    p_start.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
+    p_start.add_argument(
+        "--allow-non-localhost",
+        action="store_true",
+        help="allow binding to non-local host (requires explicit opt-in)",
+    )
     p_start.set_defaults(func=cmd_start)
 
     p_cfg_path = sub.add_parser("config-path", help="print active config path")

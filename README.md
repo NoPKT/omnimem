@@ -37,6 +37,18 @@ Optional host/port:
 ~/.omnimem/bin/omnimem --host 127.0.0.1 --port 8765
 ```
 
+Optional WebUI API token:
+
+```bash
+OMNIMEM_WEBUI_TOKEN='your-token' ~/.omnimem/bin/omnimem start
+```
+
+Notes:
+
+- Non-local bind requires explicit opt-in: `--allow-non-localhost`.
+- If token is enabled, API calls must send header `X-OmniMem-Token`.
+- Daemon retry/backoff can be tuned with `--daemon-retry-max-attempts`, `--daemon-retry-initial-backoff`, `--daemon-retry-max-backoff`.
+
 ## Install
 
 Local install from repo:

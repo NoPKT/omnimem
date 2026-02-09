@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .core import ensure_storage, find_memories, resolve_paths, save_config, utc_now, write_memory
+from .core import ensure_storage, find_memories, resolve_paths, save_config, sync_error_hint, utc_now, write_memory
 
 
 HTML_PAGE = """<!doctype html>
@@ -72,6 +72,8 @@ HTML_PAGE = """<!doctype html>
       </div>
       <div id=\"status\" class=\"small\"></div>
       <div id=\"daemonState\" class=\"small\"></div>
+      <div id=\"daemonMetrics\" class=\"small\"></div>
+      <div id=\"daemonAdvice\" class=\"small\"></div>
       <div class=\"tabs\">
         <button class=\"tab-btn active\" data-tab=\"statusTab\" data-i18n=\"tab_status\">Status & Actions</button>
         <button class=\"tab-btn\" data-tab=\"configTab\" data-i18n=\"tab_config\">Configuration</button>
@@ -98,6 +100,7 @@ HTML_PAGE = """<!doctype html>
           <div class=\"row-btn\">
             <button id=\"btnDaemonOn\" data-i18n=\"btn_daemon_on\">Enable Daemon</button>
             <button id=\"btnDaemonOff\" data-i18n=\"btn_daemon_off\">Disable Daemon</button>
+            <button id=\"btnConflictRecovery\" style=\"display:none\">Conflict Recovery (status -> pull -> push)</button>
           </div>
           <pre id=\"syncOut\" class=\"small\"></pre>
         </div>
@@ -332,6 +335,12 @@ HTML_PAGE = """<!doctype html>
     function safeSetLang(v) {
       try { localStorage.setItem('omnimem.lang', v); } catch (_) {}
     }
+    function safeGetToken() {
+      try { return localStorage.getItem('omnimem.token') || ''; } catch (_) { return ''; }
+    }
+    function safeSetToken(v) {
+      try { localStorage.setItem('omnimem.token', v || ''); } catch (_) {}
+    }
     let currentLang = safeGetLang();
     if (!I18N[currentLang]) currentLang = 'en';
     let daemonCache = { running:false, enabled:false, initialized:false };
@@ -352,8 +361,39 @@ HTML_PAGE = """<!doctype html>
       renderDaemonState();
     }
 
-    async function jget(url) { const r = await fetch(url); return await r.json(); }
-    async function jpost(url, obj) { const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}); return await r.json(); }
+    function authHeaders(base) {
+      const headers = Object.assign({}, base || {});
+      const token = safeGetToken();
+      if (token) headers['X-OmniMem-Token'] = token;
+      return headers;
+    }
+
+    async function requestWithAuth(url, init, retried) {
+      const r = await fetch(url, init);
+      if (r.status === 401 && !retried) {
+        const token = window.prompt('WebUI token required. Enter token:') || '';
+        if (token.trim()) {
+          safeSetToken(token.trim());
+          const next = Object.assign({}, init || {});
+          next.headers = authHeaders((init || {}).headers || {});
+          return requestWithAuth(url, next, true);
+        }
+      }
+      return r;
+    }
+
+    async function jget(url) {
+      const r = await requestWithAuth(url, { headers: authHeaders() }, false);
+      return await r.json();
+    }
+    async function jpost(url, obj) {
+      const r = await requestWithAuth(
+        url,
+        { method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(obj) },
+        false
+      );
+      return await r.json();
+    }
 
     function renderInitState(initialized) {
       const initEl = document.getElementById('initState');
@@ -370,7 +410,25 @@ HTML_PAGE = """<!doctype html>
     function renderDaemonState() {
       const dict = I18N[currentLang] || I18N.en;
       const fn = dict.daemon_state || I18N.en.daemon_state;
-      document.getElementById('daemonState').textContent = fn(daemonCache);
+      const primary = fn(daemonCache);
+      const extra = [
+        `cycles=${daemonCache.cycles || 0}`,
+        `success=${daemonCache.success_count || 0}`,
+        `failure=${daemonCache.failure_count || 0}`
+      ].join(', ');
+      const retry = daemonCache.retry_max_attempts ? `retry=${daemonCache.retry_max_attempts}` : '';
+      const tail = [extra, retry].filter(Boolean).join(' | ');
+      document.getElementById('daemonState').textContent = tail ? `${primary} | ${tail}` : primary;
+      const metrics = [
+        `last_success=${daemonCache.last_success_at || '-'}`,
+        `last_failure=${daemonCache.last_failure_at || '-'}`,
+        `error_kind=${daemonCache.last_error_kind || '-'}`,
+        `last_error=${daemonCache.last_error || '-'}`
+      ].join(' | ');
+      document.getElementById('daemonMetrics').textContent = metrics;
+      document.getElementById('daemonAdvice').textContent = daemonCache.remediation_hint || '';
+      const recoverBtn = document.getElementById('btnConflictRecovery');
+      recoverBtn.style.display = daemonCache.last_error_kind === 'conflict' ? 'inline-block' : 'none';
     }
 
     async function loadCfg() {
@@ -413,6 +471,19 @@ HTML_PAGE = """<!doctype html>
     async function runSync(mode) {
       const d = await jpost('/api/sync', {mode});
       document.getElementById('syncOut').textContent = JSON.stringify(d, null, 2);
+      await loadMem();
+      await loadDaemon();
+    }
+
+    async function runConflictRecovery() {
+      const modes = ['github-status', 'github-pull', 'github-push'];
+      const out = [];
+      for (const mode of modes) {
+        const d = await jpost('/api/sync', {mode});
+        out.push({ mode, ok: !!d.ok, message: d.message || d.error || '' });
+        if (!d.ok) break;
+      }
+      document.getElementById('syncOut').textContent = JSON.stringify({ ok: out.every(x => x.ok), steps: out }, null, 2);
       await loadMem();
       await loadDaemon();
     }
@@ -529,6 +600,7 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnSyncPull').onclick = () => runSync('github-pull');
       document.getElementById('btnDaemonOn').onclick = () => toggleDaemon(true);
       document.getElementById('btnDaemonOff').onclick = () => toggleDaemon(false);
+      document.getElementById('btnConflictRecovery').onclick = () => runConflictRecovery();
       document.getElementById('btnProjectAttach').onclick = () => attachProject();
       document.getElementById('btnProjectDetach').onclick = () => detachProject();
       document.getElementById('btnMemReload').onclick = () => loadMem();
@@ -786,6 +858,21 @@ def _detach_project_in_webui(project_path: str) -> dict[str, Any]:
     return {"ok": True, "project_path": str(project), "removed": removed}
 
 
+def _is_local_bind_host(host: str) -> bool:
+    v = host.strip().lower()
+    return v in {"127.0.0.1", "localhost", "::1"}
+
+
+def _resolve_auth_token(cfg: dict[str, Any], explicit_token: str | None) -> str:
+    if explicit_token:
+        return explicit_token
+    env_token = os.getenv("OMNIMEM_WEBUI_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    token = str(cfg.get("webui", {}).get("auth_token", "")).strip()
+    return token
+
+
 def run_webui(
     *,
     host: str,
@@ -798,10 +885,22 @@ def run_webui(
     enable_daemon: bool = True,
     daemon_scan_interval: int = 8,
     daemon_pull_interval: int = 30,
+    daemon_retry_max_attempts: int = 3,
+    daemon_retry_initial_backoff: int = 1,
+    daemon_retry_max_backoff: int = 8,
+    auth_token: str | None = None,
+    allow_non_localhost: bool = False,
 ) -> None:
+    if not allow_non_localhost and not _is_local_bind_host(host):
+        raise ValueError(
+            f"refuse to bind non-local host without --allow-non-localhost: {host}"
+        )
+
+    resolved_auth_token = _resolve_auth_token(cfg, auth_token)
     paths = resolve_paths(cfg)
     ensure_storage(paths, schema_sql_path)
     daemon_state: dict[str, Any] = {
+        "schema_version": "1.1.0",
         "initialized": cfg_path.exists(),
         "enabled": bool(enable_daemon and cfg_path.exists()),
         "manually_disabled": False,
@@ -809,6 +908,18 @@ def run_webui(
         "last_result": {},
         "scan_interval": daemon_scan_interval,
         "pull_interval": daemon_pull_interval,
+        "retry_max_attempts": max(1, int(daemon_retry_max_attempts)),
+        "retry_initial_backoff": max(1, int(daemon_retry_initial_backoff)),
+        "retry_max_backoff": max(1, int(daemon_retry_max_backoff)),
+        "cycles": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "last_run_at": "",
+        "last_success_at": "",
+        "last_failure_at": "",
+        "last_error": "",
+        "last_error_kind": "none",
+        "remediation_hint": "",
     }
     stop_event = threading.Event()
 
@@ -824,6 +935,8 @@ def run_webui(
                 time.sleep(1)
                 continue
             try:
+                daemon_state["cycles"] = int(daemon_state.get("cycles", 0)) + 1
+                daemon_state["last_run_at"] = utc_now()
                 gh = cfg.get("sync", {}).get("github", {})
                 result = daemon_runner(
                     paths=paths,
@@ -833,11 +946,33 @@ def run_webui(
                     remote_url=gh.get("remote_url"),
                     scan_interval=daemon_scan_interval,
                     pull_interval=daemon_pull_interval,
+                    retry_max_attempts=daemon_retry_max_attempts,
+                    retry_initial_backoff=daemon_retry_initial_backoff,
+                    retry_max_backoff=daemon_retry_max_backoff,
                     once=True,
                 )
                 daemon_state["last_result"] = result
+                if result.get("ok"):
+                    daemon_state["success_count"] = int(daemon_state.get("success_count", 0)) + 1
+                    daemon_state["last_success_at"] = utc_now()
+                    daemon_state["last_error"] = ""
+                    daemon_state["last_error_kind"] = "none"
+                    daemon_state["remediation_hint"] = ""
+                else:
+                    daemon_state["failure_count"] = int(daemon_state.get("failure_count", 0)) + 1
+                    daemon_state["last_failure_at"] = utc_now()
+                    daemon_state["last_error"] = str(result.get("error", "sync failed"))
+                    daemon_state["last_error_kind"] = str(result.get("last_error_kind", "unknown"))
+                    daemon_state["remediation_hint"] = str(
+                        result.get("remediation_hint", sync_error_hint(daemon_state["last_error_kind"]))
+                    )
             except Exception as exc:  # pragma: no cover
                 daemon_state["last_result"] = {"ok": False, "error": str(exc)}
+                daemon_state["failure_count"] = int(daemon_state.get("failure_count", 0)) + 1
+                daemon_state["last_failure_at"] = utc_now()
+                daemon_state["last_error"] = str(exc)
+                daemon_state["last_error_kind"] = "unknown"
+                daemon_state["remediation_hint"] = sync_error_hint("unknown")
             time.sleep(max(1, daemon_scan_interval))
         daemon_state["running"] = False
 
@@ -847,6 +982,16 @@ def run_webui(
         daemon_thread.start()
 
     class Handler(BaseHTTPRequestHandler):
+        def _authorized(self, parsed) -> bool:
+            if parsed.path == "/api/health":
+                return True
+            if not parsed.path.startswith("/api/"):
+                return True
+            if not resolved_auth_token:
+                return True
+            supplied = self.headers.get("X-OmniMem-Token", "").strip()
+            return supplied == resolved_auth_token
+
         def _send_json(self, data: dict[str, Any], code: int = 200) -> None:
             b = json.dumps(data, ensure_ascii=False).encode("utf-8")
             self.send_response(code)
@@ -867,6 +1012,14 @@ def run_webui(
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._send_html(HTML_PAGE)
+                return
+
+            if not self._authorized(parsed):
+                self._send_json({"ok": False, "error": "unauthorized"}, 401)
+                return
+
+            if parsed.path == "/api/health":
+                self._send_json({"ok": True})
                 return
 
             if parsed.path == "/api/config":
@@ -953,6 +1106,9 @@ def run_webui(
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if not self._authorized(parsed):
+                self._send_json({"ok": False, "error": "unauthorized"}, 401)
+                return
             length = int(self.headers.get("Content-Length", "0") or "0")
             raw = self.rfile.read(length) if length else b"{}"
             data = json.loads(raw.decode("utf-8") or "{}")
@@ -1075,7 +1231,10 @@ def run_webui(
             self._send_json({"ok": False, "error": "not found"}, 404)
 
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"WebUI running on http://{host}:{port} (daemon={'on' if enable_daemon else 'off'})")
+    print(
+        f"WebUI running on http://{host}:{port} "
+        f"(daemon={'on' if enable_daemon else 'off'}, auth={'on' if resolved_auth_token else 'off'})"
+    )
     try:
         server.serve_forever()
     finally:

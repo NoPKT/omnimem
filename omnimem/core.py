@@ -671,7 +671,11 @@ def _ensure_remote(paths: MemoryPaths, remote_name: str, remote_url: str | None)
             _run_git(paths, ["remote", "add", remote_name, remote_url])
 
 
-def sync_placeholder(
+SYNC_MODES = {"noop", "git", "github-status", "github-push", "github-pull", "github-bootstrap"}
+SYNC_ERROR_KINDS = {"auth", "network", "conflict", "unknown"}
+
+
+def sync_git(
     paths: MemoryPaths,
     schema_sql_path: Path,
     mode: str,
@@ -681,9 +685,12 @@ def sync_placeholder(
     commit_message: str = "chore(memory): sync snapshot",
     log_event: bool = True,
 ) -> dict[str, Any]:
+    if mode not in SYNC_MODES:
+        raise ValueError("mode must be one of: noop, git, github-status, github-push, github-pull, github-bootstrap")
+
     ensure_system_memory(paths, schema_sql_path)
     if mode == "noop":
-        message = "sync placeholder: noop"
+        message = "sync noop"
         ok = True
         detail = ""
     elif mode in {"git", "github-status"}:
@@ -735,7 +742,7 @@ def sync_placeholder(
             ok = False
             detail = ""
     elif mode == "github-bootstrap":
-        pull_out = sync_placeholder(
+        pull_out = sync_git(
             paths,
             schema_sql_path,
             "github-pull",
@@ -746,7 +753,7 @@ def sync_placeholder(
             log_event=False,
         )
         reindex_out = reindex_from_jsonl(paths, schema_sql_path, reset=True)
-        push_out = sync_placeholder(
+        push_out = sync_git(
             paths,
             schema_sql_path,
             "github-push",
@@ -759,10 +766,7 @@ def sync_placeholder(
         ok = bool(pull_out.get("ok") and reindex_out.get("ok") and push_out.get("ok"))
         message = "github bootstrap ok" if ok else "github bootstrap finished with errors"
         detail = {"pull": pull_out, "reindex": reindex_out, "push": push_out}
-    else:
-        raise ValueError("mode must be one of: noop, git, github-status, github-push, github-pull, github-bootstrap")
-
-    should_log_event = log_event and mode in {"noop", "git", "github-status"}
+    should_log_event = log_event
     if should_log_event:
         log_system_event(
             paths,
@@ -775,6 +779,29 @@ def sync_placeholder(
     if mode in {"git", "github-status", "github-push", "github-pull", "github-bootstrap"}:
         out["detail"] = detail
     return out
+
+
+def sync_placeholder(
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    mode: str,
+    remote_name: str = "origin",
+    branch: str = "main",
+    remote_url: str | None = None,
+    commit_message: str = "chore(memory): sync snapshot",
+    log_event: bool = True,
+) -> dict[str, Any]:
+    # Backward-compatible alias for older callers/docs.
+    return sync_git(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        mode=mode,
+        remote_name=remote_name,
+        branch=branch,
+        remote_url=remote_url,
+        commit_message=commit_message,
+        log_event=log_event,
+    )
 
 
 def latest_content_mtime(paths: MemoryPaths) -> float:
@@ -794,6 +821,125 @@ def latest_content_mtime(paths: MemoryPaths) -> float:
     return latest
 
 
+def classify_sync_error(message: str, detail: Any = "") -> str:
+    text = f"{message}\n{detail}".lower()
+
+    auth_hints = [
+        "authentication failed",
+        "fatal: authentication",
+        "bad credentials",
+        "permission denied (publickey)",
+        "could not read username",
+        "access denied",
+        "unauthorized",
+    ]
+    if any(x in text for x in auth_hints):
+        return "auth"
+
+    network_hints = [
+        "could not resolve host",
+        "network is unreachable",
+        "connection timed out",
+        "connection reset",
+        "failed to connect",
+        "temporary failure",
+        "name or service not known",
+        "proxy error",
+        "tls",
+        "ssl",
+    ]
+    if any(x in text for x in network_hints):
+        return "network"
+
+    conflict_hints = [
+        "conflict",
+        "merge conflict",
+        "could not apply",
+        "non-fast-forward",
+        "fetch first",
+        "needs merge",
+        "would be overwritten",
+        "rebase",
+    ]
+    if any(x in text for x in conflict_hints):
+        return "conflict"
+
+    return "unknown"
+
+
+def should_retry_sync_error(error_kind: str) -> bool:
+    # Authentication and merge-conflict failures usually require manual action.
+    return error_kind in {"network", "unknown"}
+
+
+def sync_error_hint(error_kind: str) -> str:
+    if error_kind == "auth":
+        return "Authentication failed. Verify credential refs/token/SSH key and run sync again."
+    if error_kind == "network":
+        return "Network issue detected. Check connectivity/DNS/proxy, then retry sync."
+    if error_kind == "conflict":
+        return (
+            "Sync conflict detected. Run `omnimem sync --mode github-status`, resolve Git conflicts, "
+            "then run `omnimem sync --mode github-pull` and `omnimem sync --mode github-push`."
+        )
+    if error_kind == "unknown":
+        return "Unknown sync failure. Inspect logs and Git status, then retry with conservative settings."
+    return ""
+
+
+def run_sync_with_retry(
+    *,
+    runner,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    mode: str,
+    remote_name: str,
+    branch: str,
+    remote_url: str | None,
+    max_attempts: int = 3,
+    initial_backoff: int = 1,
+    max_backoff: int = 8,
+    sleep_fn=time.sleep,
+) -> dict[str, Any]:
+    attempts = max(1, int(max_attempts))
+    backoff = max(1, int(initial_backoff))
+    cap = max(backoff, int(max_backoff))
+    last_out: dict[str, Any] = {"ok": False, "mode": mode, "message": "sync retry not executed"}
+
+    for i in range(1, attempts + 1):
+        try:
+            out = runner(
+                paths,
+                schema_sql_path,
+                mode,
+                remote_name=remote_name,
+                branch=branch,
+                remote_url=remote_url,
+                log_event=False,
+            )
+        except Exception as exc:  # pragma: no cover
+            out = {"ok": False, "mode": mode, "message": f"sync runner error: {exc}"}
+
+        out = dict(out)
+        out["attempts"] = i
+        if out.get("ok"):
+            out["error_kind"] = "none"
+            out["retryable"] = False
+            return out
+
+        error_kind = classify_sync_error(str(out.get("message", "")), out.get("detail", ""))
+        out["error_kind"] = error_kind
+        out["retryable"] = should_retry_sync_error(error_kind)
+        last_out = out
+        if not out.get("retryable", False):
+            break
+        if i < attempts:
+            sleep_fn(backoff)
+            backoff = min(cap, backoff * 2)
+
+    return last_out
+
+
 def run_sync_daemon(
     *,
     paths: MemoryPaths,
@@ -803,6 +949,9 @@ def run_sync_daemon(
     remote_url: str | None,
     scan_interval: int,
     pull_interval: int,
+    retry_max_attempts: int = 3,
+    retry_initial_backoff: int = 1,
+    retry_max_backoff: int = 8,
     once: bool = False,
 ) -> dict[str, Any]:
     ensure_storage(paths, schema_sql_path)
@@ -810,42 +959,83 @@ def run_sync_daemon(
     last_seen = latest_content_mtime(paths)
     last_pull = 0.0
     cycles = 0
+    pull_failures = 0
+    push_failures = 0
+    reindex_failures = 0
+    last_pull_result: dict[str, Any] = {}
+    last_push_result: dict[str, Any] = {}
+    last_reindex_result: dict[str, Any] = {}
+    last_error_kind = "none"
 
     while True:
         cycles += 1
         now = time.time()
 
         if now - last_pull >= pull_interval:
-            sync_placeholder(
-                paths,
-                schema_sql_path,
-                "github-pull",
+            last_pull_result = run_sync_with_retry(
+                runner=sync_git,
+                paths=paths,
+                schema_sql_path=schema_sql_path,
+                mode="github-pull",
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
-                log_event=False,
+                max_attempts=retry_max_attempts,
+                initial_backoff=retry_initial_backoff,
+                max_backoff=retry_max_backoff,
             )
-            reindex_from_jsonl(paths, schema_sql_path, reset=True)
+            if last_pull_result.get("ok"):
+                last_reindex_result = reindex_from_jsonl(paths, schema_sql_path, reset=True)
+                if not last_reindex_result.get("ok"):
+                    reindex_failures += 1
+                    last_error_kind = "unknown"
+            else:
+                pull_failures += 1
+                last_error_kind = str(last_pull_result.get("error_kind", "unknown"))
             last_pull = now
             last_seen = latest_content_mtime(paths)
 
         current_seen = latest_content_mtime(paths)
         if current_seen > last_seen:
-            sync_placeholder(
-                paths,
-                schema_sql_path,
-                "github-push",
+            last_push_result = run_sync_with_retry(
+                runner=sync_git,
+                paths=paths,
+                schema_sql_path=schema_sql_path,
+                mode="github-push",
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
-                log_event=False,
+                max_attempts=retry_max_attempts,
+                initial_backoff=retry_initial_backoff,
+                max_backoff=retry_max_backoff,
             )
+            if not last_push_result.get("ok"):
+                push_failures += 1
+                last_error_kind = str(last_push_result.get("error_kind", "unknown"))
             last_seen = current_seen
 
         if once:
             break
         time.sleep(max(1, scan_interval))
 
-    result = {"ok": True, "cycles": cycles, "mode": "once" if once else "daemon"}
+    ok = pull_failures == 0 and push_failures == 0 and reindex_failures == 0
+    result = {
+        "ok": ok,
+        "cycles": cycles,
+        "mode": "once" if once else "daemon",
+        "pull_failures": pull_failures,
+        "push_failures": push_failures,
+        "reindex_failures": reindex_failures,
+        "last_pull": last_pull_result,
+        "last_push": last_push_result,
+        "last_reindex": last_reindex_result,
+        "last_error_kind": last_error_kind,
+        "remediation_hint": sync_error_hint(last_error_kind),
+        "retry": {
+            "max_attempts": max(1, int(retry_max_attempts)),
+            "initial_backoff": max(1, int(retry_initial_backoff)),
+            "max_backoff": max(1, int(retry_max_backoff)),
+        },
+    }
     log_system_event(paths, schema_sql_path, "memory.sync", {"daemon": result})
     return result

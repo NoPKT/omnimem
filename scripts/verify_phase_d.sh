@@ -10,6 +10,7 @@ required_files=(
   "tests/test_bootstrap.sh"
   "tests/test_bootstrap_cli_cmd.sh"
   "tests/test_uninstall_cli.sh"
+  "spec/daemon-state.schema.json"
 )
 
 for f in "${required_files[@]}"; do
