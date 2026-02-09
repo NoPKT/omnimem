@@ -81,7 +81,7 @@ omnimem start
 
 ## Auto Agent Mode (Codex / Claude)
 
-Interactive mode (automatic retrieve + write + drift check):
+Interactive sidecar mode (launch native tool + auto-start WebUI):
 
 ```bash
 omnimem codex
@@ -101,6 +101,12 @@ Advanced controls (optional):
 omnimem codex --project-id <project_id> --drift-threshold 0.62 --cwd /path/to/project
 omnimem claude --project-id <project_id> --drift-threshold 0.62 --cwd /path/to/project
 ```
+
+Notes:
+
+- `omnimem codex` / `omnimem claude` launches native CLI (full tool capability).
+- WebUI is auto-started by default at `http://127.0.0.1:8765`.
+- Use `--no-webui` to disable sidecar UI startup.
 
 ## Verification
 

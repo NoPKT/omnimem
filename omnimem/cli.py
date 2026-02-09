@@ -6,6 +6,8 @@ import os
 import subprocess
 import shutil
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from .agent import interactive_chat, run_turn
@@ -455,8 +457,13 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
     tool = args.cmd
     cwd = args.cwd
     project_id = infer_project_id(cwd, args.project_id)
-    prompt = " ".join(args.prompt).strip() if args.prompt else ""
-    if prompt:
+
+    # Optional one-shot path kept for automation scripts.
+    if args.oneshot:
+        prompt = " ".join(args.prompt).strip()
+        if not prompt:
+            print_json({"ok": False, "error": "oneshot requires prompt text"})
+            return 1
         out = run_turn(
             tool=tool,
             project_id=project_id,
@@ -467,12 +474,87 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         )
         print_json(out)
         return 0
-    return interactive_chat(
-        tool=tool,
-        project_id=project_id,
-        drift_threshold=args.drift_threshold,
-        cwd=cwd,
-    )
+
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    schema = schema_sql_path()
+    brief = build_brief(paths, schema, project_id, limit=6)
+    mems = find_memories(paths, schema, query="", layer=None, limit=args.retrieve_limit, project_id=project_id)
+
+    lines = [
+        "OmniMem sidecar is enabled for this session.",
+        f"Project ID: {project_id}",
+        "Use memory protocol automatically:",
+        "- On stable decisions/facts, call `omnimem write`.",
+        "- On topic drift or phase switch, call `omnimem checkpoint` and start a new thread.",
+        "- Prefer short-term first; promote to long-term only when repeated and stable.",
+        "- Never store raw secrets; only credential refs.",
+    ]
+    if brief.get("checkpoints"):
+        lines.append("Recent checkpoints:")
+        for x in brief["checkpoints"][:3]:
+            lines.append(f"- {x.get('updated_at','')}: {x.get('summary','')}")
+    if mems:
+        lines.append("Recent memories:")
+        for x in mems[:6]:
+            lines.append(f"- [{x.get('project_id','')}/{x.get('layer','')}/{x.get('kind','')}] {x.get('summary','')}")
+    memory_context = "\n".join(lines)
+
+    if not args.no_webui:
+        ensure_webui_running(cfg_path_arg(args), args.webui_host, args.webui_port, args.no_daemon)
+        print(f"[omnimem] WebUI: http://{args.webui_host}:{args.webui_port}")
+
+    prompt = " ".join(args.prompt).strip()
+    if tool == "codex":
+        native_cmd = ["codex", f"{memory_context}\n\nUser request: {prompt}" if prompt else memory_context]
+    else:
+        native_cmd = ["claude", "--append-system-prompt", memory_context]
+        if prompt:
+            native_cmd.append(prompt)
+
+    run_env = dict(os.environ)
+    if cfg_path_arg(args):
+        run_env["OMNIMEM_CONFIG"] = str(cfg_path_arg(args))
+    if cwd:
+        run_cwd = str(Path(cwd).expanduser().resolve())
+    else:
+        run_cwd = str(Path.cwd())
+    print(f"[omnimem] launching native {tool} in {run_cwd} (project_id={project_id})")
+    return subprocess.call(native_cmd, cwd=run_cwd, env=run_env)
+
+
+def webui_alive(host: str, port: int) -> bool:
+    url = f"http://{host}:{port}/api/config"
+    try:
+        with urllib.request.urlopen(url, timeout=0.6) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon: bool) -> None:
+    if webui_alive(host, port):
+        return
+
+    cfg = load_config(cfg_path)
+    paths = resolve_paths(cfg)
+    log_dir = paths.root / "runtime"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_fp = log_dir / "webui.log"
+    cmd = [sys.executable, "-m", "omnimem.cli", "start", "--host", host, "--port", str(port)]
+    if no_daemon:
+        cmd.append("--no-daemon")
+    if cfg_path:
+        cmd.extend(["--config", str(cfg_path)])
+
+    with log_fp.open("ab") as f:
+        subprocess.Popen(
+            cmd,
+            stdout=f,
+            stderr=f,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -646,6 +728,12 @@ def build_parser() -> argparse.ArgumentParser:
         p_short.add_argument("--drift-threshold", type=float, default=0.62)
         p_short.add_argument("--cwd", help="optional working directory for underlying tool")
         p_short.add_argument("--retrieve-limit", type=int, default=8)
+        p_short.add_argument("--oneshot", action="store_true", help="use internal one-shot orchestrator path")
+        p_short.add_argument("--no-webui", action="store_true", help="do not auto-start webui sidecar")
+        p_short.add_argument("--webui-host", default="127.0.0.1")
+        p_short.add_argument("--webui-port", type=int, default=8765)
+        p_short.add_argument("--no-daemon", action="store_true", help="when auto-starting webui, disable sync daemon")
+        p_short.add_argument("--config", help="path to omnimem config json")
         p_short.set_defaults(func=cmd_tool_shortcut)
 
     return p
