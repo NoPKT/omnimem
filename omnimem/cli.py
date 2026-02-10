@@ -182,8 +182,26 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
 def cmd_find(args: argparse.Namespace) -> int:
     cfg = load_config(cfg_path_arg(args))
     paths = resolve_paths(cfg)
-    rows = find_memories(paths, schema_sql_path(), args.query, args.layer, args.limit)
-    print_json({"ok": True, "count": len(rows), "items": rows})
+    from .core import find_memories_ex
+
+    out = find_memories_ex(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        query=args.query,
+        layer=args.layer,
+        limit=args.limit,
+        project_id=str(getattr(args, "project_id", "") or "").strip(),
+        session_id=str(getattr(args, "session_id", "") or "").strip(),
+    )
+    items = list(out.get("items") or [])
+    resp = {"ok": True, "count": len(items), "items": items}
+    if getattr(args, "explain", False):
+        resp["explain"] = {
+            "strategy": out.get("strategy"),
+            "query_used": out.get("query_used"),
+            "tried": out.get("tried") or [],
+        }
+    print_json(resp)
     return 0
 
 
@@ -762,6 +780,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_find.add_argument("query", nargs="?", default="")
     p_find.add_argument("--layer", choices=sorted(LAYER_SET))
     p_find.add_argument("--limit", type=int, default=10)
+    p_find.add_argument("--project-id", default="", help="optional project filter (scope.project_id)")
+    p_find.add_argument("--session-id", default="", help="optional session filter (source.session_id)")
+    p_find.add_argument("--explain", action="store_true", help="include query normalization/fallback strategy details")
     p_find.set_defaults(func=cmd_find)
 
     p_checkpoint = sub.add_parser("checkpoint", help="create checkpoint memory")

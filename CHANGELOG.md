@@ -8,6 +8,11 @@
 - Sync: make `memory.sync` events non-portable (SQLite only) to avoid leaving the repo dirty after sync operations.
 - WebUI: add Simple/Advanced mode toggle, hide noisy advanced panels by default, and show build version via `/api/version`.
 
+## 0.2.10
+
+- Find: make `omnimem find` resilient to FTS5 query syntax (e.g. `v0.2.6`) by normalizing punctuation and retrying multiple safe FTS variants.
+- Find: add automatic fallback to a LIKE-based search when FTS fails/returns empty, plus `--explain`, `--project-id`, `--session-id` filters.
+
 ## 0.2.8
 
 - WebUI: fix another JS syntax error (`lines.join('\n')` in Python triple-quoted HTML emitted a literal newline in a JS string).

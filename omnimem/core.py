@@ -4,6 +4,7 @@ from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import time
@@ -1286,45 +1287,155 @@ def find_memories(
     project_id: str = "",
     session_id: str = "",
 ) -> list[dict[str, Any]]:
+    res = find_memories_ex(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        query=query,
+        layer=layer,
+        limit=limit,
+        project_id=project_id,
+        session_id=session_id,
+    )
+    return list(res.get("items") or [])
+
+
+def _normalize_fts_query(raw: str) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    # Replace punctuation (including dots in versions) with spaces so FTS doesn't error.
+    s = re.sub(r"[^\w\u4e00-\u9fff]+", " ", s, flags=re.UNICODE)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _query_tokens(raw: str, *, max_tokens: int = 12) -> list[str]:
+    s = str(raw or "")
+    toks = re.findall(r"[\w]+|[\u4e00-\u9fff]+", s, flags=re.UNICODE)
+    out: list[str] = []
+    for t in toks:
+        tt = t.strip()
+        if not tt:
+            continue
+        if tt.upper() in {"AND", "OR", "NOT"}:
+            continue
+        out.append(tt)
+        if len(out) >= max_tokens:
+            break
+    return out
+
+
+def _signals_from_row(d: dict[str, Any]) -> dict[str, Any]:
+    d["signals"] = {
+        "importance_score": float(d.pop("importance_score", 0.0) or 0.0),
+        "confidence_score": float(d.pop("confidence_score", 0.0) or 0.0),
+        "stability_score": float(d.pop("stability_score", 0.0) or 0.0),
+        "reuse_count": int(d.pop("reuse_count", 0) or 0),
+        "volatility_score": float(d.pop("volatility_score", 0.0) or 0.0),
+    }
+    return d
+
+
+def _fts_rows(
+    conn: sqlite3.Connection,
+    *,
+    match_query: str,
+    layer: str | None,
+    limit: int,
+    project_id: str,
+    session_id: str,
+) -> list[sqlite3.Row]:
+    if layer:
+        return conn.execute(
+            """
+            SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
+                   COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
+                   COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
+                   m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
+            FROM memories_fts f
+            JOIN memories m ON m.id = f.id
+            WHERE f.memories_fts MATCH ? AND m.layer = ?
+              AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(m.source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY bm25(memories_fts), m.updated_at DESC
+            LIMIT ?
+            """,
+            (match_query, layer, project_id, project_id, session_id, session_id, limit),
+        ).fetchall()
+    return conn.execute(
+        """
+        SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
+               COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
+               COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
+               m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
+        FROM memories_fts f
+        JOIN memories m ON m.id = f.id
+        WHERE f.memories_fts MATCH ?
+          AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
+          AND (COALESCE(json_extract(m.source_json, '$.session_id'), '') = ? OR ? = '')
+        ORDER BY bm25(memories_fts), m.updated_at DESC
+        LIMIT ?
+        """,
+        (match_query, project_id, project_id, session_id, session_id, limit),
+    ).fetchall()
+
+
+def _like_rows(
+    conn: sqlite3.Connection,
+    *,
+    tokens: list[str],
+    layer: str | None,
+    limit: int,
+    project_id: str,
+    session_id: str,
+) -> list[sqlite3.Row]:
+    if not tokens:
+        return []
+    clauses: list[str] = []
+    args: list[Any] = []
+    for t in tokens[:12]:
+        clauses.append("(summary LIKE ? OR body_text LIKE ?)")
+        pat = f"%{t}%"
+        args.extend([pat, pat])
+    where_tokens = " OR ".join(clauses)
+    sql = f"""
+        SELECT id, layer, kind, summary, updated_at, body_md_path,
+               COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+               COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
+               importance_score, confidence_score, stability_score, reuse_count, volatility_score
+        FROM memories
+        WHERE ({where_tokens})
+          AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+          AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+    """
+    args.extend([project_id, project_id, session_id, session_id])
+    if layer:
+        sql += " AND layer = ?"
+        args.append(layer)
+    sql += " ORDER BY updated_at DESC LIMIT ?"
+    args.append(limit)
+    return conn.execute(sql, tuple(args)).fetchall()
+
+
+def find_memories_ex(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    query: str,
+    layer: str | None,
+    limit: int,
+    project_id: str = "",
+    session_id: str = "",
+) -> dict[str, Any]:
     ensure_storage(paths, schema_sql_path)
+    query = str(query or "").strip()
+    limit = max(1, min(200, int(limit)))
+    tried: list[dict[str, str]] = []
+
     with sqlite3.connect(paths.sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
-        if query:
-            if layer:
-                rows = conn.execute(
-                    """
-                    SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
-                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
-                           COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
-                           m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
-                    FROM memories_fts f
-                    JOIN memories m ON m.id = f.id
-                    WHERE f.memories_fts MATCH ? AND m.layer = ?
-                      AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
-                      AND (COALESCE(json_extract(m.source_json, '$.session_id'), '') = ? OR ? = '')
-                    ORDER BY bm25(memories_fts), m.updated_at DESC
-                    LIMIT ?
-                    """,
-                    (query, layer, project_id, project_id, session_id, session_id, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
-                           COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
-                           COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
-                           m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
-                    FROM memories_fts f
-                    JOIN memories m ON m.id = f.id
-                    WHERE f.memories_fts MATCH ?
-                      AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
-                      AND (COALESCE(json_extract(m.source_json, '$.session_id'), '') = ? OR ? = '')
-                    ORDER BY bm25(memories_fts), m.updated_at DESC
-                    LIMIT ?
-                    """,
-                    (query, project_id, project_id, session_id, session_id, limit),
-                ).fetchall()
-        else:
+
+        if not query:
             if layer:
                 rows = conn.execute(
                     """
@@ -1355,19 +1466,39 @@ def find_memories(
                     """,
                     (project_id, project_id, session_id, session_id, limit),
                 ).fetchall()
+            items = [_signals_from_row(dict(r)) for r in rows]
+            return {"ok": True, "strategy": "recent", "query_used": "", "tried": tried, "items": items}
 
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        d = dict(r)
-        d["signals"] = {
-            "importance_score": float(d.pop("importance_score", 0.0) or 0.0),
-            "confidence_score": float(d.pop("confidence_score", 0.0) or 0.0),
-            "stability_score": float(d.pop("stability_score", 0.0) or 0.0),
-            "reuse_count": int(d.pop("reuse_count", 0) or 0),
-            "volatility_score": float(d.pop("volatility_score", 0.0) or 0.0),
-        }
-        out.append(d)
-    return out
+        tokens = _query_tokens(query)
+        normalized = _normalize_fts_query(query)
+        candidates: list[tuple[str, str]] = [("fts_raw", query)]
+        if normalized and normalized != query:
+            candidates.append(("fts_normalized", normalized))
+        if tokens:
+            candidates.append(("fts_or", " OR ".join(tokens)))
+            pref = [t + "*" for t in tokens if len(t) >= 3]
+            if pref:
+                candidates.append(("fts_or_prefix", " OR ".join(pref)))
+
+        for strat, q in candidates:
+            qq = str(q or "").strip()
+            if not qq:
+                continue
+            tried.append({"strategy": strat, "query_used": qq})
+            try:
+                rows = _fts_rows(conn, match_query=qq, layer=layer, limit=limit, project_id=project_id, session_id=session_id)
+            except sqlite3.OperationalError:
+                continue
+            if rows:
+                items = [_signals_from_row(dict(r)) for r in rows]
+                return {"ok": True, "strategy": strat, "query_used": qq, "tried": tried, "items": items}
+
+        # Resilient fallback.
+        ltoks = tokens or _query_tokens(normalized)
+        tried.append({"strategy": "like_fallback", "query_used": " OR ".join(ltoks)})
+        rows2 = _like_rows(conn, tokens=ltoks, layer=layer, limit=limit, project_id=project_id, session_id=session_id)
+        items2 = [_signals_from_row(dict(r)) for r in rows2]
+        return {"ok": True, "strategy": "like_fallback", "query_used": " OR ".join(ltoks), "tried": tried, "items": items2}
 
 
 def build_brief(paths: MemoryPaths, schema_sql_path: Path, project_id: str, limit: int) -> dict[str, Any]:
