@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -11,6 +12,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+try:  # pragma: no cover
+    import fcntl  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
 
 SCHEMA_VERSION = "0.1.0"
 LAYER_SET = {"instant", "short", "long", "archive"}
@@ -49,6 +55,53 @@ def make_id() -> str:
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+
+@contextmanager
+def repo_lock(root: Path, timeout_s: float = 12.0):
+    """
+    Cross-process advisory lock for a single OmniMem home.
+
+    This prevents two processes (WebUI/daemon/CLI) from mutating JSONL/SQLite/Git state
+    concurrently, which is a common source of sync conflicts and corrupted indexes.
+    """
+    key = str(root.expanduser().resolve())
+    depth = _REPO_LOCK_DEPTH.get(key, 0)
+    if depth > 0:
+        _REPO_LOCK_DEPTH[key] = depth + 1
+        try:
+            yield
+        finally:
+            _REPO_LOCK_DEPTH[key] = max(0, _REPO_LOCK_DEPTH.get(key, 1) - 1)
+        return
+    lock_path = root / "runtime" / "omnimem.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if fcntl is None:  # pragma: no cover
+        yield
+        return
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    start = time.time()
+    try:
+        _REPO_LOCK_DEPTH[key] = 1
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if (time.time() - start) >= timeout_s:
+                    raise TimeoutError(
+                        f"omnimem home is busy (lock: {lock_path}); stop other omnimem processes (webui/daemon) and retry"
+                    )
+                time.sleep(0.12)
+        yield
+    finally:
+        _REPO_LOCK_DEPTH[key] = 0
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+_REPO_LOCK_DEPTH: dict[str, int] = {}
 
 def parse_list_csv(raw: str | None) -> list[str]:
     if not raw:
@@ -699,20 +752,31 @@ def insert_event(conn: sqlite3.Connection, evt: dict[str, Any]) -> None:
     )
 
 
-def log_system_event(paths: MemoryPaths, schema_sql_path: Path, event_type: str, payload: dict[str, Any]) -> None:
-    system_id = ensure_system_memory(paths, schema_sql_path)
-    evt = {
-        "event_id": make_id(),
-        "event_type": event_type,
-        "event_time": utc_now(),
-        "memory_id": system_id,
-        "payload": payload,
-    }
-    append_jsonl(event_file_path(paths, datetime.now(timezone.utc)), evt)
-    with sqlite3.connect(paths.sqlite_path) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        insert_event(conn, evt)
-        conn.commit()
+def log_system_event(
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    portable: bool = True,
+) -> None:
+    with repo_lock(paths.root, timeout_s=30.0):
+        system_id = ensure_system_memory(paths, schema_sql_path)
+        evt = {
+            "event_id": make_id(),
+            "event_type": event_type,
+            "event_time": utc_now(),
+            "memory_id": system_id,
+            "payload": payload,
+        }
+        # Most events are portable and are stored in JSONL so a device can rebuild its index from Git.
+        # Some operational events (notably sync) are device-local and create unnecessary Git churn/conflicts.
+        if portable:
+            append_jsonl(event_file_path(paths, datetime.now(timezone.utc)), evt)
+        with sqlite3.connect(paths.sqlite_path) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            insert_event(conn, evt)
+            conn.commit()
 
 
 def reindex_from_jsonl(paths: MemoryPaths, schema_sql_path: Path, reset: bool = True) -> dict[str, Any]:
@@ -873,64 +937,65 @@ def write_memory(
     volatility: float,
     event_type: str,
 ) -> dict[str, Any]:
-    ensure_storage(paths, schema_sql_path)
     if event_type not in EVENT_SET:
         raise ValueError(f"invalid event_type: {event_type}")
 
-    when_dt = datetime.now(timezone.utc)
-    when_iso = when_dt.replace(microsecond=0).isoformat()
-    mem_id = make_id()
-    rel_path = md_rel_path(layer, mem_id, when_dt)
-    body_md = f"# {summary}\n\n{body.strip()}\n"
-    write_markdown(paths, rel_path, body_md)
+    with repo_lock(paths.root, timeout_s=30.0):
+        ensure_storage(paths, schema_sql_path)
+        when_dt = datetime.now(timezone.utc)
+        when_iso = when_dt.replace(microsecond=0).isoformat()
+        mem_id = make_id()
+        rel_path = md_rel_path(layer, mem_id, when_dt)
+        body_md = f"# {summary}\n\n{body.strip()}\n"
+        write_markdown(paths, rel_path, body_md)
 
-    env = build_envelope(
-        mem_id=mem_id,
-        when_iso=when_iso,
-        layer=layer,
-        kind=kind,
-        summary=summary,
-        body_md_path=rel_path,
-        tags=tags,
-        refs=refs,
-        cred_refs=cred_refs,
-        tool=tool,
-        account=account,
-        device=device,
-        session_id=session_id,
-        project_id=project_id,
-        workspace=workspace,
-        importance=importance,
-        confidence=confidence,
-        stability=stability,
-        reuse_count=reuse_count,
-        volatility=volatility,
-        content_sha256=sha256_text(body_md),
-    )
+        env = build_envelope(
+            mem_id=mem_id,
+            when_iso=when_iso,
+            layer=layer,
+            kind=kind,
+            summary=summary,
+            body_md_path=rel_path,
+            tags=tags,
+            refs=refs,
+            cred_refs=cred_refs,
+            tool=tool,
+            account=account,
+            device=device,
+            session_id=session_id,
+            project_id=project_id,
+            workspace=workspace,
+            importance=importance,
+            confidence=confidence,
+            stability=stability,
+            reuse_count=reuse_count,
+            volatility=volatility,
+            content_sha256=sha256_text(body_md),
+        )
 
-    evt = {
-        "event_id": make_id(),
-        "event_type": event_type,
-        "event_time": when_iso,
-        "memory_id": mem_id,
-        "payload": {
-            "summary": summary,
-            "layer": layer,
-            "kind": kind,
-            "body_md_path": rel_path,
-            "envelope": env,
-        },
-    }
+        evt = {
+            "event_id": make_id(),
+            "event_type": event_type,
+            "event_time": when_iso,
+            "memory_id": mem_id,
+            "payload": {
+                "summary": summary,
+                "layer": layer,
+                "kind": kind,
+                "body_md_path": rel_path,
+                "envelope": env,
+            },
+        }
 
-    append_jsonl(event_file_path(paths, when_dt), evt)
+        append_jsonl(event_file_path(paths, when_dt), evt)
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        insert_memory(conn, env, body_md)
-        insert_event(conn, evt)
-        conn.commit()
+        with sqlite3.connect(paths.sqlite_path) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            insert_memory(conn, env, body_md)
+            insert_event(conn, evt)
+            conn.commit()
 
-    return {"memory": env, "event": evt}
+        return {"memory": env, "event": evt}
 
 
 def move_memory_layer(
@@ -953,112 +1018,113 @@ def move_memory_layer(
     - SQLite row (layer, updated_at, body_md_path)
     - JSONL + SQLite event log (memory.promote)
     """
-    ensure_storage(paths, schema_sql_path)
     if new_layer not in LAYER_SET:
         raise ValueError(f"invalid layer: {new_layer}")
     if event_type not in EVENT_SET:
         raise ValueError(f"invalid event_type: {event_type}")
 
-    when_dt = datetime.now(timezone.utc)
-    when_iso = when_dt.replace(microsecond=0).isoformat()
+    with repo_lock(paths.root, timeout_s=30.0):
+        ensure_storage(paths, schema_sql_path)
+        when_dt = datetime.now(timezone.utc)
+        when_iso = when_dt.replace(microsecond=0).isoformat()
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        row = conn.execute(
-            """
-            SELECT id, schema_version, created_at, updated_at, layer, kind, summary, body_md_path, body_text,
-                   tags_json, importance_score, confidence_score, stability_score, reuse_count, volatility_score,
-                   cred_refs_json, source_json, scope_json, integrity_json
-            FROM memories
-            WHERE id = ?
-            """,
-            (memory_id,),
-        ).fetchone()
-        if not row:
-            raise ValueError(f"memory not found: {memory_id}")
+        with sqlite3.connect(paths.sqlite_path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            row = conn.execute(
+                """
+                SELECT id, schema_version, created_at, updated_at, layer, kind, summary, body_md_path, body_text,
+                       tags_json, importance_score, confidence_score, stability_score, reuse_count, volatility_score,
+                       cred_refs_json, source_json, scope_json, integrity_json
+                FROM memories
+                WHERE id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"memory not found: {memory_id}")
 
-        old_layer = str(row["layer"])
-        if old_layer == new_layer:
-            return {"ok": True, "memory_id": memory_id, "from_layer": old_layer, "to_layer": new_layer, "changed": False}
+            old_layer = str(row["layer"])
+            if old_layer == new_layer:
+                return {"ok": True, "memory_id": memory_id, "from_layer": old_layer, "to_layer": new_layer, "changed": False}
 
-        old_rel = str(row["body_md_path"])
-        old_md = paths.markdown_root / old_rel
-        if not old_md.exists():
-            raise FileNotFoundError(f"markdown not found: {old_rel}")
+            old_rel = str(row["body_md_path"])
+            old_md = paths.markdown_root / old_rel
+            if not old_md.exists():
+                raise FileNotFoundError(f"markdown not found: {old_rel}")
 
-        body_md = old_md.read_text(encoding="utf-8")
-        new_rel = md_rel_path(new_layer, memory_id, when_dt)
-        new_md = paths.markdown_root / new_rel
-        new_md.parent.mkdir(parents=True, exist_ok=True)
-        new_md.write_text(body_md, encoding="utf-8")
-        old_md.unlink(missing_ok=True)
+            body_md = old_md.read_text(encoding="utf-8")
+            new_rel = md_rel_path(new_layer, memory_id, when_dt)
+            new_md = paths.markdown_root / new_rel
+            new_md.parent.mkdir(parents=True, exist_ok=True)
+            new_md.write_text(body_md, encoding="utf-8")
+            old_md.unlink(missing_ok=True)
 
-        # Keep created_at stable; only update updated_at, layer, and path.
-        conn.execute(
-            "UPDATE memories SET layer = ?, updated_at = ?, body_md_path = ? WHERE id = ?",
-            (new_layer, when_iso, new_rel, memory_id),
-        )
+            # Keep created_at stable; only update updated_at, layer, and path.
+            conn.execute(
+                "UPDATE memories SET layer = ?, updated_at = ?, body_md_path = ? WHERE id = ?",
+                (new_layer, when_iso, new_rel, memory_id),
+            )
 
-        refs = conn.execute(
-            "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ? ORDER BY id",
-            (memory_id,),
-        ).fetchall()
+            refs = conn.execute(
+                "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ? ORDER BY id",
+                (memory_id,),
+            ).fetchall()
 
-        tags = json.loads(row["tags_json"] or "[]")
-        cred_refs = json.loads(row["cred_refs_json"] or "[]")
-        scope = json.loads(row["scope_json"] or "{}")
-        integrity = json.loads(row["integrity_json"] or "{}")
-        # Recompute hash after move to be defensive (content should be identical).
-        integrity["content_sha256"] = sha256_text(body_md)
+            tags = json.loads(row["tags_json"] or "[]")
+            cred_refs = json.loads(row["cred_refs_json"] or "[]")
+            scope = json.loads(row["scope_json"] or "{}")
+            integrity = json.loads(row["integrity_json"] or "{}")
+            # Recompute hash after move to be defensive (content should be identical).
+            integrity["content_sha256"] = sha256_text(body_md)
 
-        env = {
-            "id": memory_id,
-            "schema_version": str(row["schema_version"]),
-            "created_at": str(row["created_at"]),
-            "updated_at": when_iso,
-            "layer": new_layer,
-            "kind": str(row["kind"]),
-            "summary": str(row["summary"]),
-            "body_md_path": new_rel,
-            "tags": tags,
-            "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
-            "signals": {
-                "importance_score": float(row["importance_score"]),
-                "confidence_score": float(row["confidence_score"]),
-                "stability_score": float(row["stability_score"]),
-                "reuse_count": int(row["reuse_count"]),
-                "volatility_score": float(row["volatility_score"]),
-            },
-            "cred_refs": cred_refs,
-            # Preserve scope; source points to the actor performing the move.
-            "source": {
-                "tool": tool,
-                "account": account,
-                "device": device,
-                "session_id": session_id,
-            },
-            "scope": scope,
-            "integrity": integrity,
-        }
+            env = {
+                "id": memory_id,
+                "schema_version": str(row["schema_version"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": when_iso,
+                "layer": new_layer,
+                "kind": str(row["kind"]),
+                "summary": str(row["summary"]),
+                "body_md_path": new_rel,
+                "tags": tags,
+                "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
+                "signals": {
+                    "importance_score": float(row["importance_score"]),
+                    "confidence_score": float(row["confidence_score"]),
+                    "stability_score": float(row["stability_score"]),
+                    "reuse_count": int(row["reuse_count"]),
+                    "volatility_score": float(row["volatility_score"]),
+                },
+                "cred_refs": cred_refs,
+                # Preserve scope; source points to the actor performing the move.
+                "source": {
+                    "tool": tool,
+                    "account": account,
+                    "device": device,
+                    "session_id": session_id,
+                },
+                "scope": scope,
+                "integrity": integrity,
+            }
 
-        evt = {
-            "event_id": make_id(),
-            "event_type": event_type,
-            "event_time": when_iso,
-            "memory_id": memory_id,
-            "payload": {
-                "from_layer": old_layer,
-                "to_layer": new_layer,
-                "old_body_md_path": old_rel,
-                "new_body_md_path": new_rel,
-                "envelope": env,
-            },
-        }
+            evt = {
+                "event_id": make_id(),
+                "event_type": event_type,
+                "event_time": when_iso,
+                "memory_id": memory_id,
+                "payload": {
+                    "from_layer": old_layer,
+                    "to_layer": new_layer,
+                    "old_body_md_path": old_rel,
+                    "new_body_md_path": new_rel,
+                    "envelope": env,
+                },
+            }
 
-        append_jsonl(event_file_path(paths, when_dt), evt)
-        insert_event(conn, evt)
-        conn.commit()
+            append_jsonl(event_file_path(paths, when_dt), evt)
+            insert_event(conn, evt)
+            conn.commit()
 
     return {
         "ok": True,
@@ -1096,118 +1162,119 @@ def update_memory_content(
     It intentionally preserves `created_at`, `layer`, `kind`, and the original `source_json`/`scope_json`
     to keep provenance stable; the actor performing the edit is recorded in the update event payload.
     """
-    ensure_storage(paths, schema_sql_path)
     if event_type not in EVENT_SET:
         raise ValueError(f"invalid event_type: {event_type}")
 
-    when_dt = datetime.now(timezone.utc)
-    when_iso = when_dt.replace(microsecond=0).isoformat()
-    summary = str(summary or "").strip()
-    if not summary:
-        raise ValueError("summary must be non-empty")
-    body = str(body or "").strip()
-    tags = [str(x).strip() for x in (tags or []) if str(x).strip()]
+    with repo_lock(paths.root, timeout_s=30.0):
+        ensure_storage(paths, schema_sql_path)
+        when_dt = datetime.now(timezone.utc)
+        when_iso = when_dt.replace(microsecond=0).isoformat()
+        summary = str(summary or "").strip()
+        if not summary:
+            raise ValueError("summary must be non-empty")
+        body = str(body or "").strip()
+        tags = [str(x).strip() for x in (tags or []) if str(x).strip()]
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        row = conn.execute(
-            """
-            SELECT id, schema_version, created_at, updated_at, layer, kind, summary, body_md_path, body_text,
-                   tags_json, importance_score, confidence_score, stability_score, reuse_count, volatility_score,
-                   cred_refs_json, source_json, scope_json, integrity_json
-            FROM memories
-            WHERE id = ?
-            """,
-            (memory_id,),
-        ).fetchone()
-        if not row:
-            raise ValueError(f"memory not found: {memory_id}")
+        with sqlite3.connect(paths.sqlite_path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            row = conn.execute(
+                """
+                SELECT id, schema_version, created_at, updated_at, layer, kind, summary, body_md_path, body_text,
+                       tags_json, importance_score, confidence_score, stability_score, reuse_count, volatility_score,
+                       cred_refs_json, source_json, scope_json, integrity_json
+                FROM memories
+                WHERE id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"memory not found: {memory_id}")
 
-        rel = str(row["body_md_path"])
-        md_path = paths.markdown_root / rel
-        if not md_path.exists():
-            raise FileNotFoundError(f"markdown not found: {rel}")
+            rel = str(row["body_md_path"])
+            md_path = paths.markdown_root / rel
+            if not md_path.exists():
+                raise FileNotFoundError(f"markdown not found: {rel}")
 
-        body_md = f"# {summary}\n\n{body}\n"
-        md_path.write_text(body_md, encoding="utf-8")
+            body_md = f"# {summary}\n\n{body}\n"
+            md_path.write_text(body_md, encoding="utf-8")
 
-        integrity = json.loads(row["integrity_json"] or "{}")
-        integrity["content_sha256"] = sha256_text(body_md)
-        integrity["last_edit_at"] = when_iso
+            integrity = json.loads(row["integrity_json"] or "{}")
+            integrity["content_sha256"] = sha256_text(body_md)
+            integrity["last_edit_at"] = when_iso
 
-        conn.execute(
-            """
-            UPDATE memories
-            SET summary = ?,
-                updated_at = ?,
-                body_text = ?,
-                tags_json = ?,
-                integrity_json = ?
-            WHERE id = ?
-            """,
-            (
-                summary,
-                when_iso,
-                body_md,
-                json.dumps(tags, ensure_ascii=False),
-                json.dumps(integrity, ensure_ascii=False),
-                memory_id,
-            ),
-        )
+            conn.execute(
+                """
+                UPDATE memories
+                SET summary = ?,
+                    updated_at = ?,
+                    body_text = ?,
+                    tags_json = ?,
+                    integrity_json = ?
+                WHERE id = ?
+                """,
+                (
+                    summary,
+                    when_iso,
+                    body_md,
+                    json.dumps(tags, ensure_ascii=False),
+                    json.dumps(integrity, ensure_ascii=False),
+                    memory_id,
+                ),
+            )
 
-        refs = conn.execute(
-            "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ? ORDER BY id",
-            (memory_id,),
-        ).fetchall()
+            refs = conn.execute(
+                "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ? ORDER BY id",
+                (memory_id,),
+            ).fetchall()
 
-        cred_refs = json.loads(row["cred_refs_json"] or "[]")
-        scope = json.loads(row["scope_json"] or "{}")
-        source = json.loads(row["source_json"] or "{}")
+            cred_refs = json.loads(row["cred_refs_json"] or "[]")
+            scope = json.loads(row["scope_json"] or "{}")
+            source = json.loads(row["source_json"] or "{}")
 
-        env = {
-            "id": memory_id,
-            "schema_version": str(row["schema_version"]),
-            "created_at": str(row["created_at"]),
-            "updated_at": when_iso,
-            "layer": str(row["layer"]),
-            "kind": str(row["kind"]),
-            "summary": summary,
-            "body_md_path": rel,
-            "tags": tags,
-            "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
-            "signals": {
-                "importance_score": float(row["importance_score"]),
-                "confidence_score": float(row["confidence_score"]),
-                "stability_score": float(row["stability_score"]),
-                "reuse_count": int(row["reuse_count"]),
-                "volatility_score": float(row["volatility_score"]),
-            },
-            "cred_refs": cred_refs,
-            "source": source,
-            "scope": scope,
-            "integrity": integrity,
-        }
-
-        evt = {
-            "event_id": make_id(),
-            "event_type": event_type,
-            "event_time": when_iso,
-            "memory_id": memory_id,
-            "payload": {
+            env = {
+                "id": memory_id,
+                "schema_version": str(row["schema_version"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": when_iso,
+                "layer": str(row["layer"]),
+                "kind": str(row["kind"]),
                 "summary": summary,
-                "tags": tags,
                 "body_md_path": rel,
-                "actor": {"tool": tool, "account": account, "device": device, "session_id": session_id},
-                "envelope": env,
-            },
-        }
+                "tags": tags,
+                "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
+                "signals": {
+                    "importance_score": float(row["importance_score"]),
+                    "confidence_score": float(row["confidence_score"]),
+                    "stability_score": float(row["stability_score"]),
+                    "reuse_count": int(row["reuse_count"]),
+                    "volatility_score": float(row["volatility_score"]),
+                },
+                "cred_refs": cred_refs,
+                "source": source,
+                "scope": scope,
+                "integrity": integrity,
+            }
 
-        append_jsonl(event_file_path(paths, when_dt), evt)
-        insert_event(conn, evt)
-        conn.commit()
+            evt = {
+                "event_id": make_id(),
+                "event_type": event_type,
+                "event_time": when_iso,
+                "memory_id": memory_id,
+                "payload": {
+                    "summary": summary,
+                    "tags": tags,
+                    "body_md_path": rel,
+                    "actor": {"tool": tool, "account": account, "device": device, "session_id": session_id},
+                    "envelope": env,
+                },
+            }
 
-    return {"ok": True, "memory_id": memory_id, "updated_at": when_iso, "body_md_path": rel}
+            append_jsonl(event_file_path(paths, when_dt), evt)
+            insert_event(conn, evt)
+            conn.commit()
+
+        return {"ok": True, "memory_id": memory_id, "updated_at": when_iso, "body_md_path": rel}
 
 
 def find_memories(
@@ -1400,13 +1467,29 @@ def verify_storage(paths: MemoryPaths, schema_sql_path: Path) -> dict[str, Any]:
     return result
 
 
-def _run_git(paths: MemoryPaths, args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+def _run_git(
+    paths: MemoryPaths,
+    args: list[str],
+    *,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(
         ["git", "-C", str(paths.root), *args],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if check and proc.returncode != 0:
+        cmd = "git -C " + str(paths.root) + " " + " ".join(args)
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        msg = f"{cmd} failed (exit {proc.returncode})"
+        if out:
+            msg += f"\nstdout:\n{out}"
+        if err:
+            msg += f"\nstderr:\n{err}"
+        raise RuntimeError(msg)
+    return proc
 
 
 def _ensure_git_repo(paths: MemoryPaths) -> None:
@@ -1421,6 +1504,127 @@ def _ensure_remote(paths: MemoryPaths, remote_name: str, remote_url: str | None)
             _run_git(paths, ["remote", "set-url", remote_name, remote_url])
         else:
             _run_git(paths, ["remote", "add", remote_name, remote_url])
+
+
+def _git_has_head(paths: MemoryPaths) -> bool:
+    proc = _run_git(paths, ["rev-parse", "--verify", "HEAD"], check=False)
+    return proc.returncode == 0
+
+
+def _git_unmerged_paths(paths: MemoryPaths) -> list[str]:
+    proc = _run_git(paths, ["diff", "--name-only", "--diff-filter=U"], check=False)
+    items = [x.strip() for x in (proc.stdout or "").splitlines() if x.strip()]
+    return items
+
+
+def _git_rebase_in_progress(paths: MemoryPaths) -> bool:
+    git_dir = paths.root / ".git"
+    return (git_dir / "rebase-apply").exists() or (git_dir / "rebase-merge").exists()
+
+
+def _git_merge_in_progress(paths: MemoryPaths) -> bool:
+    proc = _run_git(paths, ["rev-parse", "-q", "--verify", "MERGE_HEAD"], check=False)
+    return proc.returncode == 0
+
+
+def _ensure_sync_gitignore(paths: MemoryPaths) -> None:
+    """Keep the memory Git repo focused on shareable memory artifacts, not runtime/install files."""
+    ignore_path = paths.root / ".gitignore"
+    start = "# OMNIMEM:SYNC:START"
+    end = "# OMNIMEM:SYNC:END"
+    block_lines = [
+        start,
+        "# Runtime / install artifacts (syncing these causes frequent conflicts).",
+        "runtime/",
+        "bin/",
+        "lib/",
+        "docs/",
+        "spec/",
+        "templates/",
+        "db/",
+        "__pycache__/",
+        "*.pyc",
+        "",
+        "# Local SQLite (use JSONL/Markdown as the portable source of truth).",
+        "data/omnimem.db",
+        "data/omnimem.db-*",
+        "data/omnimem.db-shm",
+        "data/omnimem.db-wal",
+        "data/omnimemory.db",
+        "data/omnimemory.db-*",
+        "data/omnimemory.db-shm",
+        "data/omnimemory.db-wal",
+        end,
+        "",
+    ]
+
+    if ignore_path.exists():
+        txt = ignore_path.read_text(encoding="utf-8", errors="ignore")
+    else:
+        txt = ""
+
+    if start in txt and end in txt:
+        a = txt.index(start)
+        b = txt.index(end) + len(end)
+        new_txt = (txt[:a] + "\n".join(block_lines).rstrip("\n") + txt[b:]).strip() + "\n"
+    else:
+        new_txt = (txt.rstrip("\n") + ("\n" if txt.strip() else "")) + "\n".join(block_lines)
+
+    if new_txt != (txt if txt.endswith("\n") else txt + "\n"):
+        ignore_path.write_text(new_txt, encoding="utf-8")
+
+
+def _untrack_sync_ignored(paths: MemoryPaths) -> None:
+    # If these were previously committed, .gitignore won't help; drop from index but keep local files.
+    _run_git(paths, ["rm", "-r", "--cached", "--ignore-unmatch", "runtime"], check=False)
+    for name in ["bin", "lib", "docs", "spec", "templates", "db", "__pycache__"]:
+        _run_git(paths, ["rm", "-r", "--cached", "--ignore-unmatch", name], check=False)
+    for name in ["data/omnimem.db", "data/omnimem.db-wal", "data/omnimem.db-shm"]:
+        _run_git(paths, ["rm", "--cached", "--ignore-unmatch", name], check=False)
+    for name in ["data/omnimemory.db", "data/omnimemory.db-wal", "data/omnimemory.db-shm"]:
+        _run_git(paths, ["rm", "--cached", "--ignore-unmatch", name], check=False)
+
+
+def _parse_jsonl_union(stage2: str, stage3: str) -> str:
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for blob in (stage2, stage3):
+        for line in (blob or "").splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                obj = json.loads(s)
+            except json.JSONDecodeError:
+                continue
+            eid = str(obj.get("event_id") or "")
+            if not eid:
+                eid = sha256_text(s)
+            if eid in seen:
+                continue
+            seen.add(eid)
+            rows.append(obj)
+    rows.sort(key=lambda o: (str(o.get("event_time") or ""), str(o.get("event_id") or "")))
+    return "\n".join(json.dumps(o, ensure_ascii=False) for o in rows) + ("\n" if rows else "")
+
+
+def _auto_resolve_jsonl_conflicts(paths: MemoryPaths) -> bool:
+    unmerged = _git_unmerged_paths(paths)
+    if not unmerged:
+        return False
+    if not all(p.startswith("data/jsonl/") and Path(p).name.startswith("events-") and p.endswith(".jsonl") for p in unmerged):
+        return False
+
+    for rel in unmerged:
+        # Stage 2 = ours, stage 3 = theirs.
+        s2 = _run_git(paths, ["show", f":2:{rel}"], check=False).stdout or ""
+        s3 = _run_git(paths, ["show", f":3:{rel}"], check=False).stdout or ""
+        merged = _parse_jsonl_union(s2, s3)
+        fp = paths.root / rel
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(merged, encoding="utf-8")
+        _run_git(paths, ["add", rel])
+    return True
 
 
 SYNC_MODES = {"noop", "git", "github-status", "github-push", "github-pull", "github-bootstrap"}
@@ -1441,86 +1645,134 @@ def sync_git(
         raise ValueError("mode must be one of: noop, git, github-status, github-push, github-pull, github-bootstrap")
 
     ensure_system_memory(paths, schema_sql_path)
-    if mode == "noop":
-        message = "sync noop"
-        ok = True
-        detail = ""
-    elif mode in {"git", "github-status"}:
-        try:
-            _ensure_git_repo(paths)
-            proc = _run_git(paths, ["status", "--short"])
-            message = "github status ok"
+
+    # Git operations and storage mutations must not interleave across processes.
+    lock_ctx = repo_lock(paths.root, timeout_s=30.0) if mode in {"git", "github-status", "github-push", "github-pull", "github-bootstrap"} else nullcontext()
+    with lock_ctx:
+        if mode == "noop":
+            message = "sync noop"
             ok = True
-            detail = proc.stdout.strip()
-        except Exception as exc:  # pragma: no cover
-            message = f"github status failed ({exc})"
-            ok = False
             detail = ""
-    elif mode == "github-push":
-        try:
-            _ensure_git_repo(paths)
-            _ensure_remote(paths, remote_name, remote_url)
-            _run_git(paths, ["add", "-A"])
-            commit_proc = subprocess.run(
-                ["git", "-C", str(paths.root), "commit", "-m", commit_message],
-                check=False,
-                capture_output=True,
-                text=True,
+        elif mode in {"git", "github-status"}:
+            try:
+                _ensure_git_repo(paths)
+                proc = _run_git(paths, ["status", "--short"])
+                message = "github status ok"
+                ok = True
+                detail = proc.stdout.strip()
+            except Exception as exc:  # pragma: no cover
+                message = f"github status failed ({exc})"
+                ok = False
+                detail = ""
+        elif mode == "github-push":
+            try:
+                _ensure_git_repo(paths)
+                _ensure_remote(paths, remote_name, remote_url)
+                _ensure_sync_gitignore(paths)
+                _untrack_sync_ignored(paths)
+                if _git_rebase_in_progress(paths) or _git_merge_in_progress(paths) or _git_unmerged_paths(paths):
+                    st = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
+                    raise RuntimeError(f"git repo has an in-progress merge/rebase or unmerged files; resolve first\n{st}")
+
+                _run_git(paths, ["add", "-A"])
+                commit_proc = _run_git(paths, ["commit", "-m", commit_message], check=False)
+                if commit_proc.returncode != 0 and "nothing to commit" not in (commit_proc.stdout or "") + (commit_proc.stderr or ""):
+                    raise RuntimeError((commit_proc.stderr or "").strip() or (commit_proc.stdout or "").strip() or "git commit failed")
+                if remote_url or remote_name in _run_git(paths, ["remote"]).stdout.split():
+                    _run_git(paths, ["push", "-u", remote_name, branch])
+                    message = "github push ok"
+                else:
+                    message = "local commit ok; remote not configured"
+                ok = True
+                detail = _run_git(paths, ["status", "--short"]).stdout.strip()
+            except Exception as exc:  # pragma: no cover
+                message = f"github push failed ({exc})"
+                ok = False
+                detail = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
+        elif mode == "github-pull":
+            try:
+                _ensure_git_repo(paths)
+                _ensure_remote(paths, remote_name, remote_url)
+                _ensure_sync_gitignore(paths)
+                _untrack_sync_ignored(paths)
+
+                _run_git(paths, ["fetch", remote_name, branch])
+                remote_ref = f"{remote_name}/{branch}"
+                remote_ok = _run_git(
+                    paths,
+                    ["show-ref", "--verify", "--quiet", f"refs/remotes/{remote_name}/{branch}"],
+                    check=False,
+                ).returncode == 0
+                if not remote_ok:
+                    raise RuntimeError(f"remote branch not found after fetch: {remote_ref}")
+
+                # If repo has no commits yet, create a snapshot commit first (if needed),
+                # then merge remote (handles unrelated histories / root commits robustly).
+                if not _git_has_head(paths):
+                    st = _run_git(paths, ["status", "--porcelain"], check=False).stdout or ""
+                    if st.strip():
+                        _run_git(paths, ["add", "-A"])
+                        cp = _run_git(paths, ["commit", "-m", "chore(memory): local snapshot (pre-pull)"], check=False)
+                        if cp.returncode != 0 and "nothing to commit" not in (cp.stdout or "") + (cp.stderr or ""):
+                            raise RuntimeError((cp.stderr or "").strip() or (cp.stdout or "").strip() or "git commit failed")
+                        _run_git(paths, ["merge", "--no-ff", "--allow-unrelated-histories", remote_ref])
+                    else:
+                        _run_git(paths, ["checkout", "-B", branch, remote_ref])
+                else:
+                    # Prefer rebase, but fall back to a merge when histories are unrelated.
+                    rebase_proc = _run_git(paths, ["rebase", "--autostash", remote_ref], check=False)
+                    if rebase_proc.returncode != 0:
+                        err_text = (rebase_proc.stdout or "") + "\n" + (rebase_proc.stderr or "")
+                        if "unrelated histories" in err_text.lower() or "no common commits" in err_text.lower():
+                            _run_git(paths, ["rebase", "--abort"], check=False)
+                            _run_git(paths, ["merge", "--no-ff", "--allow-unrelated-histories", remote_ref])
+                        else:
+                            # Attempt safe auto-resolution for JSONL conflicts only.
+                            for _ in range(20):
+                                if not _git_unmerged_paths(paths):
+                                    break
+                                if not _auto_resolve_jsonl_conflicts(paths):
+                                    break
+                                if _git_rebase_in_progress(paths):
+                                    cont = _run_git(paths, ["rebase", "--continue"], check=False)
+                                    if cont.returncode != 0:
+                                        break
+                            if _git_unmerged_paths(paths) or _git_rebase_in_progress(paths):
+                                st2 = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
+                                raise RuntimeError(f"git pull/rebase has conflicts; manual resolution required\n{st2}")
+
+                message = "github pull ok"
+                ok = True
+                detail = _run_git(paths, ["status", "--short"]).stdout.strip()
+            except Exception as exc:  # pragma: no cover
+                message = f"github pull failed ({exc})"
+                ok = False
+                detail = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
+        elif mode == "github-bootstrap":
+            pull_out = sync_git(
+                paths,
+                schema_sql_path,
+                "github-pull",
+                remote_name=remote_name,
+                branch=branch,
+                remote_url=remote_url,
+                commit_message=commit_message,
+                log_event=False,
             )
-            if commit_proc.returncode != 0 and "nothing to commit" not in commit_proc.stdout + commit_proc.stderr:
-                raise RuntimeError(commit_proc.stderr.strip() or commit_proc.stdout.strip() or "git commit failed")
-            if remote_url or remote_name in _run_git(paths, ["remote"]).stdout.split():
-                _run_git(paths, ["push", "-u", remote_name, branch])
-                message = "github push ok"
-            else:
-                message = "local commit ok; remote not configured"
-            ok = True
-            detail = _run_git(paths, ["status", "--short"]).stdout.strip()
-        except Exception as exc:  # pragma: no cover
-            message = f"github push failed ({exc})"
-            ok = False
-            detail = ""
-    elif mode == "github-pull":
-        try:
-            _ensure_git_repo(paths)
-            _ensure_remote(paths, remote_name, remote_url)
-            _run_git(paths, ["fetch", remote_name, branch])
-            # Memory home can be "dirty" (e.g., sqlite/jsonl updated) even when the user
-            # is only trying to pull. Use autostash so pull works without requiring a
-            # manual commit/stash, and to keep bootstrap (pull -> reindex -> push) robust.
-            _run_git(paths, ["pull", "--rebase", "--autostash", remote_name, branch])
-            message = "github pull ok"
-            ok = True
-            detail = _run_git(paths, ["status", "--short"]).stdout.strip()
-        except Exception as exc:  # pragma: no cover
-            message = f"github pull failed ({exc})"
-            ok = False
-            detail = ""
-    elif mode == "github-bootstrap":
-        pull_out = sync_git(
-            paths,
-            schema_sql_path,
-            "github-pull",
-            remote_name=remote_name,
-            branch=branch,
-            remote_url=remote_url,
-            commit_message=commit_message,
-            log_event=False,
-        )
-        reindex_out = reindex_from_jsonl(paths, schema_sql_path, reset=True)
-        push_out = sync_git(
-            paths,
-            schema_sql_path,
-            "github-push",
-            remote_name=remote_name,
-            branch=branch,
-            remote_url=remote_url,
-            commit_message=commit_message,
-            log_event=False,
-        )
-        ok = bool(pull_out.get("ok") and reindex_out.get("ok") and push_out.get("ok"))
-        message = "github bootstrap ok" if ok else "github bootstrap finished with errors"
-        detail = {"pull": pull_out, "reindex": reindex_out, "push": push_out}
+            reindex_out = reindex_from_jsonl(paths, schema_sql_path, reset=True)
+            push_out = sync_git(
+                paths,
+                schema_sql_path,
+                "github-push",
+                remote_name=remote_name,
+                branch=branch,
+                remote_url=remote_url,
+                commit_message=commit_message,
+                log_event=False,
+            )
+            ok = bool(pull_out.get("ok") and reindex_out.get("ok") and push_out.get("ok"))
+            message = "github bootstrap ok" if ok else "github bootstrap finished with errors"
+            detail = {"pull": pull_out, "reindex": reindex_out, "push": push_out}
     should_log_event = log_event
     if should_log_event:
         log_system_event(
@@ -1528,6 +1780,7 @@ def sync_git(
             schema_sql_path,
             "memory.sync",
             {"mode": mode, "ok": ok, "message": message, "remote_name": remote_name, "branch": branch},
+            portable=False,
         )
 
     out: dict[str, Any] = {"ok": ok, "mode": mode, "message": message}
@@ -1792,5 +2045,5 @@ def run_sync_daemon(
             "max_backoff": max(1, int(retry_max_backoff)),
         },
     }
-    log_system_event(paths, schema_sql_path, "memory.sync", {"daemon": result})
+    log_system_event(paths, schema_sql_path, "memory.sync", {"daemon": result}, portable=False)
     return result

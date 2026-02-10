@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9
+
+- Sync: add cross-process repo lock to prevent WebUI/daemon/CLI from mutating storage during Git operations (reduces conflict/corruption risk).
+- Sync: keep Git snapshots focused on portable artifacts by auto-maintaining a `.gitignore` and untracking common runtime/install/SQLite files in the memory repo.
+- Sync: improve `github-pull` robustness for root commits/unrelated histories and auto-resolve add/add conflicts for `data/jsonl/events-*.jsonl` when safe.
+- Sync: make `memory.sync` events non-portable (SQLite only) to avoid leaving the repo dirty after sync operations.
+- WebUI: add Simple/Advanced mode toggle, hide noisy advanced panels by default, and show build version via `/api/version`.
+
 ## 0.2.8
 
 - WebUI: fix another JS syntax error (`lines.join('\n')` in Python triple-quoted HTML emitted a literal newline in a JS string).

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__ as OMNIMEM_VERSION
 from .core import (
     LAYER_SET,
     apply_decay,
@@ -179,6 +180,8 @@ HTML_PAGE = """<!doctype html>
 	    button:disabled { opacity: .45; cursor: not-allowed; transform: none; filter: none; }
 
     .row-btn { display:flex; gap:10px; flex-wrap:wrap; }
+    .advanced-only { display:none !important; }
+    body.advanced .advanced-only { display: revert !important; }
 
 	    table { width:100%; border-collapse: collapse; font-size: 13px; }
 	    th, td { padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align: top; }
@@ -340,27 +343,29 @@ HTML_PAGE = """<!doctype html>
       <div class=\"hero-head\">
         <div>
           <h1 data-i18n=\"title\">OmniMem WebUI</h1>
-          <div class=\"small\" data-i18n=\"subtitle\">Simple mode: Status & Actions / Configuration / Memory</div>
+	          <div id=\"subTitle\" class=\"small\" data-i18n=\"subtitle_simple\">Simple mode: Status & Actions / Insights / Memory</div>
         </div>
-        <div>
-          <label class=\"small\"><span data-i18n=\"language\">Language</span></label>
-          <select id=\"langSelect\" class=\"lang\">
-            <option value=\"en\">English</option>
-            <option value=\"zh\">中文</option>
-            <option value=\"ja\">日本語</option>
-            <option value=\"de\">Deutsch</option>
-            <option value=\"fr\">Français</option>
-            <option value=\"ru\">Русский</option>
-            <option value=\"it\">Italiano</option>
-            <option value=\"ko\">한국어</option>
-          </select>
-        </div>
+	        <div>
+	          <label class=\"small\"><span data-i18n=\"language\">Language</span></label>
+	          <select id=\"langSelect\" class=\"lang\">
+	            <option value=\"en\">English</option>
+	            <option value=\"zh\">中文</option>
+	            <option value=\"ja\">日本語</option>
+	            <option value=\"de\">Deutsch</option>
+	            <option value=\"fr\">Français</option>
+	            <option value=\"ru\">Русский</option>
+	            <option value=\"it\">Italiano</option>
+	            <option value=\"ko\">한국어</option>
+	          </select>
+            <button id=\"btnToggleAdvanced\" class=\"secondary\" style=\"margin-top:0; margin-left:10px\" data-i18n=\"btn_advanced\">Advanced</button>
+            <span id=\"buildInfo\" class=\"small mono\" style=\"margin-left:10px\"></span>
+	        </div>
       </div>
 	      <div id=\"status\" class=\"small\"></div>
 	      <div id=\"daemonState\" class=\"small\"></div>
 	      <div id=\"daemonMetrics\" class=\"small\"></div>
 	      <div id=\"daemonAdvice\" class=\"small\"></div>
-	      <div class=\"row-btn\" style=\"margin-top:10px\">
+		      <div class=\"row-btn advanced-only\" style=\"margin-top:10px\">
 	        <button id=\"btnLiveToggle\" class=\"secondary\" style=\"margin-top:0\">Live: off</button>
 	        <select id=\"liveInterval\" class=\"lang\" style=\"max-width:200px\">
 	          <option value=\"2000\">2s</option>
@@ -390,12 +395,12 @@ HTML_PAGE = """<!doctype html>
 	          <input id=\"wsConfirm\" type=\"checkbox\" checked style=\"width:auto; margin:0 0 0 6px\" />
 	        </label>
 	      </div>
-	      <div id=\"liveHint\" class=\"small\" style=\"margin-top:6px\">Live refresh updates daemon + current tab.</div>
+		      <div id=\"liveHint\" class=\"small advanced-only\" style=\"margin-top:6px\">Live refresh updates daemon + current tab.</div>
 	      <div class=\"tabs\">
 	        <button class=\"tab-btn active\" data-tab=\"statusTab\" data-i18n=\"tab_status\">Status & Actions</button>
 	        <button class=\"tab-btn\" data-tab=\"insightsTab\" data-i18n=\"tab_insights\">Insights</button>
-	        <button class=\"tab-btn\" data-tab=\"configTab\" data-i18n=\"tab_config\">Configuration</button>
-        <button class=\"tab-btn\" data-tab=\"projectTab\" data-i18n=\"tab_project\">Project Integration</button>
+	        <button class=\"tab-btn advanced-only\" data-tab=\"configTab\" data-i18n=\"tab_config\">Configuration</button>
+        <button class=\"tab-btn advanced-only\" data-tab=\"projectTab\" data-i18n=\"tab_project\">Project Integration</button>
         <button class=\"tab-btn\" data-tab=\"memoryTab\" data-i18n=\"tab_memory\">Memory</button>
       </div>
     </div>
@@ -449,13 +454,14 @@ HTML_PAGE = """<!doctype html>
 	            <button id=\"btnBoardClear\" class=\"secondary\" style=\"margin-top:0\" disabled>Clear</button>
 	            <span id=\"boardSelInfo\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
-	          <div id=\"layerBoard\" class=\"board\"></div>
-	        </div>
+		          <div id=\"layerBoard\" class=\"board\"></div>
+		        </div>
 
-        <div class=\"card\">
-          <h3 data-i18n=\"ins_kinds\">Kinds</h3>
-          <div id=\"insKinds\" class=\"small\"></div>
-        </div>
+          <div class=\"advanced-only\" style=\"display:contents\">
+	        <div class=\"card\">
+	          <h3 data-i18n=\"ins_kinds\">Kinds</h3>
+	          <div id=\"insKinds\" class=\"small\"></div>
+	        </div>
         <div class=\"card\">
           <h3 data-i18n=\"ins_activity\">Activity (14d)</h3>
           <div id=\"insActivity\" class=\"small\"></div>
@@ -630,13 +636,14 @@ HTML_PAGE = """<!doctype html>
 	            <tbody id=\"eventsBody\"></tbody>
 	          </table>
 	          <div class=\"divider\"></div>
-	          <div class=\"small\"><b>Event Payload</b></div>
-	          <pre id=\"eventView\" class=\"mono\" style=\"white-space:pre-wrap; margin-top:8px\"></pre>
-	        </div>
-	      </div>
-	    </div>
+		          <div class=\"small\"><b>Event Payload</b></div>
+		          <pre id=\"eventView\" class=\"mono\" style=\"white-space:pre-wrap; margin-top:8px\"></pre>
+		        </div>
+          </div>
+		      </div>
+		    </div>
 
-    <div id=\"configTab\" class=\"panel\">
+    <div id=\"configTab\" class=\"panel advanced-only\">
       <div class=\"grid\">
         <div class=\"card wide\">
           <h3 data-i18n=\"config_title\">Configuration</h3>
@@ -655,7 +662,7 @@ HTML_PAGE = """<!doctype html>
       </div>
     </div>
 
-    <div id=\"projectTab\" class=\"panel\">
+    <div id=\"projectTab\" class=\"panel advanced-only\">
       <div class=\"grid\">
         <div class=\"card wide\">
           <h3 data-i18n=\"project_title\">Project Integration</h3>
@@ -838,7 +845,8 @@ HTML_PAGE = """<!doctype html>
   <script>
     const I18N = {
       en: {
-        title: 'OmniMem WebUI', subtitle: 'Simple mode: Status & Actions / Configuration / Memory', language: 'Language',
+        title: 'OmniMem WebUI', subtitle_simple: 'Simple mode: Status & Actions / Insights / Memory', subtitle_adv: 'Advanced mode: full console', language: 'Language',
+        btn_advanced: 'Advanced', btn_simple: 'Simple',
         tab_status: 'Status & Actions', tab_insights: 'Insights', tab_config: 'Configuration', tab_project: 'Project Integration', tab_memory: 'Memory',
         system_status: 'System Status', actions: 'Actions',
         insights_title: 'Layered Memory Map', insights_hint: 'A quick read of how your knowledge is distributed. Click a layer to filter the Memory tab.',
@@ -865,8 +873,9 @@ HTML_PAGE = """<!doctype html>
         daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
       },
       zh: {
-        title: 'OmniMem 网页控制台', subtitle: '简洁模式：状态与动作 / 配置 / 记忆', language: '语言',
-        tab_status: '状态与动作', tab_insights: '洞察', tab_config: '配置', tab_memory: '记忆',
+        title: 'OmniMem 网页控制台', subtitle_simple: '简洁模式：状态与动作 / 洞察 / 记忆', subtitle_adv: '高级模式：完整控制台', language: '语言',
+        btn_advanced: '高级', btn_simple: '简洁',
+        tab_status: '状态与动作', tab_insights: '洞察', tab_config: '配置', tab_project: '项目集成', tab_memory: '记忆',
         system_status: '系统状态', actions: '动作',
         insights_title: '分层记忆地图', insights_hint: '快速查看你的知识在各层级的分布。点击层级可跳转并过滤记忆列表。',
         ins_kinds: '类型分布', ins_activity: '活跃度 (14天)', ins_govern: '治理', ins_govern_hint: '把稳定知识向上提升，把高波动低复用内容降级。',
@@ -876,7 +885,8 @@ HTML_PAGE = """<!doctype html>
         btn_daemon_on: '开启守护', btn_daemon_off: '关闭守护',
         config_title: '配置', cfg_path: '配置路径', cfg_home: '主目录', cfg_markdown: 'Markdown 路径', cfg_jsonl: 'JSONL 路径', cfg_sqlite: 'SQLite 路径', cfg_remote_name: 'Git 远端名', cfg_remote_url: 'Git 远端 URL', cfg_branch: 'Git 分支', btn_save: '保存配置',
         mem_recent: '最近记忆', mem_hint: '点击 ID 查看正文', mem_content: '记忆正文',
-        th_id: 'ID', th_layer: '层级', th_kind: '类型', th_summary: '摘要', th_updated: '更新时间',
+        mem_project_filter: '项目 ID 过滤', btn_mem_reload: '刷新',
+        th_id: 'ID', th_project: '项目', th_layer: '层级', th_kind: '类型', th_summary: '摘要', th_updated: '更新时间',
         cfg_saved: '配置已保存', cfg_failed: '保存失败',
         init_ok: '配置状态：已初始化', init_hint_ok: '后台守护进程会自动准实时同步（可关闭）。',
         init_missing: '配置状态：未初始化（请先保存配置）', init_hint_missing: '未初始化前不会启动守护进程。',
@@ -973,6 +983,12 @@ HTML_PAGE = """<!doctype html>
     }
     function safeSetLang(v) {
       try { localStorage.setItem('omnimem.lang', v); } catch (_) {}
+    }
+    function safeGetAdvanced() {
+      try { return (localStorage.getItem('omnimem.advanced') || '0') === '1'; } catch (_) { return false; }
+    }
+    function safeSetAdvanced(v) {
+      try { localStorage.setItem('omnimem.advanced', v ? '1' : '0'); } catch (_) {}
     }
     function safeGetToken() {
       try { return localStorage.getItem('omnimem.token') || ''; } catch (_) { return ''; }
@@ -1107,6 +1123,7 @@ HTML_PAGE = """<!doctype html>
 			    }
 		    let currentLang = safeGetLang();
 		    if (!I18N[currentLang]) currentLang = 'en';
+        let advancedOn = safeGetAdvanced();
 		    let daemonCache = { running:false, enabled:false, initialized:false };
 		    let browserPath = '';
 	    let liveOn = false;
@@ -1128,14 +1145,48 @@ HTML_PAGE = """<!doctype html>
       return dict[key] || I18N.en[key] || key;
     }
 
+    function renderMode() {
+      document.body.classList.toggle('advanced', !!advancedOn);
+      const b = document.getElementById('btnToggleAdvanced');
+      if (b) b.textContent = t(advancedOn ? 'btn_simple' : 'btn_advanced');
+      const s = document.getElementById('subTitle');
+      if (s) s.textContent = t(advancedOn ? 'subtitle_adv' : 'subtitle_simple');
+      if (!advancedOn) {
+        const active = document.querySelector('.panel.active');
+        if (active && active.classList.contains('advanced-only')) setActiveTab('statusTab');
+      }
+    }
+
 	    function applyI18n() {
       document.documentElement.lang = currentLang;
       document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         el.textContent = t(key);
       });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        el.setAttribute('placeholder', t(key));
+      });
+      document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        el.setAttribute('title', t(key));
+      });
       document.getElementById('langSelect').value = currentLang;
-      renderDaemonState();
+      renderMode();
+	      renderDaemonState();
+	    }
+
+    async function loadBuildInfo() {
+      const el = document.getElementById('buildInfo');
+      if (!el) return;
+      try {
+        const d = await jget('/api/version');
+        if (d && d.ok) {
+          const v = String(d.version || '').trim();
+          const w = String(d.webui_schema_version || '').trim();
+          el.textContent = v ? (`v${v}` + (w ? ` (webui ${w})` : '')) : '';
+        }
+      } catch (_) {}
     }
 
 	    function toast(title, body, ok) {
@@ -2663,8 +2714,13 @@ HTML_PAGE = """<!doctype html>
       applyI18n();
       loadCfg();
     };
+    document.getElementById('btnToggleAdvanced').onclick = () => {
+      advancedOn = !advancedOn;
+      safeSetAdvanced(advancedOn);
+      applyI18n();
+    };
 
-	    function bindActions() {
+		    function bindActions() {
       document.getElementById('btnSyncStatus').onclick = () => runSync('github-status');
       document.getElementById('btnSyncBootstrap').onclick = () => runSync('github-bootstrap');
       document.getElementById('btnSyncPush').onclick = () => runSync('github-push');
@@ -3101,10 +3157,11 @@ HTML_PAGE = """<!doctype html>
       if (s) s.innerHTML = `<span class=\"err\">UI error: ${e.message}</span>`;
     });
 
-	    bindActions();
-	    bindTabs();
-	    applyI18n();
-	    loadThrFromStorage();
+		    bindActions();
+		    bindTabs();
+		    applyI18n();
+        loadBuildInfo();
+		    loadThrFromStorage();
 	    loadLiveFromStorage();
 	    updateBoardToolbar();
 	    updateEventActions();
@@ -3531,6 +3588,16 @@ def run_webui(
 
             if parsed.path == "/api/health":
                 self._send_json({"ok": True})
+                return
+
+            if parsed.path == "/api/version":
+                self._send_json(
+                    {
+                        "ok": True,
+                        "version": OMNIMEM_VERSION,
+                        "webui_schema_version": str(daemon_state.get("schema_version", "")),
+                    }
+                )
                 return
 
             if parsed.path == "/api/config":
