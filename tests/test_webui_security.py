@@ -4,6 +4,7 @@ import os
 import unittest
 
 from omnimem.webui import _is_local_bind_host, _resolve_auth_token
+from omnimem.webui import _validate_webui_bind_security
 
 
 class WebUISecurityTest(unittest.TestCase):
@@ -26,6 +27,27 @@ class WebUISecurityTest(unittest.TestCase):
                 os.environ.pop("OMNIMEM_WEBUI_TOKEN", None)
             else:
                 os.environ["OMNIMEM_WEBUI_TOKEN"] = old
+
+    def test_non_local_bind_requires_token(self) -> None:
+        # If the user explicitly allows non-local binds, require a token so the API isn't wide open.
+        with self.assertRaises(ValueError):
+            _validate_webui_bind_security(
+                host="0.0.0.0",
+                allow_non_localhost=True,
+                resolved_auth_token="",
+            )
+        # Local bind can be tokenless.
+        _validate_webui_bind_security(
+            host="127.0.0.1",
+            allow_non_localhost=False,
+            resolved_auth_token="",
+        )
+        # Non-local bind with token is allowed (assuming allow_non_localhost=True).
+        _validate_webui_bind_security(
+            host="0.0.0.0",
+            allow_non_localhost=True,
+            resolved_auth_token="t",
+        )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -172,7 +173,35 @@ def load_config_with_path(path: Path | None) -> tuple[dict[str, Any], Path]:
 
 def save_config(path: Path, cfg: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    data = (json.dumps(cfg, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+    # Atomic write: avoid leaving a truncated config if the process is interrupted mid-write.
+    tmp_fp: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            delete=False,
+            dir=str(path.parent),
+            prefix=path.name + ".tmp.",
+        ) as f:
+            tmp_fp = Path(f.name)
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(str(tmp_fp), str(path))
+        try:
+            os.chmod(str(path), 0o600)
+        except Exception:
+            pass
+    finally:
+        if tmp_fp is not None and tmp_fp.exists():
+            try:
+                tmp_fp.unlink()
+            except Exception:
+                pass
 
 
 def resolve_paths(cfg: dict[str, Any]) -> MemoryPaths:

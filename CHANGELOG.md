@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.13
+
+- WebUI security: require an API token when binding to a non-local host (in addition to `--allow-non-localhost`) so `/api/*` is not exposed unauthenticated on LAN/WAN.
+- WebUI reliability: sidecar liveness probe now checks `/` instead of `/api/health` to avoid false negatives against older WebUI versions (reduces redundant respawns / port-in-use churn).
+- Core: make config writes atomic (tempfile + fsync + replace) and best-effort restrict permissions to 0600.
+- Bootstrap: use `git pull --rebase --autostash` to reduce failures when local modifications exist.
+- DevX: add `requirements-dev.txt`, `npm run test`, and GitHub Actions CI; `npm run pack:check` uses a local npm cache to avoid permissions issues from a broken global cache.
+
 ## 0.2.9
 
 - Sync: add cross-process repo lock to prevent WebUI/daemon/CLI from mutating storage during Git operations (reduces conflict/corruption risk).

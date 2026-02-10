@@ -58,7 +58,8 @@ mkdir -p "$TARGET_HOME"
 if [[ -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" fetch --all --prune
   git -C "$APP_DIR" checkout "$BRANCH"
-  git -C "$APP_DIR" pull --rebase
+  # Avoid failures when local modifications exist in the app dir.
+  git -C "$APP_DIR" pull --rebase --autostash
 else
   git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
 fi

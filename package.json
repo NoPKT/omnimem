@@ -1,6 +1,6 @@
 {
   "name": "omnimem",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "private": false,
   "description": "OmniMem CLI and bootstrap runner",
   "license": "MIT",
@@ -21,8 +21,9 @@
   "scripts": {
     "prepack": "find omnimem -name '__pycache__' -type d -prune -exec rm -rf {} +",
     "start": "./bin/omnimem start --host 127.0.0.1 --port 8765",
+    "test": "python3 -m pytest -q",
     "verify": "bash scripts/verify_phase_d.sh",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm_config_cache=$PWD/.npm-cache npm pack --dry-run"
   },
   "repository": {
     "type": "git",

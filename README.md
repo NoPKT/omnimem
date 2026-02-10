@@ -46,6 +46,7 @@ OMNIMEM_WEBUI_TOKEN='your-token' ~/.omnimem/bin/omnimem start
 Notes:
 
 - Non-local bind requires explicit opt-in: `--allow-non-localhost`.
+- If you opt into a non-local bind, you must also enable WebUI auth (set `OMNIMEM_WEBUI_TOKEN` or pass `--webui-token`).
 - If token is enabled, API calls must send header `X-OmniMem-Token`.
 - Daemon retry/backoff can be tuned with `--daemon-retry-max-attempts`, `--daemon-retry-initial-backoff`, `--daemon-retry-max-backoff`.
 

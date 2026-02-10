@@ -3435,6 +3435,24 @@ def _resolve_auth_token(cfg: dict[str, Any], explicit_token: str | None) -> str:
     return token
 
 
+def _validate_webui_bind_security(
+    *,
+    host: str,
+    allow_non_localhost: bool,
+    resolved_auth_token: str,
+) -> None:
+    is_local = _is_local_bind_host(host)
+    if not allow_non_localhost and not is_local:
+        raise ValueError(
+            f"refuse to bind non-local host without --allow-non-localhost: {host}"
+        )
+    # If the user opted into a non-local bind, require auth so the API is not wide open on a LAN/WAN.
+    if not is_local and not resolved_auth_token:
+        raise ValueError(
+            "non-local bind requires an API token; set OMNIMEM_WEBUI_TOKEN or pass --webui-token"
+        )
+
+
 def run_webui(
     *,
     host: str,
@@ -3453,12 +3471,12 @@ def run_webui(
     auth_token: str | None = None,
     allow_non_localhost: bool = False,
 ) -> None:
-    if not allow_non_localhost and not _is_local_bind_host(host):
-        raise ValueError(
-            f"refuse to bind non-local host without --allow-non-localhost: {host}"
-        )
-
     resolved_auth_token = _resolve_auth_token(cfg, auth_token)
+    _validate_webui_bind_security(
+        host=host,
+        allow_non_localhost=allow_non_localhost,
+        resolved_auth_token=resolved_auth_token,
+    )
     paths = resolve_paths(cfg)
     ensure_storage(paths, schema_sql_path)
     daemon_state: dict[str, Any] = {

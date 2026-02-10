@@ -780,10 +780,15 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
 
 
 def webui_alive(host: str, port: int) -> bool:
-    url = f"http://{host}:{port}/api/health"
+    # Use the root HTML route for liveness. It is intentionally unauthenticated and stable.
+    # Older WebUIs may not implement newer /api/* endpoints, but "/" should always exist.
+    url = f"http://{host}:{port}/"
     try:
         with urllib.request.urlopen(url, timeout=0.6) as resp:
-            return resp.status == 200
+            return 200 <= resp.status < 500
+    except urllib.error.HTTPError:
+        # HTTP errors still mean the server is alive and responding.
+        return True
     except Exception:
         return False
 
