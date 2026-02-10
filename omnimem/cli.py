@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import threading
+import time
+import uuid
 from datetime import datetime, timezone
 import subprocess
 import shutil
@@ -653,8 +656,62 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         print_json(out)
         return 0
 
+    webui_on_demand = bool(getattr(args, "webui_on_demand", False))
+    if not webui_on_demand:
+        v = os.getenv("OMNIMEM_WEBUI_ON_DEMAND", "").strip().lower()
+        webui_on_demand = v in {"1", "true", "yes", "on"}
+
     if not args.no_webui:
-        ensure_webui_running(cfg_path_arg(args), args.webui_host, args.webui_port, args.no_daemon)
+        started_by_me = ensure_webui_running(cfg_path_arg(args), args.webui_host, args.webui_port, args.no_daemon)
+        if webui_on_demand:
+            home = Path(os.environ.get("OMNIMEM_HOME", "") or "").expanduser().resolve()
+            if started_by_me:
+                try:
+                    _webui_managed_marker(home).parent.mkdir(parents=True, exist_ok=True)
+                    _webui_managed_marker(home).write_text(
+                        json.dumps(
+                            {
+                                "mode": "on_demand",
+                                "host": str(args.webui_host),
+                                "port": int(args.webui_port),
+                                "started_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+
+            lease_fp = _create_webui_lease(
+                home,
+                parent_pid=os.getpid(),
+                host=str(args.webui_host),
+                port=int(args.webui_port),
+            )
+            guard_cmd = [
+                sys.executable,
+                "-m",
+                "omnimem.cli",
+                "webui-guard",
+                "--home",
+                str(home),
+                "--parent-pid",
+                str(os.getpid()),
+                "--lease",
+                str(lease_fp),
+                "--stop-when-idle",
+            ]
+            # Detached guard; it will stop the WebUI only when the last active lease ends.
+            subprocess.Popen(
+                guard_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env=dict(os.environ),
+            )
 
     prompt = " ".join(args.prompt).strip()
     use_agent = bool(getattr(args, "agent", False))
@@ -793,9 +850,9 @@ def webui_alive(host: str, port: int) -> bool:
         return False
 
 
-def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon: bool) -> None:
+def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon: bool) -> bool:
     if webui_alive(host, port):
-        return
+        return False
 
     cfg = load_config(cfg_path)
     paths = resolve_paths(cfg)
@@ -816,6 +873,145 @@ def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon:
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
+    return True
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _webui_runtime_dir(home: Path) -> Path:
+    return home / "runtime"
+
+
+def _webui_leases_dir(home: Path) -> Path:
+    return _webui_runtime_dir(home) / "webui_leases"
+
+
+def _create_webui_lease(home: Path, *, parent_pid: int, host: str, port: int) -> Path:
+    d = _webui_leases_dir(home)
+    d.mkdir(parents=True, exist_ok=True)
+    lease_fp = d / f"lease-{uuid.uuid4().hex}.json"
+    lease_fp.write_text(
+        json.dumps(
+            {
+                "parent_pid": int(parent_pid),
+                "host": str(host),
+                "port": int(port),
+                "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return lease_fp
+
+
+def _cleanup_stale_leases(home: Path) -> list[Path]:
+    d = _webui_leases_dir(home)
+    if not d.exists():
+        return []
+    keep: list[Path] = []
+    for fp in sorted(d.glob("lease-*.json")):
+        try:
+            obj = json.loads(fp.read_text(encoding="utf-8"))
+            pid = int(obj.get("parent_pid") or 0)
+            if _pid_alive(pid):
+                keep.append(fp)
+            else:
+                fp.unlink(missing_ok=True)
+        except Exception:
+            # If a lease file is corrupt, treat it as stale.
+            try:
+                fp.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return keep
+
+
+def _webui_pid_file(home: Path) -> Path:
+    return _webui_runtime_dir(home) / "webui.pid"
+
+
+def _webui_managed_marker(home: Path) -> Path:
+    return _webui_runtime_dir(home) / "webui.managed.json"
+
+
+def _read_webui_pid(home: Path) -> int:
+    fp = _webui_pid_file(home)
+    if not fp.exists():
+        return 0
+    try:
+        obj = json.loads(fp.read_text(encoding="utf-8"))
+        return int(obj.get("pid") or 0)
+    except Exception:
+        try:
+            return int(fp.read_text(encoding="utf-8").strip() or "0")
+        except Exception:
+            return 0
+
+
+def _kill_webui(home: Path, pid: int) -> None:
+    if pid <= 0:
+        return
+    # WebUI is started with start_new_session=True; pid is typically its own process group id.
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            return
+    # Give it a moment to flush and exit.
+    for _ in range(10):
+        if not _pid_alive(pid):
+            return
+        time.sleep(0.15)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+
+def cmd_webui_guard(args: argparse.Namespace) -> int:
+    home = Path(args.home).expanduser().resolve()
+    lease_fp = Path(args.lease).expanduser().resolve()
+    parent_pid = int(args.parent_pid)
+
+    # Wait until the parent (wrapper which becomes codex/claude) exits.
+    while _pid_alive(parent_pid):
+        time.sleep(0.8)
+
+    # Release our lease.
+    try:
+        lease_fp.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    if not bool(getattr(args, "stop_when_idle", False)):
+        return 0
+
+    # Only auto-stop WebUI if it was started/managed by the wrapper (avoid killing a manually started server).
+    if not _webui_managed_marker(home).exists():
+        return 0
+
+    keep = _cleanup_stale_leases(home)
+    if keep:
+        return 0
+
+    pid = _read_webui_pid(home)
+    _kill_webui(home, pid)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -954,6 +1150,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_start.set_defaults(func=cmd_start)
 
+    # Internal helper: background guard used by wrappers to implement "on-demand" WebUI lifecycle.
+    p_guard = sub.add_parser("webui-guard", help=argparse.SUPPRESS)
+    p_guard.add_argument("--home", required=True)
+    p_guard.add_argument("--parent-pid", type=int, required=True)
+    p_guard.add_argument("--lease", required=True)
+    p_guard.add_argument("--stop-when-idle", action="store_true")
+    p_guard.set_defaults(func=cmd_webui_guard)
+
     p_cfg_path = sub.add_parser("config-path", help="print active config path")
     p_cfg_path.add_argument("--config", help="path to omnimem config json")
     p_cfg_path.set_defaults(func=cmd_config_path)
@@ -1065,6 +1269,11 @@ def build_parser() -> argparse.ArgumentParser:
         )
         p_short.add_argument("--home", help="explicit OMNIMEM_HOME override (wins over --home-mode)")
         p_short.add_argument("--no-webui", action="store_true", help="do not auto-start webui sidecar")
+        p_short.add_argument(
+            "--webui-on-demand",
+            action="store_true",
+            help="auto-stop WebUI when no active wrapper sessions (shared home); can also set OMNIMEM_WEBUI_ON_DEMAND=1",
+        )
         p_short.add_argument("--webui-host", default="127.0.0.1")
         p_short.add_argument("--webui-port", type=int, default=8765)
         p_short.add_argument("--no-daemon", action="store_true", help="when auto-starting webui, disable sync daemon")

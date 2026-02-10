@@ -120,6 +120,7 @@ Notes:
 - `omnimem codex` / `omnimem claude` launches native CLI (full tool capability).
 - WebUI is auto-started by default at `http://127.0.0.1:8765`.
 - Use `--no-webui` to disable sidecar UI startup.
+- Use `--webui-on-demand` (or `OMNIMEM_WEBUI_ON_DEMAND=1`) to auto-stop the shared WebUI when the last active wrapper session exits.
 
 ## Verification
 

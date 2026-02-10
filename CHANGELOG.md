@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.14
+
+- WebUI: add on-demand sidecar lifecycle for `omnimem codex/claude` via `--webui-on-demand` (or `OMNIMEM_WEBUI_ON_DEMAND=1`). WebUI auto-stops when the last active wrapper session exits.
+
 ## 0.2.13
 
 - WebUI security: require an API token when binding to a non-local host (in addition to `--allow-non-localhost`) so `/api/*` is not exposed unauthenticated on LAN/WAN.

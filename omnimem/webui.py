@@ -4673,9 +4673,36 @@ def run_webui(
         f"WebUI running on http://{host}:{port} "
         f"(daemon={'on' if enable_daemon else 'off'}, auth={'on' if resolved_auth_token else 'off'})"
     )
+    # PID file enables wrappers (e.g. `omnimem codex --webui-on-demand`) to stop the WebUI
+    # when no active sessions remain. Best-effort; failure should not prevent startup.
+    pid_fp = paths.root / "runtime" / "webui.pid"
+    try:
+        pid_fp.parent.mkdir(parents=True, exist_ok=True)
+        pid_fp.write_text(
+            json.dumps(
+                {
+                    "pid": int(os.getpid()),
+                    "host": str(host),
+                    "port": int(port),
+                    "started_at": utc_now(),
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
     try:
         server.serve_forever()
     finally:
         stop_event.set()
         if daemon_thread is not None:
             daemon_thread.join(timeout=1.5)
+        try:
+            if pid_fp.exists():
+                obj = json.loads(pid_fp.read_text(encoding="utf-8"))
+                if int(obj.get("pid") or 0) == int(os.getpid()):
+                    pid_fp.unlink(missing_ok=True)
+        except Exception:
+            pass
