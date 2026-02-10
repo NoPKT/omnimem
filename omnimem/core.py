@@ -105,6 +105,9 @@ def repo_lock(root: Path, timeout_s: float = 12.0):
 
 _REPO_LOCK_DEPTH: dict[str, int] = {}
 
+# Per-home guard for best-effort auto-weave triggers.
+_AUTO_WEAVE_LAST_TRY: dict[str, float] = {}
+
 def parse_list_csv(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -1764,6 +1767,9 @@ def retrieve_thread(
     depth: int = 2,
     per_hop: int = 6,
     min_weight: float = 0.18,
+    auto_weave: bool = True,
+    auto_weave_limit: int = 220,
+    auto_weave_max_wait_s: float = 2.5,
 ) -> dict[str, Any]:
     """Progressive, graph-aware retrieval.
 
@@ -1775,6 +1781,35 @@ def retrieve_thread(
     depth = max(0, min(4, int(depth)))
     per_hop = max(1, min(30, int(per_hop)))
     min_weight = max(0.0, min(1.0, float(min_weight)))
+    auto_weave = bool(auto_weave)
+
+    # Best-effort: keep the link graph from being perpetually empty when running without a daemon.
+    # Guard per home so repeated retrieves don't constantly try to weave while DB is busy.
+    if auto_weave and depth > 0:
+        key = str(paths.root)
+        last_try = _AUTO_WEAVE_LAST_TRY.get(key, 0.0)
+        if (time.time() - last_try) >= 45.0:
+            _AUTO_WEAVE_LAST_TRY[key] = time.time()
+            try:
+                with sqlite3.connect(paths.sqlite_path, timeout=1.5) as conn0:
+                    conn0.execute("PRAGMA busy_timeout = 1500")
+                    n = int(conn0.execute("SELECT COUNT(*) FROM memory_links").fetchone()[0] or 0)
+                if n == 0:
+                    weave_links(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id=project_id,
+                        limit=int(auto_weave_limit),
+                        min_weight=min_weight,
+                        max_per_src=6,
+                        include_archive=False,
+                        portable=False,
+                        max_wait_s=float(auto_weave_max_wait_s),
+                        tool="omnimem",
+                        session_id=session_id or "system",
+                    )
+            except Exception:
+                pass
 
     seeds: list[dict[str, Any]] = []
     for l in ["instant", "short", "long", "archive"]:
@@ -2495,6 +2530,13 @@ def run_sync_daemon(
     remote_url: str | None,
     scan_interval: int,
     pull_interval: int,
+    weave_enabled: bool = True,
+    weave_interval: int = 300,
+    weave_limit: int = 220,
+    weave_min_weight: float = 0.18,
+    weave_max_per_src: int = 6,
+    weave_max_wait_s: float = 12.0,
+    weave_include_archive: bool = False,
     retry_max_attempts: int = 3,
     retry_initial_backoff: int = 1,
     retry_max_backoff: int = 8,
@@ -2511,11 +2553,17 @@ def run_sync_daemon(
     last_pull_result: dict[str, Any] = {}
     last_push_result: dict[str, Any] = {}
     last_reindex_result: dict[str, Any] = {}
+    weave_runs = 0
+    weave_failures = 0
+    last_weave = 0.0
+    last_weave_seen = last_seen
+    last_weave_result: dict[str, Any] = {}
     last_error_kind = "none"
 
     while True:
         cycles += 1
         now = time.time()
+        want_weave = False
 
         if now - last_pull >= pull_interval:
             last_pull_result = run_sync_with_retry(
@@ -2535,6 +2583,8 @@ def run_sync_daemon(
                 if not last_reindex_result.get("ok"):
                     reindex_failures += 1
                     last_error_kind = "unknown"
+                else:
+                    want_weave = True
             else:
                 pull_failures += 1
                 last_error_kind = str(last_pull_result.get("error_kind", "unknown"))
@@ -2559,6 +2609,35 @@ def run_sync_daemon(
                 push_failures += 1
                 last_error_kind = str(last_push_result.get("error_kind", "unknown"))
             last_seen = current_seen
+            want_weave = True
+
+        if weave_enabled:
+            weave_due = (now - last_weave) >= max(30, int(weave_interval))
+            changed_since_weave = current_seen > last_weave_seen
+            if (want_weave and weave_due) or (weave_due and changed_since_weave):
+                try:
+                    last_weave_result = weave_links(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id="",
+                        limit=int(weave_limit),
+                        min_weight=float(weave_min_weight),
+                        max_per_src=int(weave_max_per_src),
+                        include_archive=bool(weave_include_archive),
+                        portable=False,
+                        max_wait_s=float(weave_max_wait_s),
+                        tool="daemon",
+                        session_id="system",
+                    )
+                    if last_weave_result.get("ok"):
+                        weave_runs += 1
+                        last_weave = time.time()
+                        last_weave_seen = latest_content_mtime(paths)
+                    else:
+                        weave_failures += 1
+                except Exception as exc:  # pragma: no cover
+                    weave_failures += 1
+                    last_weave_result = {"ok": False, "error": str(exc)}
 
         if once:
             break
@@ -2575,6 +2654,14 @@ def run_sync_daemon(
         "last_pull": last_pull_result,
         "last_push": last_push_result,
         "last_reindex": last_reindex_result,
+        "weave": {
+            "enabled": bool(weave_enabled),
+            "interval": int(weave_interval),
+            "runs": weave_runs,
+            "failures": weave_failures,
+            "last_weave_at": last_weave,
+            "last_result": last_weave_result,
+        },
         "last_error_kind": last_error_kind,
         "remediation_hint": sync_error_hint(last_error_kind),
         "retry": {

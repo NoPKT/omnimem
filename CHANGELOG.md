@@ -21,6 +21,11 @@
 - Codex UX: make the injected first line short + unique so Codex resume list entries are distinguishable.
 - Robustness: `weave` retries on SQLite busy/locked instead of requiring manual process killing; optional `--max-wait-s`.
 
+## 0.2.12
+
+- Auto graph maintenance: sync daemon now periodically runs `weave_links` when content changes or after a successful pull+reindex, so users don't need to run `omnimem weave` manually.
+- Retrieval: `retrieve_thread` can best-effort auto-weave (guarded) when the graph is empty and no daemon is running.
+
 ## 0.2.8
 
 - WebUI: fix another JS syntax error (`lines.join('\n')` in Python triple-quoted HTML emitted a literal newline in a JS string).
