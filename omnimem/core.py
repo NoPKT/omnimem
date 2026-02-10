@@ -31,6 +31,7 @@ EVENT_SET = {
     "memory.promote",
     "memory.verify",
     "memory.sync",
+    "memory.link",
     "memory.retrieve",
     "memory.reuse",
     "memory.decay",
@@ -230,6 +231,35 @@ def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
             pass
         _maybe_migrate_memories_table(conn)
         _maybe_repair_fk_targets(conn)
+        _maybe_create_memory_links_table(conn)
+
+
+def _maybe_create_memory_links_table(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_links'"
+    ).fetchone()
+    if row:
+        return
+    conn.executescript(
+        """
+        CREATE TABLE memory_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at TEXT NOT NULL,
+          src_id TEXT NOT NULL,
+          dst_id TEXT NOT NULL,
+          link_type TEXT NOT NULL,
+          weight REAL NOT NULL DEFAULT 0.5 CHECK (weight >= 0 AND weight <= 1),
+          reason TEXT,
+          FOREIGN KEY (src_id) REFERENCES memories(id) ON DELETE CASCADE,
+          FOREIGN KEY (dst_id) REFERENCES memories(id) ON DELETE CASCADE,
+          UNIQUE (src_id, dst_id, link_type)
+        );
+        CREATE INDEX idx_memory_links_src ON memory_links(src_id);
+        CREATE INDEX idx_memory_links_dst ON memory_links(dst_id);
+        CREATE INDEX idx_memory_links_type ON memory_links(link_type);
+        CREATE INDEX idx_memory_links_weight ON memory_links(weight);
+        """
+    )
 
 
 def _memories_table_sql(conn: sqlite3.Connection) -> str:
@@ -753,6 +783,23 @@ def insert_event(conn: sqlite3.Connection, evt: dict[str, Any]) -> None:
     )
 
 
+def insert_link(conn: sqlite3.Connection, link: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO memory_links(created_at, src_id, dst_id, link_type, weight, reason)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(link.get("created_at") or utc_now()),
+            str(link.get("src_id") or ""),
+            str(link.get("dst_id") or ""),
+            str(link.get("link_type") or "similar"),
+            float(link.get("weight") or 0.5),
+            str(link.get("reason") or ""),
+        ),
+    )
+
+
 def log_system_event(
     paths: MemoryPaths,
     schema_sql_path: Path,
@@ -793,6 +840,7 @@ def reindex_from_jsonl(paths: MemoryPaths, schema_sql_path: Path, reset: bool = 
         if reset:
             conn.execute("DELETE FROM memory_events")
             conn.execute("DELETE FROM memory_refs")
+            conn.execute("DELETE FROM memory_links")
             conn.execute("DELETE FROM memories WHERE id != ?", (system_id,))
 
         for fp in files:
@@ -834,6 +882,27 @@ def reindex_from_jsonl(paths: MemoryPaths, schema_sql_path: Path, reset: bool = 
                 except Exception:
                     skipped_events += 1
                     continue
+
+                # Rebuild graph edges from portable events.
+                if evt.get("event_type") == "memory.link":
+                    try:
+                        src_id = str(payload.get("src_id") or "")
+                        dst_id = str(payload.get("dst_id") or "")
+                        if src_id and dst_id:
+                            insert_link(
+                                conn,
+                                {
+                                    "created_at": evt.get("event_time") or utc_now(),
+                                    "src_id": src_id,
+                                    "dst_id": dst_id,
+                                    "link_type": str(payload.get("link_type") or "similar"),
+                                    "weight": float(payload.get("weight") or 0.5),
+                                    "reason": str(payload.get("reason") or ""),
+                                },
+                            )
+                    except Exception:
+                        # Don't fail reindex if a link line is malformed.
+                        pass
 
         conn.commit()
 
@@ -1499,6 +1568,344 @@ def find_memories_ex(
         rows2 = _like_rows(conn, tokens=ltoks, layer=layer, limit=limit, project_id=project_id, session_id=session_id)
         items2 = [_signals_from_row(dict(r)) for r in rows2]
         return {"ok": True, "strategy": "like_fallback", "query_used": " OR ".join(ltoks), "tried": tried, "items": items2}
+
+
+def _mem_text_tokens(text: str) -> set[str]:
+    s = str(text or "").lower()
+    toks = re.findall(r"[\w]+|[\u4e00-\u9fff]+", s, flags=re.UNICODE)
+    out: set[str] = set()
+    for t in toks:
+        tt = t.strip()
+        if not tt:
+            continue
+        if len(tt) == 1 and tt.isascii():
+            continue
+        out.add(tt)
+        if len(out) >= 80:
+            break
+    return out
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a.intersection(b))
+    if inter <= 0:
+        return 0.0
+    union = len(a.union(b))
+    return inter / max(1, union)
+
+
+def weave_links(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    limit: int = 120,
+    min_weight: float = 0.18,
+    max_per_src: int = 6,
+    include_archive: bool = True,
+    portable: bool = False,
+    max_wait_s: float = 20.0,
+    tool: str = "cli",
+    session_id: str = "system",
+) -> dict[str, Any]:
+    """Build/refresh a lightweight memory relationship graph.
+
+    Current implementation is heuristic:
+    - token overlap (summary + tags + a slice of body_text) using Jaccard similarity
+    - bidirectional 'similar' links for weights above threshold
+    """
+    with repo_lock(paths.root, timeout_s=30.0):
+        ensure_storage(paths, schema_sql_path)
+        when = utc_now()
+        limit = max(10, min(800, int(limit)))
+        min_weight = max(0.0, min(1.0, float(min_weight)))
+        max_per_src = max(1, min(50, int(max_per_src)))
+        max_wait_s = max(0.0, float(max_wait_s))
+
+        # Read phase (can run even if link writes are busy).
+        items = []
+        try:
+            with sqlite3.connect(paths.sqlite_path, timeout=6.0) as conn_r:
+                conn_r.row_factory = sqlite3.Row
+                conn_r.execute("PRAGMA foreign_keys = ON")
+                conn_r.execute("PRAGMA busy_timeout = 6000")
+                layers = ["instant", "short", "long"] + (["archive"] if include_archive else [])
+                placeholders = ",".join(["?"] * len(layers))
+                rows = conn_r.execute(
+                    f"""
+                    SELECT id, layer, kind, summary, body_text, tags_json, updated_at,
+                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id
+                    FROM memories
+                    WHERE layer IN ({placeholders})
+                      AND kind NOT IN ('retrieve','summary')
+                      AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (*layers, project_id, project_id, limit),
+                ).fetchall()
+
+                for r in rows:
+                    tags = []
+                    try:
+                        tags = json.loads(r["tags_json"] or "[]")
+                    except Exception:
+                        tags = []
+                    blob = " ".join(
+                        [
+                            str(r["summary"] or ""),
+                            " ".join([str(t) for t in (tags or [])]),
+                            str(r["body_text"] or "")[:800],
+                        ]
+                    )
+                    items.append(
+                        {
+                            "id": str(r["id"]),
+                            "layer": str(r["layer"]),
+                            "updated_at": str(r["updated_at"]),
+                            "tokens": _mem_text_tokens(blob),
+                        }
+                    )
+        except sqlite3.OperationalError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        # Compute phase (no DB).
+        proposed: list[dict[str, Any]] = []
+        considered = 0
+        for i, src in enumerate(items):
+            scored: list[tuple[float, str]] = []
+            for j, dst in enumerate(items):
+                if i == j:
+                    continue
+                considered += 1
+                w = _jaccard(src["tokens"], dst["tokens"])
+                if w >= min_weight:
+                    scored.append((w, dst["id"]))
+            scored.sort(reverse=True, key=lambda x: x[0])
+            for w, dst_id in scored[:max_per_src]:
+                proposed.append(
+                    {
+                        "created_at": when,
+                        "src_id": src["id"],
+                        "dst_id": dst_id,
+                        "link_type": "similar",
+                        "weight": float(round(w, 4)),
+                        "reason": "token-jaccard(summary,tags,body_slice)",
+                    }
+                )
+
+        # Write phase with retry (handles a busy WebUI/daemon without requiring kill).
+        start = time.time()
+        backoff = 0.2
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                with sqlite3.connect(paths.sqlite_path, timeout=8.0) as conn_w:
+                    conn_w.row_factory = sqlite3.Row
+                    conn_w.execute("PRAGMA foreign_keys = ON")
+                    conn_w.execute("PRAGMA busy_timeout = 8000")
+                    made = 0
+                    system_id = ensure_system_memory(paths, schema_sql_path)
+                    for link in proposed:
+                        insert_link(conn_w, link)
+                        evt = {
+                            "event_id": make_id(),
+                            "event_type": "memory.link",
+                            "event_time": when,
+                            "memory_id": system_id,
+                            "payload": {
+                                "src_id": link["src_id"],
+                                "dst_id": link["dst_id"],
+                                "link_type": link["link_type"],
+                                "weight": link["weight"],
+                                "reason": link.get("reason", ""),
+                            },
+                        }
+                        # By default links are derived/heuristic: keep them device-local to avoid Git churn.
+                        if portable:
+                            append_jsonl(event_file_path(paths, datetime.now(timezone.utc)), evt)
+                        insert_event(conn_w, evt)
+                        made += 1
+                    conn_w.commit()
+                return {
+                    "ok": True,
+                    "project_id": project_id,
+                    "made": made,
+                    "considered": considered,
+                    "min_weight": min_weight,
+                    "limit": limit,
+                    "portable": bool(portable),
+                    "attempts": attempt,
+                }
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                if "database is locked" not in msg and "database is busy" not in msg:
+                    return {"ok": False, "error": str(exc)}
+                if (time.time() - start) >= max_wait_s:
+                    return {
+                        "ok": False,
+                        "error": f"database is locked (waited {max_wait_s:.1f}s); stop other omnimem processes (webui/daemon/codex wrapper) and retry",
+                    }
+                time.sleep(backoff)
+                backoff = min(1.6, backoff * 1.6)
+
+
+def retrieve_thread(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    query: str,
+    project_id: str = "",
+    session_id: str = "",
+    seed_limit: int = 8,
+    depth: int = 2,
+    per_hop: int = 6,
+    min_weight: float = 0.18,
+) -> dict[str, Any]:
+    """Progressive, graph-aware retrieval.
+
+    1) Seed from shallow layers (instant/short) with fuzzy matching.
+    2) Expand outward along memory_links (both directions), preferring deeper layers.
+    """
+    ensure_storage(paths, schema_sql_path)
+    seed_limit = max(1, min(30, int(seed_limit)))
+    depth = max(0, min(4, int(depth)))
+    per_hop = max(1, min(30, int(per_hop)))
+    min_weight = max(0.0, min(1.0, float(min_weight)))
+
+    seeds: list[dict[str, Any]] = []
+    for l in ["instant", "short", "long", "archive"]:
+        if len(seeds) >= seed_limit:
+            break
+        out = find_memories_ex(
+            paths=paths,
+            schema_sql_path=schema_sql_path,
+            query=query,
+            layer=l,
+            limit=seed_limit,
+            project_id=project_id,
+            session_id=session_id,
+        )
+        for it in (out.get("items") or []):
+            if len(seeds) >= seed_limit:
+                break
+            if not any(x.get("id") == it.get("id") for x in seeds):
+                it2 = dict(it)
+                it2["_seed_layer"] = l
+                seeds.append(it2)
+
+    layer_bonus = {"instant": 0.95, "short": 1.0, "long": 1.12, "archive": 1.08}
+
+    visited: set[str] = set()
+    scored: dict[str, float] = {}
+    paths_explain: dict[str, list[dict[str, Any]]] = {}
+    frontier: list[str] = []
+    for i, s in enumerate(seeds):
+        mid = str(s.get("id") or "")
+        if not mid:
+            continue
+        visited.add(mid)
+        scored[mid] = max(scored.get(mid, 0.0), 1.0 - (i * 0.03))
+        paths_explain[mid] = [{"hop": 0, "via": "seed", "id": mid}]
+        frontier.append(mid)
+
+    with sqlite3.connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 6000")
+        for hop in range(1, depth + 1):
+            if not frontier:
+                break
+            next_frontier: list[str] = []
+            # Expand both directions: src->dst and dst->src
+            placeholders = ",".join(["?"] * len(frontier))
+            rows = conn.execute(
+                f"""
+                SELECT created_at, src_id, dst_id, link_type, weight, reason
+                FROM memory_links
+                WHERE (src_id IN ({placeholders}) OR dst_id IN ({placeholders}))
+                  AND weight >= ?
+                ORDER BY weight DESC
+                """,
+                (*frontier, *frontier, min_weight),
+            ).fetchall()
+
+            # Score candidates, keep best per hop.
+            cand: dict[str, tuple[float, dict[str, Any]]] = {}
+            for r in rows:
+                w = float(r["weight"] or 0.0)
+                src_id = str(r["src_id"] or "")
+                dst_id = str(r["dst_id"] or "")
+                a = src_id
+                b = dst_id
+                if a in frontier:
+                    from_id, to_id = a, b
+                elif b in frontier:
+                    from_id, to_id = b, a
+                else:
+                    continue
+                if not to_id or to_id in visited:
+                    continue
+                to_layer = conn.execute("SELECT layer FROM memories WHERE id = ?", (to_id,)).fetchone()
+                lb = layer_bonus.get(str(to_layer[0]) if to_layer else "short", 1.0)
+                base = scored.get(from_id, 0.4)
+                score = base * w * lb
+                cur = cand.get(to_id)
+                if cur is None or score > cur[0]:
+                    cand[to_id] = (
+                        score,
+                        {
+                            "hop": hop,
+                            "from_id": from_id,
+                            "to_id": to_id,
+                            "link_type": str(r["link_type"] or ""),
+                            "weight": w,
+                            "reason": str(r["reason"] or ""),
+                        },
+                    )
+
+            top = sorted(cand.items(), key=lambda kv: kv[1][0], reverse=True)[: per_hop * max(1, len(frontier))]
+            for to_id, (score, edge) in top[: per_hop]:
+                visited.add(to_id)
+                scored[to_id] = score
+                paths_explain[to_id] = (paths_explain.get(edge["from_id"], []) + [edge])[-8:]
+                next_frontier.append(to_id)
+            frontier = next_frontier
+
+        # Materialize items.
+        ids = sorted(scored.keys(), key=lambda k: scored[k], reverse=True)[: max(seed_limit, 12)]
+        if not ids:
+            return {"ok": True, "query": query, "items": [], "explain": {"seeds": seeds, "paths": {}}}
+        placeholders = ",".join(["?"] * len(ids))
+        rows2 = conn.execute(
+            f"""
+            SELECT id, layer, kind, summary, updated_at, body_md_path,
+                   COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                   COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
+                   importance_score, confidence_score, stability_score, reuse_count, volatility_score
+            FROM memories
+            WHERE id IN ({placeholders})
+            """,
+            tuple(ids),
+        ).fetchall()
+        out_items = []
+        for r in rows2:
+            d = _signals_from_row(dict(r))
+            d["score"] = float(round(scored.get(str(d.get("id")), 0.0), 6))
+            out_items.append(d)
+        out_items.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
+
+    return {
+        "ok": True,
+        "query": query,
+        "items": out_items,
+        "explain": {
+            "seeds": seeds,
+            "paths": {k: v for k, v in paths_explain.items() if k in {x.get("id") for x in out_items}},
+        },
+    }
 
 
 def build_brief(paths: MemoryPaths, schema_sql_path: Path, project_id: str, limit: int) -> dict[str, Any]:

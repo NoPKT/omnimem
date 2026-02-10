@@ -213,6 +213,50 @@ def cmd_brief(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_weave(args: argparse.Namespace) -> int:
+    from .core import weave_links
+
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = weave_links(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        limit=int(args.limit),
+        min_weight=float(args.min_weight),
+        max_per_src=int(args.max_per_src),
+        include_archive=not bool(args.no_archive),
+        portable=bool(getattr(args, "portable", False)),
+        max_wait_s=float(getattr(args, "max_wait_s", 20.0)),
+        tool="cli",
+        session_id=str(args.session_id or "system"),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_retrieve(args: argparse.Namespace) -> int:
+    from .core import retrieve_thread
+
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = retrieve_thread(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        query=str(args.query or "").strip(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        seed_limit=int(args.seed_limit),
+        depth=int(args.depth),
+        per_hop=int(args.per_hop),
+        min_weight=float(args.min_weight),
+    )
+    if not getattr(args, "explain", False):
+        out.pop("explain", None)
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     cfg = load_config(cfg_path_arg(args))
     paths = resolve_paths(cfg)
@@ -649,14 +693,17 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         brief = build_brief(paths, schema, project_id, limit=6)
         mems = find_memories(paths, schema, query="", layer=None, limit=args.retrieve_limit, project_id=project_id)
 
+        # Codex uses the first prompt content as the session title in its resume list.
+        # Make the first line short + uniquely identifying to avoid every session looking identical.
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        place = run_cwd_path.name or "workspace"
         lines = [
-            "OmniMem sidecar is enabled for this session.",
-            f"Project ID: {project_id}",
-            "Use memory protocol automatically:",
-            "- On stable decisions/facts, call `omnimem write`.",
-            "- On topic drift or phase switch, call `omnimem checkpoint` and start a new thread.",
-            "- Prefer short-term first; promote to long-term only when repeated and stable.",
-            "- Never store raw secrets; only credential refs.",
+            f"OmniMem: {project_id} ({place}) {now}",
+            "",
+            "Memory protocol (auto):",
+            "- stable decisions/facts -> `omnimem write`",
+            "- topic drift/phase switch -> `omnimem checkpoint`",
+            "- do not store raw secrets; use credential refs",
         ]
         if brief.get("checkpoints"):
             lines.append("Recent checkpoints:")
@@ -814,6 +861,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_brief.add_argument("--project-id", default="")
     p_brief.add_argument("--limit", type=int, default=8)
     p_brief.set_defaults(func=cmd_brief)
+
+    p_weave = sub.add_parser("weave", help="build/refresh memory relationship links (graph)")
+    p_weave.add_argument("--config", help="path to omnimem config json")
+    p_weave.add_argument("--project-id", default="", help="optional project filter")
+    p_weave.add_argument("--session-id", default="system", help="event session_id for instrumentation")
+    p_weave.add_argument("--limit", type=int, default=120, help="number of recent memories to consider")
+    p_weave.add_argument("--min-weight", type=float, default=0.18, help="minimum similarity to create a link")
+    p_weave.add_argument("--max-per-src", type=int, default=6, help="max outgoing links per memory")
+    p_weave.add_argument("--no-archive", action="store_true", help="exclude archive layer from graph")
+    p_weave.add_argument("--portable", action="store_true", help="also write link events to JSONL (more sync churn)")
+    p_weave.add_argument("--max-wait-s", type=float, default=20.0, help="seconds to wait/retry on sqlite busy/locked")
+    p_weave.set_defaults(func=cmd_weave)
+
+    p_retrieve = sub.add_parser("retrieve", help="progressive multi-hop retrieval using memory graph")
+    p_retrieve.add_argument("--config", help="path to omnimem config json")
+    p_retrieve.add_argument("query", nargs="?", default="")
+    p_retrieve.add_argument("--project-id", default="", help="optional project filter")
+    p_retrieve.add_argument("--session-id", default="", help="optional session filter")
+    p_retrieve.add_argument("--seed-limit", type=int, default=8, help="max seed memories from shallow layers")
+    p_retrieve.add_argument("--depth", type=int, default=2, help="max hops to expand via links")
+    p_retrieve.add_argument("--per-hop", type=int, default=6, help="fan-out per hop")
+    p_retrieve.add_argument("--min-weight", type=float, default=0.18, help="minimum link weight to traverse")
+    p_retrieve.add_argument("--explain", action="store_true", help="include seed/paths explanation")
+    p_retrieve.set_defaults(func=cmd_retrieve)
 
     p_verify = sub.add_parser("verify", help="consistency verification")
     p_verify.add_argument("--config", help="path to omnimem config json")

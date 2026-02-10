@@ -51,6 +51,24 @@ CREATE TABLE IF NOT EXISTS memory_events (
 
 CREATE INDEX IF NOT EXISTS idx_memory_events_type_time ON memory_events(event_type, event_time);
 
+CREATE TABLE IF NOT EXISTS memory_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  src_id TEXT NOT NULL,
+  dst_id TEXT NOT NULL,
+  link_type TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 0.5 CHECK (weight >= 0 AND weight <= 1),
+  reason TEXT,
+  FOREIGN KEY (src_id) REFERENCES memories(id) ON DELETE CASCADE,
+  FOREIGN KEY (dst_id) REFERENCES memories(id) ON DELETE CASCADE,
+  UNIQUE (src_id, dst_id, link_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_links_src ON memory_links(src_id);
+CREATE INDEX IF NOT EXISTS idx_memory_links_dst ON memory_links(dst_id);
+CREATE INDEX IF NOT EXISTS idx_memory_links_type ON memory_links(link_type);
+CREATE INDEX IF NOT EXISTS idx_memory_links_weight ON memory_links(weight);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
   id UNINDEXED,
   summary,

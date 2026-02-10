@@ -16,6 +16,7 @@ from .core import (
     build_brief,
     bump_reuse_counts,
     find_memories,
+    retrieve_thread,
     load_config,
     resolve_paths,
     write_memory,
@@ -191,7 +192,22 @@ def run_turn(
     drift = 1.0 - sim
 
     brief = build_brief(paths, schema, project_id, limit=6)
-    rel = find_memories(paths, schema, query=user_prompt, layer=None, limit=limit, project_id=project_id)
+    # Progressive retrieval: seed shallow memories, then pull deeper ones via graph links when available.
+    # Falls back to plain FTS/LIKE if the graph isn't built yet.
+    rel_out = retrieve_thread(
+        paths=paths,
+        schema_sql_path=schema,
+        query=user_prompt,
+        project_id=project_id,
+        session_id="",
+        seed_limit=min(12, max(4, int(limit))),
+        depth=2,
+        per_hop=6,
+        min_weight=0.18,
+    )
+    rel = list(rel_out.get("items") or [])
+    if not rel:
+        rel = find_memories(paths, schema, query=user_prompt, layer=None, limit=limit, project_id=project_id)
     bump_reuse_counts(
         paths=paths,
         schema_sql_path=schema,

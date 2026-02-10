@@ -13,6 +13,14 @@
 - Find: make `omnimem find` resilient to FTS5 query syntax (e.g. `v0.2.6`) by normalizing punctuation and retrying multiple safe FTS variants.
 - Find: add automatic fallback to a LIKE-based search when FTS fails/returns empty, plus `--explain`, `--project-id`, `--session-id` filters.
 
+## 0.2.11
+
+- Memory graph: add `memory_links` table and `omnimem weave` to build a lightweight relationship graph (derived, heuristic links).
+- Retrieval: add `omnimem retrieve` for progressive multi-hop retrieval (seed shallow, then pull deeper via links) with optional explanations.
+- Agent: switch agent retrieval to graph-aware `retrieve_thread` when available.
+- Codex UX: make the injected first line short + unique so Codex resume list entries are distinguishable.
+- Robustness: `weave` retries on SQLite busy/locked instead of requiring manual process killing; optional `--max-wait-s`.
+
 ## 0.2.8
 
 - WebUI: fix another JS syntax error (`lines.join('\n')` in Python triple-quoted HTML emitted a literal newline in a JS string).
