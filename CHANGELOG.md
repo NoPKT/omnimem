@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.18
+
+- CLI: add `omnimem doctor` diagnostics with actionable remediation hints for WebUI runtime health, daemon status, sync readiness, and storage verification.
+- Sync daemon: trigger GitHub push checks on `mtime_or_dirty` (not only mtime) so local commits are propagated even when repository timestamps do not move as expected.
+- Versioning: align Python runtime version and npm package version to `0.2.18`.
+
 ## 0.2.17
 
 - WebUI: add maintenance impact forecast + progressive disclosure UX (`risk_level`, expected touches, and collapsible explain details) and fix Guided Check preview counters to consume forecast output consistently.

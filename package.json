@@ -1,6 +1,6 @@
 {
   "name": "omnimem",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "private": false,
   "description": "OmniMem CLI and bootstrap runner",
   "license": "MIT",
