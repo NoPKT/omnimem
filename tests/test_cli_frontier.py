@@ -99,6 +99,25 @@ class CLIFrontierCommandTest(unittest.TestCase):
         )
         self.assertEqual(a.cmd, "prune")
 
+    def test_start_prune_maintenance_args_registered(self) -> None:
+        p = build_parser()
+        a = p.parse_args(
+            [
+                "start",
+                "--daemon-maintenance-prune-enabled",
+                "--daemon-maintenance-prune-days",
+                "60",
+                "--daemon-maintenance-prune-limit",
+                "400",
+                "--daemon-maintenance-prune-layers",
+                "instant,short",
+                "--daemon-maintenance-prune-keep-kinds",
+                "decision,checkpoint",
+            ]
+        )
+        self.assertEqual(a.cmd, "start")
+        self.assertTrue(bool(a.daemon_maintenance_prune_enabled))
+
 
 if __name__ == "__main__":
     unittest.main()

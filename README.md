@@ -305,6 +305,12 @@ Git sync size-control options:
 - CLI overrides: `omnimem sync --sync-layers long,archive --no-sync-include-jsonl`.
 - Same options are also respected by WebUI-triggered sync and daemon background sync.
 
+Optional daemon prune maintenance (default off):
+
+- WebUI/`start` flags: `--daemon-maintenance-prune-enabled`, `--daemon-maintenance-prune-days`, `--daemon-maintenance-prune-limit`, `--daemon-maintenance-prune-layers`, `--daemon-maintenance-prune-keep-kinds`.
+- Config keys under `daemon`: `maintenance_prune_enabled`, `maintenance_prune_days`, `maintenance_prune_limit`, `maintenance_prune_layers`, `maintenance_prune_keep_kinds`.
+- Recommended safe baseline: keep prune disabled until you validate `omnimem prune` preview output for your dataset.
+
 Nightly memory-eval workflow:
 
 - GitHub Actions `nightly-memory-eval` runs `eval_core_merge` + `tune_core_merge_from_eval --dry-run` on deterministic seeded core blocks.

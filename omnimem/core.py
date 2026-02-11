@@ -6429,6 +6429,11 @@ def run_sync_daemon(
     maintenance_interval: int = 300,
     maintenance_decay_days: int = 14,
     maintenance_decay_limit: int = 120,
+    maintenance_prune_enabled: bool = False,
+    maintenance_prune_days: int = 45,
+    maintenance_prune_limit: int = 300,
+    maintenance_prune_layers: list[str] | None = None,
+    maintenance_prune_keep_kinds: list[str] | None = None,
     maintenance_consolidate_limit: int = 80,
     maintenance_compress_sessions: int = 2,
     maintenance_compress_min_items: int = 8,
@@ -6585,6 +6590,21 @@ def run_sync_daemon(
                     tool="daemon",
                     session_id="system",
                 )
+                prune_out = {"ok": True, "enabled": False, "count": 0, "deleted": 0}
+                if bool(maintenance_prune_enabled):
+                    prune_out = prune_memories(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        days=int(maintenance_prune_days),
+                        limit=int(maintenance_prune_limit),
+                        project_id="",
+                        session_id="",
+                        layers=list(maintenance_prune_layers or ["instant", "short"]),
+                        keep_kinds=list(maintenance_prune_keep_kinds or ["decision", "checkpoint"]),
+                        dry_run=False,
+                        tool="daemon",
+                        actor_session_id="system",
+                    )
                 cons_out = consolidate_memories(
                     paths=paths,
                     schema_sql_path=schema_sql_path,
@@ -6694,8 +6714,18 @@ def run_sync_daemon(
                         actor_session_id="system",
                     )
                 last_maintenance_result = {
-                    "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
+                    "ok": bool(decay_out.get("ok") and prune_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
                     "decay": decay_out,
+                    "prune": {
+                        "enabled": bool(maintenance_prune_enabled),
+                        "days": int(maintenance_prune_days),
+                        "limit": int(maintenance_prune_limit),
+                        "layers": list(maintenance_prune_layers or ["instant", "short"]),
+                        "keep_kinds": list(maintenance_prune_keep_kinds or ["decision", "checkpoint"]),
+                        "candidates": int(prune_out.get("count", 0) or 0),
+                        "deleted": int(prune_out.get("deleted", 0) or 0),
+                        "ok": bool(prune_out.get("ok", True)),
+                    },
                     "consolidate": {
                         "promoted": len(cons_out.get("promoted") or []),
                         "demoted": len(cons_out.get("demoted") or []),

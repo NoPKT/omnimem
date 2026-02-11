@@ -730,6 +730,10 @@ def cmd_webui(args: argparse.Namespace) -> int:
             return False
         return bool(default)
 
+    def _pick_csv(name: str, arg_value: str | None, default: str) -> str:
+        raw = arg_value if arg_value is not None else dm.get(name, default)
+        return ",".join([x.strip() for x in str(raw or "").split(",") if x.strip()])
+
     run_webui(
         host=args.host,
         port=args.port,
@@ -748,6 +752,19 @@ def cmd_webui(args: argparse.Namespace) -> int:
         daemon_maintenance_interval=_pick_int("maintenance_interval", getattr(args, "daemon_maintenance_interval", None), 300, 60, 86400),
         daemon_maintenance_decay_days=_pick_int("maintenance_decay_days", getattr(args, "daemon_maintenance_decay_days", None), 14, 1, 365),
         daemon_maintenance_decay_limit=_pick_int("maintenance_decay_limit", getattr(args, "daemon_maintenance_decay_limit", None), 120, 1, 2000),
+        daemon_maintenance_prune_enabled=_pick_bool("maintenance_prune_enabled", getattr(args, "daemon_maintenance_prune_enabled", None), False),
+        daemon_maintenance_prune_days=_pick_int("maintenance_prune_days", getattr(args, "daemon_maintenance_prune_days", None), 45, 1, 3650),
+        daemon_maintenance_prune_limit=_pick_int("maintenance_prune_limit", getattr(args, "daemon_maintenance_prune_limit", None), 300, 1, 5000),
+        daemon_maintenance_prune_layers=_pick_csv(
+            "maintenance_prune_layers",
+            getattr(args, "daemon_maintenance_prune_layers", None),
+            "instant,short",
+        ),
+        daemon_maintenance_prune_keep_kinds=_pick_csv(
+            "maintenance_prune_keep_kinds",
+            getattr(args, "daemon_maintenance_prune_keep_kinds", None),
+            "decision,checkpoint",
+        ),
         daemon_maintenance_consolidate_limit=_pick_int("maintenance_consolidate_limit", getattr(args, "daemon_maintenance_consolidate_limit", None), 80, 1, 1000),
         daemon_maintenance_compress_sessions=_pick_int("maintenance_compress_sessions", getattr(args, "daemon_maintenance_compress_sessions", None), 2, 1, 20),
         daemon_maintenance_compress_min_items=_pick_int("maintenance_compress_min_items", getattr(args, "daemon_maintenance_compress_min_items", None), 8, 2, 200),
@@ -2387,6 +2404,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_webui.add_argument("--daemon-maintenance-interval", type=int, default=None)
     p_webui.add_argument("--daemon-maintenance-decay-days", type=int, default=None)
     p_webui.add_argument("--daemon-maintenance-decay-limit", type=int, default=None)
+    p_webui.add_argument(
+        "--daemon-maintenance-prune-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable daemon prune maintenance",
+    )
+    p_webui.add_argument("--daemon-maintenance-prune-days", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-prune-limit", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-prune-layers", default=None)
+    p_webui.add_argument("--daemon-maintenance-prune-keep-kinds", default=None)
     p_webui.add_argument("--daemon-maintenance-consolidate-limit", type=int, default=None)
     p_webui.add_argument("--daemon-maintenance-compress-sessions", type=int, default=None)
     p_webui.add_argument("--daemon-maintenance-compress-min-items", type=int, default=None)
@@ -2442,6 +2469,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--daemon-maintenance-interval", type=int, default=None)
     p_start.add_argument("--daemon-maintenance-decay-days", type=int, default=None)
     p_start.add_argument("--daemon-maintenance-decay-limit", type=int, default=None)
+    p_start.add_argument(
+        "--daemon-maintenance-prune-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable daemon prune maintenance",
+    )
+    p_start.add_argument("--daemon-maintenance-prune-days", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-prune-limit", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-prune-layers", default=None)
+    p_start.add_argument("--daemon-maintenance-prune-keep-kinds", default=None)
     p_start.add_argument("--daemon-maintenance-consolidate-limit", type=int, default=None)
     p_start.add_argument("--daemon-maintenance-compress-sessions", type=int, default=None)
     p_start.add_argument("--daemon-maintenance-compress-min-items", type=int, default=None)

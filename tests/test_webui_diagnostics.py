@@ -8,6 +8,7 @@ import sqlite3
 
 from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
+    _cfg_to_ui,
     _aggregate_event_stats,
     _apply_memory_filters,
     _build_smart_memories_cache_key,
@@ -201,6 +202,23 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(layers, ["long", "archive"])
         self.assertFalse(include_jsonl)
+
+    def test_cfg_to_ui_contains_prune_fields(self) -> None:
+        cfg = {
+            "daemon": {
+                "maintenance_prune_enabled": True,
+                "maintenance_prune_days": 50,
+                "maintenance_prune_limit": 420,
+                "maintenance_prune_layers": ["instant", "short"],
+                "maintenance_prune_keep_kinds": ["decision", "checkpoint"],
+            }
+        }
+        out = _cfg_to_ui(cfg, Path("/tmp/omnimem.config.json"))
+        self.assertTrue(bool(out.get("daemon_maintenance_prune_enabled")))
+        self.assertEqual(int(out.get("daemon_maintenance_prune_days", 0)), 50)
+        self.assertEqual(int(out.get("daemon_maintenance_prune_limit", 0)), 420)
+        self.assertEqual(str(out.get("daemon_maintenance_prune_layers") or ""), "instant,short")
+        self.assertEqual(str(out.get("daemon_maintenance_prune_keep_kinds") or ""), "decision,checkpoint")
 
     def test_memory_route_inference(self) -> None:
         self.assertEqual(_normalize_memory_route("procedural"), "procedural")

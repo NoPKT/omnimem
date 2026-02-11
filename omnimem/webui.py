@@ -768,6 +768,11 @@ HTML_PAGE = """<!doctype html>
             <label><span>Maintenance Interval (s)</span><input name=\"daemon_maintenance_interval\" type=\"number\" min=\"60\" max=\"86400\" /></label>
             <label><span>Maintenance Decay Days</span><input name=\"daemon_maintenance_decay_days\" type=\"number\" min=\"1\" max=\"365\" /></label>
             <label><span>Maintenance Decay Limit</span><input name=\"daemon_maintenance_decay_limit\" type=\"number\" min=\"1\" max=\"2000\" /></label>
+            <label><span>Maintenance Prune Enabled</span><select name=\"daemon_maintenance_prune_enabled\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
+            <label><span>Maintenance Prune Days</span><input name=\"daemon_maintenance_prune_days\" type=\"number\" min=\"1\" max=\"3650\" /></label>
+            <label><span>Maintenance Prune Limit</span><input name=\"daemon_maintenance_prune_limit\" type=\"number\" min=\"1\" max=\"5000\" /></label>
+            <label><span>Maintenance Prune Layers (csv)</span><input name=\"daemon_maintenance_prune_layers\" placeholder=\"instant,short\" /></label>
+            <label><span>Maintenance Prune Keep Kinds (csv)</span><input name=\"daemon_maintenance_prune_keep_kinds\" placeholder=\"decision,checkpoint\" /></label>
             <label><span>Maintenance Consolidate Limit</span><input name=\"daemon_maintenance_consolidate_limit\" type=\"number\" min=\"1\" max=\"1000\" /></label>
             <label><span>Maintenance Compress Sessions</span><input name=\"daemon_maintenance_compress_sessions\" type=\"number\" min=\"1\" max=\"20\" /></label>
             <label><span>Maintenance Compress Min Items</span><input name=\"daemon_maintenance_compress_min_items\" type=\"number\" min=\"2\" max=\"200\" /></label>
@@ -1951,7 +1956,10 @@ HTML_PAGE = """<!doctype html>
         'daemon_scan_interval','daemon_pull_interval',
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
-        'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
+        'daemon_maintenance_decay_limit',
+        'daemon_maintenance_prune_enabled','daemon_maintenance_prune_days','daemon_maintenance_prune_limit',
+        'daemon_maintenance_prune_layers','daemon_maintenance_prune_keep_kinds',
+        'daemon_maintenance_consolidate_limit',
         'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
         'daemon_maintenance_temporal_tree_enabled','daemon_maintenance_temporal_tree_days',
         'daemon_maintenance_rehearsal_enabled','daemon_maintenance_rehearsal_days','daemon_maintenance_rehearsal_limit',
@@ -2393,7 +2401,10 @@ HTML_PAGE = """<!doctype html>
         'daemon_scan_interval','daemon_pull_interval',
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
-        'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
+        'daemon_maintenance_decay_limit',
+        'daemon_maintenance_prune_enabled','daemon_maintenance_prune_days','daemon_maintenance_prune_limit',
+        'daemon_maintenance_prune_layers','daemon_maintenance_prune_keep_kinds',
+        'daemon_maintenance_consolidate_limit',
         'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
         'daemon_maintenance_temporal_tree_enabled','daemon_maintenance_temporal_tree_days',
         'daemon_maintenance_rehearsal_enabled','daemon_maintenance_rehearsal_days','daemon_maintenance_rehearsal_limit',
@@ -4413,6 +4424,15 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "daemon_maintenance_interval": dm.get("maintenance_interval", 300),
         "daemon_maintenance_decay_days": dm.get("maintenance_decay_days", 14),
         "daemon_maintenance_decay_limit": dm.get("maintenance_decay_limit", 120),
+        "daemon_maintenance_prune_enabled": dm.get("maintenance_prune_enabled", False),
+        "daemon_maintenance_prune_days": dm.get("maintenance_prune_days", 45),
+        "daemon_maintenance_prune_limit": dm.get("maintenance_prune_limit", 300),
+        "daemon_maintenance_prune_layers": ",".join(
+            [str(x).strip() for x in (dm.get("maintenance_prune_layers") or ["instant", "short"]) if str(x).strip()]
+        ),
+        "daemon_maintenance_prune_keep_kinds": ",".join(
+            [str(x).strip() for x in (dm.get("maintenance_prune_keep_kinds") or ["decision", "checkpoint"]) if str(x).strip()]
+        ),
         "daemon_maintenance_consolidate_limit": dm.get("maintenance_consolidate_limit", 80),
         "daemon_maintenance_compress_sessions": dm.get("maintenance_compress_sessions", 2),
         "daemon_maintenance_compress_min_items": dm.get("maintenance_compress_min_items", 8),
@@ -5554,6 +5574,11 @@ def run_webui(
     daemon_maintenance_interval: int = 300,
     daemon_maintenance_decay_days: int = 14,
     daemon_maintenance_decay_limit: int = 120,
+    daemon_maintenance_prune_enabled: bool = False,
+    daemon_maintenance_prune_days: int = 45,
+    daemon_maintenance_prune_limit: int = 300,
+    daemon_maintenance_prune_layers: str = "instant,short",
+    daemon_maintenance_prune_keep_kinds: str = "decision,checkpoint",
     daemon_maintenance_consolidate_limit: int = 80,
     daemon_maintenance_compress_sessions: int = 2,
     daemon_maintenance_compress_min_items: int = 8,
@@ -5640,6 +5665,14 @@ def run_webui(
         "maintenance_interval": max(60, int(daemon_maintenance_interval)),
         "maintenance_decay_days": max(1, int(daemon_maintenance_decay_days)),
         "maintenance_decay_limit": max(1, int(daemon_maintenance_decay_limit)),
+        "maintenance_prune_enabled": bool(daemon_maintenance_prune_enabled),
+        "maintenance_prune_days": max(1, int(daemon_maintenance_prune_days)),
+        "maintenance_prune_limit": max(1, int(daemon_maintenance_prune_limit)),
+        "maintenance_prune_layers": [x.strip() for x in str(daemon_maintenance_prune_layers or "").split(",") if x.strip()] or ["instant", "short"],
+        "maintenance_prune_keep_kinds": [
+            x.strip() for x in str(daemon_maintenance_prune_keep_kinds or "").split(",") if x.strip()
+        ]
+        or ["decision", "checkpoint"],
         "maintenance_consolidate_limit": max(1, int(daemon_maintenance_consolidate_limit)),
         "maintenance_compress_sessions": max(1, int(daemon_maintenance_compress_sessions)),
         "maintenance_compress_min_items": max(2, int(daemon_maintenance_compress_min_items)),
@@ -5711,6 +5744,14 @@ def run_webui(
                     maintenance_interval=int(daemon_state.get("maintenance_interval", 300)),
                     maintenance_decay_days=int(daemon_state.get("maintenance_decay_days", 14)),
                     maintenance_decay_limit=int(daemon_state.get("maintenance_decay_limit", 120)),
+                    maintenance_prune_enabled=bool(daemon_state.get("maintenance_prune_enabled", False)),
+                    maintenance_prune_days=int(daemon_state.get("maintenance_prune_days", 45)),
+                    maintenance_prune_limit=int(daemon_state.get("maintenance_prune_limit", 300)),
+                    maintenance_prune_layers=list(daemon_state.get("maintenance_prune_layers", ["instant", "short"]) or ["instant", "short"]),
+                    maintenance_prune_keep_kinds=list(
+                        daemon_state.get("maintenance_prune_keep_kinds", ["decision", "checkpoint"])
+                        or ["decision", "checkpoint"]
+                    ),
                     maintenance_consolidate_limit=int(daemon_state.get("maintenance_consolidate_limit", 80)),
                     maintenance_compress_sessions=int(daemon_state.get("maintenance_compress_sessions", 2)),
                     maintenance_compress_min_items=int(daemon_state.get("maintenance_compress_min_items", 8)),
@@ -7028,6 +7069,29 @@ def run_webui(
                 dm["maintenance_interval"] = _to_int("daemon_maintenance_interval", int(daemon_state.get("maintenance_interval", 300)), 60, 86400)
                 dm["maintenance_decay_days"] = _to_int("daemon_maintenance_decay_days", int(daemon_state.get("maintenance_decay_days", 14)), 1, 365)
                 dm["maintenance_decay_limit"] = _to_int("daemon_maintenance_decay_limit", int(daemon_state.get("maintenance_decay_limit", 120)), 1, 2000)
+                dm["maintenance_prune_enabled"] = _to_bool(
+                    "daemon_maintenance_prune_enabled", bool(daemon_state.get("maintenance_prune_enabled", False))
+                )
+                dm["maintenance_prune_days"] = _to_int(
+                    "daemon_maintenance_prune_days", int(daemon_state.get("maintenance_prune_days", 45)), 1, 3650
+                )
+                dm["maintenance_prune_limit"] = _to_int(
+                    "daemon_maintenance_prune_limit", int(daemon_state.get("maintenance_prune_limit", 300)), 1, 5000
+                )
+                raw_prune_layers = str(
+                    data.get(
+                        "daemon_maintenance_prune_layers",
+                        ",".join(list(daemon_state.get("maintenance_prune_layers", ["instant", "short"]))),
+                    )
+                ).strip()
+                dm["maintenance_prune_layers"] = [x.strip() for x in raw_prune_layers.split(",") if x.strip()]
+                raw_prune_keep = str(
+                    data.get(
+                        "daemon_maintenance_prune_keep_kinds",
+                        ",".join(list(daemon_state.get("maintenance_prune_keep_kinds", ["decision", "checkpoint"]))),
+                    )
+                ).strip()
+                dm["maintenance_prune_keep_kinds"] = [x.strip() for x in raw_prune_keep.split(",") if x.strip()]
                 dm["maintenance_consolidate_limit"] = _to_int("daemon_maintenance_consolidate_limit", int(daemon_state.get("maintenance_consolidate_limit", 80)), 1, 1000)
                 dm["maintenance_compress_sessions"] = _to_int("daemon_maintenance_compress_sessions", int(daemon_state.get("maintenance_compress_sessions", 2)), 1, 20)
                 dm["maintenance_compress_min_items"] = _to_int("daemon_maintenance_compress_min_items", int(daemon_state.get("maintenance_compress_min_items", 8)), 2, 200)
@@ -7062,6 +7126,13 @@ def run_webui(
                     daemon_state["maintenance_interval"] = int(dm["maintenance_interval"])
                     daemon_state["maintenance_decay_days"] = int(dm["maintenance_decay_days"])
                     daemon_state["maintenance_decay_limit"] = int(dm["maintenance_decay_limit"])
+                    daemon_state["maintenance_prune_enabled"] = bool(dm["maintenance_prune_enabled"])
+                    daemon_state["maintenance_prune_days"] = int(dm["maintenance_prune_days"])
+                    daemon_state["maintenance_prune_limit"] = int(dm["maintenance_prune_limit"])
+                    daemon_state["maintenance_prune_layers"] = list(dm["maintenance_prune_layers"] or ["instant", "short"])
+                    daemon_state["maintenance_prune_keep_kinds"] = list(
+                        dm["maintenance_prune_keep_kinds"] or ["decision", "checkpoint"]
+                    )
                     daemon_state["maintenance_consolidate_limit"] = int(dm["maintenance_consolidate_limit"])
                     daemon_state["maintenance_compress_sessions"] = int(dm["maintenance_compress_sessions"])
                     daemon_state["maintenance_compress_min_items"] = int(dm["maintenance_compress_min_items"])
