@@ -200,6 +200,12 @@ PYTHONPATH=. python3 -m omnimem.cli distill --project-id OM --session-id <sessio
 PYTHONPATH=. python3 -m omnimem.cli distill --project-id OM --session-id <session_id> --apply
 ```
 
+Profile-aware retrieval (optional):
+
+```bash
+PYTHONPATH=. python3 -m omnimem.cli retrieve "workflow guide" --project-id OM --profile-aware --profile-weight 0.5 --explain
+```
+
 Tune daemon adaptive governance quantiles from the eval report:
 
 ```bash

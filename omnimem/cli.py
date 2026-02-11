@@ -308,6 +308,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         diversify=bool(getattr(args, "diversify", True)),
         mmr_lambda=float(getattr(args, "mmr_lambda", 0.72)),
         max_items=int(getattr(args, "max_items", 12)),
+        profile_aware=bool(getattr(args, "profile_aware", False)),
+        profile_weight=float(getattr(args, "profile_weight", 0.35)),
+        profile_limit=int(getattr(args, "profile_limit", 240)),
     )
     if not getattr(args, "explain", False):
         out.pop("explain", None)
@@ -1942,6 +1945,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_retrieve.add_argument("--mmr-lambda", type=float, default=0.72, help="MMR relevance/diversity tradeoff (0..1)")
     p_retrieve.add_argument("--max-items", type=int, default=12, help="maximum retrieval results")
+    p_retrieve.add_argument(
+        "--profile-aware",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="use profile-aware re-ranking",
+    )
+    p_retrieve.add_argument("--profile-weight", type=float, default=0.35, help="profile boost weight (0..1)")
+    p_retrieve.add_argument("--profile-limit", type=int, default=240, help="max memories sampled for profile inference")
     p_retrieve.add_argument("--explain", action="store_true", help="include seed/paths explanation")
     p_retrieve.set_defaults(func=cmd_retrieve)
 

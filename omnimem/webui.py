@@ -5587,7 +5587,10 @@ def run_webui(
     event_stats_lock = threading.Lock()
     events_cache: dict[tuple[str, str, str, int], tuple[float, dict[str, Any]]] = {}
     events_cache_lock = threading.Lock()
-    smart_retrieve_cache: dict[tuple[str, str, str, int, int, str, bool, float, int], tuple[float, dict[str, Any]]] = {}
+    smart_retrieve_cache: dict[
+        tuple[str, str, str, int, int, str, bool, float, int, bool, float],
+        tuple[float, dict[str, Any]],
+    ] = {}
     smart_retrieve_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -5732,6 +5735,8 @@ def run_webui(
                 per_hop = _parse_int_param(q.get("per_hop", ["6"])[0], default=6, lo=1, hi=30)
                 ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
                 diversify = str(q.get("diversify", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
+                profile_aware = str(q.get("profile_aware", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
+                profile_weight = _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
                 dedup_mode = _normalize_dedup_mode(q.get("dedup", ["off"])[0])
                 mmr_lambda = _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95)
                 if mode == "smart" and query:
@@ -5739,7 +5744,19 @@ def run_webui(
                     hop_i = int(per_hop)
                     rank_i = ranking_mode if ranking_mode in {"path", "ppr", "hybrid"} else "hybrid"
                     limit_i = max(8, min(30, int(limit)))
-                    cache_key = (project_id, session_id, query, depth_i, hop_i, rank_i, bool(diversify), float(mmr_lambda), limit_i)
+                    cache_key = (
+                        project_id,
+                        session_id,
+                        query,
+                        depth_i,
+                        hop_i,
+                        rank_i,
+                        bool(diversify),
+                        float(mmr_lambda),
+                        limit_i,
+                        bool(profile_aware),
+                        float(profile_weight),
+                    )
                     out: dict[str, Any] | None = None
                     now = time.time()
                     with smart_retrieve_lock:
@@ -5761,6 +5778,8 @@ def run_webui(
                             self_check=True,
                             adaptive_feedback=True,
                             feedback_reuse_step=1,
+                            profile_aware=bool(profile_aware),
+                            profile_weight=float(profile_weight),
                         )
                         with smart_retrieve_lock:
                             _cache_set(smart_retrieve_cache, cache_key, out, now=now, max_items=96)

@@ -2950,6 +2950,9 @@ def find_memories(
     limit: int,
     project_id: str = "",
     session_id: str = "",
+    profile_aware: bool = False,
+    profile_weight: float = 0.35,
+    profile_limit: int = 240,
 ) -> list[dict[str, Any]]:
     res = find_memories_ex(
         paths=paths,
@@ -2959,6 +2962,9 @@ def find_memories(
         limit=limit,
         project_id=project_id,
         session_id=session_id,
+        profile_aware=profile_aware,
+        profile_weight=profile_weight,
+        profile_limit=profile_limit,
     )
     return list(res.get("items") or [])
 
@@ -3064,13 +3070,31 @@ def _token_overlap_score(summary: str, query_tokens: list[str]) -> float:
     return _jaccard(qt, st)
 
 
+def _profile_affinity_score(item: dict[str, Any], *, profile_terms: set[str], profile_tags: set[str]) -> float:
+    if not profile_terms and not profile_tags:
+        return 0.0
+    summary = str(item.get("summary", "") or "")
+    stoks = _mem_text_tokens(summary)
+    term_sim = _jaccard(stoks, profile_terms) if profile_terms else 0.0
+    raw_tags = [str(t).strip().lower() for t in (item.get("tags") or []) if str(t).strip()]
+    it_tags = set(raw_tags)
+    tag_sim = _jaccard(it_tags, profile_tags) if profile_tags else 0.0
+    return max(0.0, min(1.0, (0.62 * term_sim) + (0.38 * tag_sim)))
+
+
 def _attach_cognitive_retrieval(
     items: list[dict[str, Any]],
     *,
     strategy: str,
     query_tokens: list[str],
+    profile_terms: set[str] | None = None,
+    profile_tags: set[str] | None = None,
+    profile_weight: float = 0.0,
 ) -> list[dict[str, Any]]:
     now_dt = datetime.now(timezone.utc)
+    p_terms = set(profile_terms or set())
+    p_tags = set(profile_tags or set())
+    p_w = max(0.0, min(1.0, float(profile_weight or 0.0)))
     out: list[dict[str, Any]] = []
     for it in items:
         sig = it.get("signals") or {}
@@ -3091,6 +3115,8 @@ def _attach_cognitive_retrieval(
         relevance_gate = 0.15 + (0.85 * lexical if query_tokens else 0.85 * relevance)
         reuse = reuse_raw * relevance_gate
         stability_eff = stability * (0.55 + (0.45 * relevance))
+        profile_aff = _profile_affinity_score(it, profile_terms=p_terms, profile_tags=p_tags)
+        profile_boost = profile_aff * p_w * (0.40 + (0.60 * max(lexical, relevance)))
 
         # Inspired by generative-memory retrieval (relevance + recency + importance)
         # and long-term-memory stabilization signals used by OmniMem.
@@ -3102,6 +3128,7 @@ def _attach_cognitive_retrieval(
             + 0.10 * stability_eff
             + 0.07 * confidence
             + 0.05 * reuse
+            + 0.08 * profile_boost
             - 0.04 * volatility
         )
         score = max(0.0, min(1.0, float(score)))
@@ -3120,6 +3147,9 @@ def _attach_cognitive_retrieval(
                 "reuse": reuse,
                 "reuse_raw": reuse_raw,
                 "relevance_gate": relevance_gate,
+                "profile_affinity": profile_aff,
+                "profile_boost": profile_boost,
+                "profile_weight": p_w,
                 "volatility_penalty": volatility,
             },
         }
@@ -3221,12 +3251,34 @@ def find_memories_ex(
     limit: int,
     project_id: str = "",
     session_id: str = "",
+    profile_aware: bool = False,
+    profile_weight: float = 0.35,
+    profile_limit: int = 240,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     ensure_storage(paths, schema_sql_path)
     query = str(query or "").strip()
     limit = max(1, min(200, int(limit)))
     tried: list[dict[str, str]] = []
+
+    p_terms: set[str] = set()
+    p_tags: set[str] = set()
+    p_enabled = bool(profile_aware)
+    if p_enabled:
+        try:
+            pout = build_user_profile(
+                paths=paths,
+                schema_sql_path=schema_sql_path,
+                project_id=project_id,
+                session_id=session_id,
+                limit=max(20, min(1200, int(profile_limit))),
+            )
+            prof = dict(pout.get("profile") or {})
+            p_terms = set([str(x.get("term") or "").strip().lower() for x in (prof.get("top_terms") or []) if str(x.get("term") or "").strip()])
+            p_tags = set([str(x.get("tag") or "").strip().lower() for x in (prof.get("top_tags") or []) if str(x.get("tag") or "").strip()])
+        except Exception:
+            p_terms = set()
+            p_tags = set()
 
     with _sqlite_connect(paths.sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -3263,17 +3315,26 @@ def find_memories_ex(
                     (project_id, project_id, session_id, session_id, limit),
                 ).fetchall()
             items = [_signals_from_row(dict(r)) for r in rows]
+            reranked = _attach_cognitive_retrieval(
+                items,
+                strategy="recent",
+                query_tokens=[],
+                profile_terms=p_terms,
+                profile_tags=p_tags,
+                profile_weight=profile_weight if p_enabled else 0.0,
+            )
             return {
                 "ok": True,
                 "strategy": "recent",
                 "query_used": "",
                 "tried": tried,
-                "items": items,
+                "items": reranked,
                 "metrics": {
                     "pipeline_ms": {
                         "total": int((time.perf_counter() - t0) * 1000),
                     }
                 },
+                "profile": {"enabled": p_enabled, "terms": len(p_terms), "tags": len(p_tags), "weight": float(profile_weight)},
             }
 
         tokens = _query_tokens(query)
@@ -3298,7 +3359,14 @@ def find_memories_ex(
                 continue
             if rows:
                 items = [_signals_from_row(dict(r)) for r in rows]
-                reranked = _attach_cognitive_retrieval(items, strategy=strat, query_tokens=tokens)
+                reranked = _attach_cognitive_retrieval(
+                    items,
+                    strategy=strat,
+                    query_tokens=tokens,
+                    profile_terms=p_terms,
+                    profile_tags=p_tags,
+                    profile_weight=profile_weight if p_enabled else 0.0,
+                )
                 return {
                     "ok": True,
                     "strategy": strat,
@@ -3310,6 +3378,7 @@ def find_memories_ex(
                             "total": int((time.perf_counter() - t0) * 1000),
                         }
                     },
+                    "profile": {"enabled": p_enabled, "terms": len(p_terms), "tags": len(p_tags), "weight": float(profile_weight)},
                 }
 
         # Resilient fallback.
@@ -3317,7 +3386,14 @@ def find_memories_ex(
         tried.append({"strategy": "like_fallback", "query_used": " OR ".join(ltoks)})
         rows2 = _like_rows(conn, tokens=ltoks, layer=layer, limit=limit, project_id=project_id, session_id=session_id)
         items2 = [_signals_from_row(dict(r)) for r in rows2]
-        reranked2 = _attach_cognitive_retrieval(items2, strategy="like_fallback", query_tokens=ltoks)
+        reranked2 = _attach_cognitive_retrieval(
+            items2,
+            strategy="like_fallback",
+            query_tokens=ltoks,
+            profile_terms=p_terms,
+            profile_tags=p_tags,
+            profile_weight=profile_weight if p_enabled else 0.0,
+        )
         return {
             "ok": True,
             "strategy": "like_fallback",
@@ -3329,6 +3405,7 @@ def find_memories_ex(
                     "total": int((time.perf_counter() - t0) * 1000),
                 }
             },
+            "profile": {"enabled": p_enabled, "terms": len(p_terms), "tags": len(p_tags), "weight": float(profile_weight)},
         }
 
 
@@ -3968,6 +4045,9 @@ def retrieve_thread(
     self_check: bool = True,
     adaptive_feedback: bool = False,
     feedback_reuse_step: int = 1,
+    profile_aware: bool = False,
+    profile_weight: float = 0.35,
+    profile_limit: int = 240,
 ) -> dict[str, Any]:
     """Progressive, graph-aware retrieval.
 
@@ -3989,6 +4069,9 @@ def retrieve_thread(
     max_items = max(1, min(60, int(max_items)))
     diversify = bool(diversify)
     mmr_lambda = max(0.05, min(0.95, float(mmr_lambda)))
+    profile_aware = bool(profile_aware)
+    profile_weight = max(0.0, min(1.0, float(profile_weight)))
+    profile_limit = max(20, min(1200, int(profile_limit)))
 
     # Best-effort: keep the link graph from being perpetually empty when running without a daemon.
     # Guard per home so repeated retrieves don't constantly try to weave while DB is busy.
@@ -4031,6 +4114,9 @@ def retrieve_thread(
             limit=seed_limit,
             project_id=project_id,
             session_id=session_id,
+            profile_aware=profile_aware,
+            profile_weight=profile_weight,
+            profile_limit=profile_limit,
         )
         for it in (out.get("items") or []):
             if len(seeds) >= seed_limit:
@@ -4185,6 +4271,7 @@ def retrieve_thread(
                     "why_recalled": {},
                     "self_check": _self_rag_check(query, []) if self_check else {"enabled": False},
                     "adaptive_feedback": {"enabled": bool(adaptive_feedback), "updated": 0},
+                    "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
                     "pipeline_ms": {
                         "seed": t_seed_ms,
                         "graph": t_graph_ms,
@@ -4285,6 +4372,7 @@ def retrieve_thread(
             "why_recalled": why_map,
             "self_check": self_eval,
             "adaptive_feedback": feedback,
+            "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
             "pipeline_ms": {
                 "seed": t_seed_ms,
                 "graph": t_graph_ms,

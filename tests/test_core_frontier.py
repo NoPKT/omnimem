@@ -33,7 +33,7 @@ class CoreFrontierFeatureTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _write(self, summary: str, body: str, reuse_count: int = 0) -> str:
+    def _write(self, summary: str, body: str, reuse_count: int = 0, tags: list[str] | None = None) -> str:
         out = write_memory(
             paths=self.paths,
             schema_sql_path=self.schema,
@@ -41,7 +41,7 @@ class CoreFrontierFeatureTest(unittest.TestCase):
             kind="note",
             summary=summary,
             body=body,
-            tags=[],
+            tags=list(tags or []),
             refs=[],
             cred_refs=[],
             tool="test",
@@ -75,6 +75,7 @@ class CoreFrontierFeatureTest(unittest.TestCase):
         ex = out.get("explain") or {}
         self.assertIn("self_check", ex)
         self.assertIn("pipeline_ms", ex)
+        self.assertIn("profile", ex)
         sc = ex.get("self_check") or {}
         self.assertTrue(isinstance(sc.get("missing_tokens"), list))
 
@@ -122,6 +123,24 @@ class CoreFrontierFeatureTest(unittest.TestCase):
         )
         self.assertTrue(out.get("ok"))
         self.assertGreaterEqual(len(out.get("candidates") or []), 1)
+
+    def test_retrieve_thread_profile_aware_explain(self) -> None:
+        self._write("python workflow guide", "prefer python workflows", tags=["python"])
+        self._write("generic workflow guide", "generic steps", tags=["general"])
+        out = retrieve_thread(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            query="workflow guide",
+            project_id="OM",
+            session_id="s1",
+            max_items=5,
+            profile_aware=True,
+            profile_weight=0.5,
+        )
+        self.assertTrue(out.get("ok"))
+        ex = out.get("explain") or {}
+        prof = ex.get("profile") or {}
+        self.assertTrue(bool(prof.get("enabled")))
 
 
 if __name__ == "__main__":
