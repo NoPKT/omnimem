@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 
 from omnimem.core import MemoryPaths, ensure_storage
-from omnimem.webui import _evaluate_governance_action, _run_health_check
+from omnimem.webui import (
+    _evaluate_governance_action,
+    _infer_memory_route,
+    _normalize_memory_route,
+    _run_health_check,
+)
 
 
 def _schema_sql_path() -> Path:
@@ -13,6 +18,13 @@ def _schema_sql_path() -> Path:
 
 
 class WebUIDiagnosticsTest(unittest.TestCase):
+    def test_memory_route_inference(self) -> None:
+        self.assertEqual(_normalize_memory_route("procedural"), "procedural")
+        self.assertEqual(_normalize_memory_route("bad-value"), "auto")
+        self.assertEqual(_infer_memory_route("how to run omnimem script"), "procedural")
+        self.assertEqual(_infer_memory_route("what is memory graph"), "semantic")
+        self.assertEqual(_infer_memory_route("when did we change daemon"), "episodic")
+
     def test_evaluate_governance_action_promote(self) -> None:
         out = _evaluate_governance_action(
             layer="short",
@@ -78,4 +90,3 @@ class WebUIDiagnosticsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

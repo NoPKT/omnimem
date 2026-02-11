@@ -446,6 +446,14 @@ HTML_PAGE = """<!doctype html>
           </div>
           <pre id=\"healthOut\" class=\"small\"></pre>
         </div>
+        <div class=\"card\">
+          <h3>Getting Started</h3>
+          <div class=\"small\">Guided safe workflow: health check -> maintenance preview -> apply with approval.</div>
+          <div class=\"row-btn\">
+            <button id=\"btnGuideRun\" class=\"secondary\">Run Guided Check</button>
+          </div>
+          <pre id=\"guideOut\" class=\"small\">1) Run Health Check\n2) Open Insights and preview Auto Maintenance\n3) Apply only after checking recommendations</pre>
+        </div>
       </div>
     </div>
 
@@ -803,6 +811,15 @@ HTML_PAGE = """<!doctype html>
 	                <option value=\"path\">path</option>
 	              </select>
 	            </label>
+              <label style=\"margin-top:0\">Route
+                <select id=\"memRouteMode\" class=\"lang\" style=\"max-width:170px;\">
+                  <option value=\"auto\" selected>auto</option>
+                  <option value=\"general\">general</option>
+                  <option value=\"episodic\">episodic</option>
+                  <option value=\"semantic\">semantic</option>
+                  <option value=\"procedural\">procedural</option>
+                </select>
+              </label>
 	            <button id=\"btnMemAutoTune\" class=\"secondary\" style=\"margin-top:0\">Auto Tune</button>
 	            <span id=\"memRetrieveHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
@@ -902,8 +919,14 @@ HTML_PAGE = """<!doctype html>
 	        <button id=\"btnPromote\" style=\"margin-top:0\">Promote → long</button>
 	        <button id=\"btnDemote\" class=\"secondary\" style=\"margin-top:0\">Demote → short</button>
 	        <button id=\"btnArchive\" class=\"secondary\" style=\"margin-top:0\">Archive</button>
+          <button id=\"btnUndoLastMove\" class=\"secondary\" style=\"margin-top:0\">Undo Last Move</button>
           <button id=\"btnExplainReco\" class=\"secondary\" style=\"margin-top:0\">Explain</button>
 	      </div>
+        <div class=\"row-btn\" style=\"margin-top:8px\">
+          <button id=\"btnClassifyEpisodic\" class=\"secondary\" style=\"margin-top:0\">Tag episodic</button>
+          <button id=\"btnClassifySemantic\" class=\"secondary\" style=\"margin-top:0\">Tag semantic</button>
+          <button id=\"btnClassifyProcedural\" class=\"secondary\" style=\"margin-top:0\">Tag procedural</button>
+        </div>
 	    </div>
 	    <div class=\"drawer-body\">
       <div class=\"muted-box\">
@@ -1122,9 +1145,10 @@ HTML_PAGE = """<!doctype html>
 	          depth: Number(localStorage.getItem('omnimem.mem_depth') || '2'),
 	          per_hop: Number(localStorage.getItem('omnimem.mem_per_hop') || '6'),
 	          ranking: localStorage.getItem('omnimem.mem_ranking') || 'hybrid',
+            route: localStorage.getItem('omnimem.mem_route') || 'auto',
 	        };
 	      } catch (_) {
-	        return { mode: 'basic', depth: 2, per_hop: 6, ranking: 'hybrid' };
+	        return { mode: 'basic', depth: 2, per_hop: 6, ranking: 'hybrid', route: 'auto' };
 	      }
 	    }
 	    function safeSetRetrievePrefs(p) {
@@ -1133,6 +1157,7 @@ HTML_PAGE = """<!doctype html>
 	        localStorage.setItem('omnimem.mem_depth', String(p.depth || 2));
 	        localStorage.setItem('omnimem.mem_per_hop', String(p.per_hop || 6));
 	        localStorage.setItem('omnimem.mem_ranking', String(p.ranking || 'hybrid'));
+          localStorage.setItem('omnimem.mem_route', String(p.route || 'auto'));
 	      } catch (_) {}
 	    }
 	    function safeGetWorkset() {
@@ -1513,6 +1538,71 @@ HTML_PAGE = """<!doctype html>
       ].join('\n');
     }
 
+    async function runGuidedCheck() {
+      const out = document.getElementById('guideOut');
+      if (out) out.textContent = 'running guided check...';
+      await runHealthCheck();
+      const pid = (document.getElementById('insProjectId')?.value || '').trim();
+      const sid = (document.getElementById('insSessionId')?.value || '').trim();
+      const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: true, ack_token: '' });
+      if (!out) return;
+      if (!d.ok) {
+        out.textContent = `1) health check done\n2) maintenance preview failed: ${d.error || 'unknown'}\n3) adjust config and retry`;
+        return;
+      }
+      out.textContent = [
+        '1) health check done',
+        `2) preview: decay=${d.decay?.count || 0} promote=${d.consolidate?.promote?.length || 0} demote=${d.consolidate?.demote?.length || 0} compressed=${d.compress?.compressed ? 1 : 0}`,
+        '3) open Insights tab and review Governance/Events before apply',
+      ].join('\n');
+      setActiveTab('insightsTab');
+      await loadInsights();
+    }
+
+    async function undoLastMove(memoryId) {
+      const d = await jpost('/api/memory/undo-last-move', { id: memoryId });
+      if (!d.ok) {
+        toast('Memory', d.error || 'undo failed', false);
+        return;
+      }
+      toast('Memory', `undone: ${d.from_layer || '?'} <- ${d.to_layer || '?'}`, true);
+      await loadMem();
+      await loadInsights();
+      await loadLayerStats();
+      await openMemory(memoryId);
+    }
+
+    async function classifyDrawerMemory(kind) {
+      const m = drawerMem;
+      if (!m || !m.id) return;
+      const k = String(kind || '').trim().toLowerCase();
+      if (!['episodic', 'semantic', 'procedural'].includes(k)) return;
+      const edS = document.getElementById('dEditSummary');
+      const edB = document.getElementById('dEditBody');
+      const summary = (edS?.value || m.summary || '').trim();
+      const body = String(edB?.value || '').trim();
+      if (!summary) {
+        toast('Memory', 'summary is empty; cannot classify', false);
+        return;
+      }
+      const base = Array.isArray(m.tags) ? m.tags.map(x => String(x || '').trim()).filter(Boolean) : [];
+      const kept = base.filter(t => !/^mem:(episodic|semantic|procedural)$/i.test(t));
+      const nextTags = kept.concat([`mem:${k}`]);
+      const d = await jpost('/api/memory/update', {
+        id: m.id,
+        summary,
+        body,
+        tags: nextTags,
+      });
+      if (!d.ok) {
+        toast('Memory', d.error || 'tag update failed', false);
+        return;
+      }
+      toast('Memory', `classified as mem:${k}`, true);
+      await loadMem();
+      await openMemory(m.id);
+    }
+
     function authHeaders(base) {
       const headers = Object.assign({}, base || {});
       const token = safeGetToken();
@@ -1640,13 +1730,15 @@ HTML_PAGE = """<!doctype html>
 	      const depthEl = document.getElementById('memRetrieveDepth');
 	      const hopEl = document.getElementById('memRetrievePerHop');
 	      const rankEl = document.getElementById('memRankingMode');
+        const routeEl = document.getElementById('memRouteMode');
 	      if (modeEl) modeEl.value = 'smart';
 	      if (depthEl) depthEl.value = String(depth);
 	      if (hopEl) hopEl.value = String(per_hop);
 	      if (rankEl) rankEl.value = ranking;
+        if (routeEl) routeEl.value = 'auto';
 	      const hint = document.getElementById('memRetrieveHint');
 	      if (hint) hint.textContent = `auto: depth=${depth}, per_hop=${per_hop}, ranking=${ranking} (${why})`;
-	      safeSetRetrievePrefs({ mode: 'smart', depth, per_hop, ranking });
+	      safeSetRetrievePrefs({ mode: 'smart', depth, per_hop, ranking, route: 'auto' });
 	    }
 
 	    function loadRetrievePrefs() {
@@ -1655,10 +1747,12 @@ HTML_PAGE = """<!doctype html>
 	      const depthEl = document.getElementById('memRetrieveDepth');
 	      const hopEl = document.getElementById('memRetrievePerHop');
 	      const rankEl = document.getElementById('memRankingMode');
+        const routeEl = document.getElementById('memRouteMode');
 	      if (modeEl) modeEl.value = String(p.mode || 'basic');
 	      if (depthEl) depthEl.value = String(Number.isFinite(p.depth) ? p.depth : 2);
 	      if (hopEl) hopEl.value = String(Number.isFinite(p.per_hop) ? p.per_hop : 6);
 	      if (rankEl) rankEl.value = String(p.ranking || 'hybrid');
+        if (routeEl) routeEl.value = String(p.route || 'auto');
 	    }
 
 	    async function loadMem() {
@@ -1670,11 +1764,13 @@ HTML_PAGE = """<!doctype html>
 	      const depth = Number(document.getElementById('memRetrieveDepth')?.value || 2);
 	      const per_hop = Number(document.getElementById('memRetrievePerHop')?.value || 6);
 	      const ranking_mode = document.getElementById('memRankingMode')?.value?.trim() || 'hybrid';
+        const route_mode = document.getElementById('memRouteMode')?.value?.trim() || 'auto';
 	      safeSetRetrievePrefs({
 	        mode,
 	        depth: Number.isFinite(depth) ? Math.max(1, Math.min(4, Math.floor(depth))) : 2,
 	        per_hop: Number.isFinite(per_hop) ? Math.max(1, Math.min(30, Math.floor(per_hop))) : 6,
 	        ranking: ranking_mode || 'hybrid',
+          route: route_mode || 'auto',
 	      });
 	      const d = await jget(
 	        '/api/memories?limit=20'
@@ -1686,6 +1782,7 @@ HTML_PAGE = """<!doctype html>
 	        + '&depth=' + encodeURIComponent(String(Number.isFinite(depth) ? depth : 2))
 	        + '&per_hop=' + encodeURIComponent(String(Number.isFinite(per_hop) ? per_hop : 6))
 	        + '&ranking_mode=' + encodeURIComponent(ranking_mode)
+          + '&route=' + encodeURIComponent(route_mode)
 	      );
 	      const rh = document.getElementById('memRetrieveHint');
 	      if (rh) {
@@ -1694,9 +1791,9 @@ HTML_PAGE = """<!doctype html>
 	          const seedsN = Array.isArray(ex.seeds) ? ex.seeds.length : 0;
 	          const pathsN = ex.paths ? Object.keys(ex.paths).length : 0;
 	          const rm = ex.ranking_mode || ranking_mode;
-	          rh.textContent = `smart: ranking=${rm}, seeds=${seedsN}, path_hits=${pathsN}`;
+	          rh.textContent = `smart: ranking=${rm}, route=${d.route || route_mode}, seeds=${seedsN}, path_hits=${pathsN}`;
 	        } else if (mode !== 'smart') {
-	          rh.textContent = '';
+	          rh.textContent = `basic: route=${d.route || route_mode}`;
 	        }
 	      }
 	      const b = document.getElementById('memBody');
@@ -3113,6 +3210,8 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnConflictRecovery').onclick = () => runConflictRecovery();
       const bHealth = document.getElementById('btnHealthCheck');
       if (bHealth) bHealth.onclick = () => runHealthCheck();
+      const bGuide = document.getElementById('btnGuideRun');
+      if (bGuide) bGuide.onclick = () => runGuidedCheck();
 	          document.getElementById('btnProjectAttach').onclick = () => attachProject();
 	          document.getElementById('btnProjectDetach').onclick = () => detachProject();
 	          document.getElementById('btnMemReload').onclick = () => loadMem();
@@ -3121,6 +3220,7 @@ HTML_PAGE = """<!doctype html>
 	          document.getElementById('memLayer').onchange = () => loadMem();
           document.getElementById('memRetrieveMode').onchange = () => loadMem();
           document.getElementById('memRankingMode').onchange = () => loadMem();
+          document.getElementById('memRouteMode').onchange = () => loadMem();
           document.getElementById('memRetrieveDepth').onchange = () => loadMem();
           document.getElementById('memRetrievePerHop').onchange = () => loadMem();
           document.getElementById('memSessionId').onchange = () => { loadMem(); loadLayerStats(); };
@@ -3189,10 +3289,18 @@ HTML_PAGE = """<!doctype html>
 		      const bSave = document.getElementById('btnSave');
 		      const bCancel = document.getElementById('btnCancel');
           const bExplain = document.getElementById('btnExplainReco');
+          const bUndo = document.getElementById('btnUndoLastMove');
+          const bEpi = document.getElementById('btnClassifyEpisodic');
+          const bSem = document.getElementById('btnClassifySemantic');
+          const bPro = document.getElementById('btnClassifyProcedural');
 		      if (bEdit) bEdit.onclick = () => setDrawerEditMode(true);
 		      if (bCancel) bCancel.onclick = () => setDrawerEditMode(false);
 		      if (bSave) bSave.onclick = () => saveDrawerEdit();
           if (bExplain) bExplain.onclick = async () => { if (drawerMem && drawerMem.id) await loadGovernanceExplain(drawerMem.id); };
+          if (bUndo) bUndo.onclick = async () => { if (drawerMem && drawerMem.id) await undoLastMove(drawerMem.id); };
+          if (bEpi) bEpi.onclick = () => classifyDrawerMemory('episodic');
+          if (bSem) bSem.onclick = () => classifyDrawerMemory('semantic');
+          if (bPro) bPro.onclick = () => classifyDrawerMemory('procedural');
 		      const mo = document.getElementById('modalOverlay');
 	      if (mo) mo.onclick = () => { showWsModal(false); clearWsHash(); };
 	      const mclose = document.getElementById('btnWsModalClose');
@@ -3930,6 +4038,58 @@ def _evaluate_governance_action(
     }
 
 
+def _normalize_memory_route(route: str) -> str:
+    r = str(route or "").strip().lower()
+    if r in {"episodic", "semantic", "procedural", "auto", "general"}:
+        return r
+    return "auto"
+
+
+def _infer_memory_route(query: str) -> str:
+    q = str(query or "").strip().lower()
+    if not q:
+        return "general"
+    episodic_hits = ["when", "yesterday", "last time", "之前", "上次", "什么时候", "昨天", "session", "timeline"]
+    procedural_hits = ["how to", "steps", "command", "cli", "script", "怎么", "步骤", "命令", "脚本", "如何"]
+    semantic_hits = ["what is", "define", "concept", "meaning", "是什么", "定义", "概念", "原理"]
+    if any(x in q for x in procedural_hits):
+        return "procedural"
+    if any(x in q for x in episodic_hits):
+        return "episodic"
+    if any(x in q for x in semantic_hits):
+        return "semantic"
+    return "general"
+
+
+def _route_tag(route: str) -> str:
+    return f"mem:{route}"
+
+
+def _filter_items_by_route(paths, items: list[dict[str, Any]], route: str) -> list[dict[str, Any]]:
+    if route not in {"episodic", "semantic", "procedural"}:
+        return items
+    ids = [str(x.get("id", "")).strip() for x in items if str(x.get("id", "")).strip()]
+    if not ids:
+        return items
+    tag = _route_tag(route)
+    keep: set[str] = set()
+    placeholders = ",".join(["?"] * len(ids))
+    with sqlite3.connect(paths.sqlite_path, timeout=2.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"SELECT id, tags_json FROM memories WHERE id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        for r in rows:
+            try:
+                tags = [str(t).strip().lower() for t in (json.loads(r["tags_json"] or "[]") or [])]
+            except Exception:
+                tags = []
+            if tag in tags:
+                keep.add(str(r["id"]))
+    return [x for x in items if str(x.get("id", "")) in keep]
+
+
 def _run_health_check(paths, daemon_state: dict[str, Any]) -> dict[str, Any]:
     checked_at = utc_now()
     db_ok = False
@@ -4398,6 +4558,8 @@ def run_webui(
                 layer = q.get("layer", [""])[0].strip() or None
                 query = q.get("query", [""])[0].strip()
                 mode = q.get("mode", ["basic"])[0].strip().lower() or "basic"
+                route_raw = _normalize_memory_route(q.get("route", ["auto"])[0].strip())
+                route = _infer_memory_route(query) if route_raw == "auto" else route_raw
                 depth = int(q.get("depth", ["2"])[0])
                 per_hop = int(q.get("per_hop", ["6"])[0])
                 ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
@@ -4428,11 +4590,13 @@ def run_webui(
                     items = list(out.get("items") or [])
                     if layer:
                         items = [x for x in items if str(x.get("layer") or "") == layer]
+                    items = _filter_items_by_route(paths, items, route)
                     self._send_json(
                         {
                             "ok": True,
                             "items": items[: max(1, min(200, int(limit)))],
                             "mode": "smart",
+                            "route": route,
                             "explain": out.get("explain", {}),
                         }
                     )
@@ -4446,7 +4610,8 @@ def run_webui(
                         project_id=project_id,
                         session_id=session_id,
                     )
-                    self._send_json({"ok": True, "items": items, "mode": "basic"})
+                    items = _filter_items_by_route(paths, items, route)
+                    self._send_json({"ok": True, "items": items, "mode": "basic", "route": route})
                 return
 
             if parsed.path == "/api/layer-stats":
@@ -5668,6 +5833,59 @@ def run_webui(
                         session_id="webui-session",
                     )
                     self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/memory/undo-last-move":
+                try:
+                    mem_id = str(data.get("id", "")).strip()
+                    if not mem_id:
+                        self._send_json({"ok": False, "error": "id is required"}, 400)
+                        return
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        ev = conn.execute(
+                            """
+                            SELECT event_id, payload_json, event_time
+                            FROM memory_events
+                            WHERE memory_id = ? AND event_type = 'memory.promote'
+                            ORDER BY event_time DESC
+                            LIMIT 1
+                            """,
+                            (mem_id,),
+                        ).fetchone()
+                    if not ev:
+                        self._send_json({"ok": False, "error": "no layer-move event found"}, 404)
+                        return
+                    payload = json.loads(ev["payload_json"] or "{}")
+                    from_layer = str(payload.get("from_layer", "")).strip()
+                    to_layer = str(payload.get("to_layer", "")).strip()
+                    if not from_layer or not to_layer or from_layer == to_layer:
+                        self._send_json({"ok": False, "error": "invalid layer-move payload"}, 400)
+                        return
+                    out = move_memory_layer(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        memory_id=mem_id,
+                        new_layer=from_layer,
+                        tool="webui",
+                        account="default",
+                        device="local",
+                        session_id="webui-session",
+                    )
+                    if not out.get("ok"):
+                        self._send_json(out, 400)
+                        return
+                    self._send_json(
+                        {
+                            **out,
+                            "undo_of_event_id": str(ev["event_id"]),
+                            "undo_of_event_time": str(ev["event_time"]),
+                            "from_layer": from_layer,
+                            "to_layer": to_layer,
+                        }
+                    )
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return

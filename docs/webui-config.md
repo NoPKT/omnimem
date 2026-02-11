@@ -48,6 +48,8 @@ WebUI provides:
 - Maintenance dashboard summary via `/api/maintenance/summary` (recent runs/decay/promote/demote and event counts)
 - Runtime health diagnosis via `/api/health/check` (sqlite reachability, daemon status, fd pressure)
 - Memory-level governance explainability via `/api/governance/explain?id=<memory_id>&adaptive=1&days=14`
+- Memory route retrieval in WebUI (`auto`/`episodic`/`semantic`/`procedural`) for intent-aware filtering
+- Drawer actions: `Undo Last Move` and one-click memory typing tags (`mem:episodic`, `mem:semantic`, `mem:procedural`)
 - Optional approval gate for apply actions: `webui.approval_required=true`
 - Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
 
