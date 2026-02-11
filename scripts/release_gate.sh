@@ -12,6 +12,17 @@ SKIP_PHASE_D=0
 SKIP_FRONTIER=0
 ALLOW_CLEAN=0
 
+if command -v omnimem >/dev/null 2>&1; then
+  OM=(omnimem)
+elif command -v python3 >/dev/null 2>&1; then
+  OM=(python3 -m omnimem.cli)
+elif command -v python >/dev/null 2>&1; then
+  OM=(python -m omnimem.cli)
+else
+  echo "[ERR] neither 'omnimem' nor a usable Python interpreter was found in PATH" >&2
+  exit 127
+fi
+
 usage() {
   cat <<'EOF'
 Usage: bash scripts/release_gate.sh [options]
@@ -72,14 +83,14 @@ done
 
 echo "[gate] step 1/5 preflight"
 if [[ "$ALLOW_CLEAN" -eq 1 ]]; then
-  omnimem preflight --path "$ROOT" --allow-clean
+  "${OM[@]}" preflight --path "$ROOT" --allow-clean
 else
-  omnimem preflight --path "$ROOT"
+  "${OM[@]}" preflight --path "$ROOT"
 fi
 
 if [[ "$SKIP_DOCTOR" -eq 0 ]]; then
   echo "[gate] step 2/5 doctor"
-  omnimem doctor
+  "${OM[@]}" doctor
 else
   echo "[gate] step 2/5 doctor (skipped)"
 fi
@@ -102,8 +113,8 @@ if [[ "$SKIP_FRONTIER" -eq 0 ]]; then
   echo "[gate] step 5/5 frontier smoke"
   GATE_HOME="${GATE_HOME_OVERRIDE:-$ROOT/.omnimem_gate}"
   mkdir -p "$GATE_HOME"
-  OMNIMEM_HOME="$GATE_HOME" python3 -m omnimem.cli raptor --project-id "$PROJECT_ID" > /dev/null
-  OMNIMEM_HOME="$GATE_HOME" python3 -m omnimem.cli enhance --project-id "$PROJECT_ID" > /dev/null
+  OMNIMEM_HOME="$GATE_HOME" "${OM[@]}" raptor --project-id "$PROJECT_ID" > /dev/null
+  OMNIMEM_HOME="$GATE_HOME" "${OM[@]}" enhance --project-id "$PROJECT_ID" > /dev/null
   if [[ -f "eval/locomo_style.sample.jsonl" ]]; then
     OMNIMEM_HOME="$GATE_HOME" python3 scripts/eval_locomo_style.py \
       --dataset eval/locomo_style.sample.jsonl \

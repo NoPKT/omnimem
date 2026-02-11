@@ -251,6 +251,8 @@ If `npm pack --dry-run` fails with cache permission errors (`EPERM` under `~/.np
 NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 ```
 
+`scripts/release_gate.sh` now supports environments without a global `omnimem` binary (e.g. CI): it auto-falls back to `python -m omnimem.cli`.
+
 ## Docs
 
 - `docs/quickstart-10min.md`

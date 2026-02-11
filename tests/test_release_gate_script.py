@@ -20,11 +20,13 @@ class ReleaseGateScriptTest(unittest.TestCase):
     def test_release_gate_script_contains_expected_steps(self) -> None:
         script = Path(__file__).resolve().parent.parent / "scripts" / "release_gate.sh"
         txt = script.read_text(encoding="utf-8")
-        self.assertIn("omnimem preflight --path", txt)
-        self.assertIn("omnimem doctor", txt)
+        self.assertIn("command -v omnimem", txt)
+        self.assertIn("python3 -m omnimem.cli", txt)
+        self.assertIn("\"${OM[@]}\" preflight --path", txt)
+        self.assertIn("\"${OM[@]}\" doctor", txt)
         self.assertIn("npm run pack:check", txt)
         self.assertIn("bash scripts/verify_phase_d.sh", txt)
-        self.assertIn("python3 -m omnimem.cli raptor", txt)
+        self.assertIn("\"${OM[@]}\" raptor", txt)
         self.assertIn("python3 scripts/eval_locomo_style.py", txt)
 
 
