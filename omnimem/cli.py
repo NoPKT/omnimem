@@ -39,7 +39,9 @@ from .core import (
     distill_session_memory,
     enhance_memory_summaries,
     find_memories,
+    get_core_block,
     ingest_source,
+    list_core_blocks,
     apply_memory_feedback,
     retrieve_thread,
     load_config,
@@ -51,6 +53,7 @@ from .core import (
     classify_sync_error,
     sync_error_hint,
     sync_git,
+    upsert_core_block,
     verify_storage,
     write_memory,
 )
@@ -315,6 +318,8 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         profile_aware=bool(getattr(args, "profile_aware", False)),
         profile_weight=float(getattr(args, "profile_weight", 0.35)),
         profile_limit=int(getattr(args, "profile_limit", 240)),
+        include_core_blocks=bool(getattr(args, "include_core_blocks", False)),
+        core_block_limit=int(getattr(args, "core_block_limit", 2)),
         drift_aware=bool(getattr(args, "drift_aware", False)),
         drift_recent_days=int(getattr(args, "drift_recent_days", 14)),
         drift_baseline_days=int(getattr(args, "drift_baseline_days", 120)),
@@ -351,6 +356,55 @@ def cmd_profile_drift(args: argparse.Namespace) -> int:
         recent_days=int(getattr(args, "recent_days", 14)),
         baseline_days=int(getattr(args, "baseline_days", 120)),
         limit=int(getattr(args, "limit", 800)),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_core_set(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    body = body_text(args)
+    out = upsert_core_block(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        name=str(args.name or "").strip(),
+        content=str(body or ""),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        layer=str(args.layer or "short"),
+        tags=parse_list_csv(getattr(args, "tags", None)),
+        tool="cli",
+        account="default",
+        device="local",
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_core_get(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = get_core_block(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        name=str(args.name or "").strip(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_core_list(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = list_core_blocks(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        limit=int(getattr(args, "limit", 64)),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -1981,6 +2035,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_retrieve.add_argument("--profile-weight", type=float, default=0.35, help="profile boost weight (0..1)")
     p_retrieve.add_argument("--profile-limit", type=int, default=240, help="max memories sampled for profile inference")
     p_retrieve.add_argument(
+        "--include-core-blocks",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="inject project core memory blocks into retrieve results",
+    )
+    p_retrieve.add_argument("--core-block-limit", type=int, default=2, help="max injected core blocks")
+    p_retrieve.add_argument(
         "--drift-aware",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -2007,6 +2068,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_profile_drift.add_argument("--baseline-days", type=int, default=120)
     p_profile_drift.add_argument("--limit", type=int, default=800)
     p_profile_drift.set_defaults(func=cmd_profile_drift)
+
+    p_core_set = sub.add_parser("core-set", help="create or update a core memory block")
+    p_core_set.add_argument("--config", help="path to omnimem config json")
+    p_core_set.add_argument("--name", required=True)
+    p_core_set.add_argument("--body", default="")
+    p_core_set.add_argument("--body-file")
+    p_core_set.add_argument("--project-id", default="")
+    p_core_set.add_argument("--session-id", default="system")
+    p_core_set.add_argument("--layer", choices=sorted(LAYER_SET), default="short")
+    p_core_set.add_argument("--tags", help="comma-separated")
+    p_core_set.set_defaults(func=cmd_core_set)
+
+    p_core_get = sub.add_parser("core-get", help="get one core memory block")
+    p_core_get.add_argument("--config", help="path to omnimem config json")
+    p_core_get.add_argument("--name", required=True)
+    p_core_get.add_argument("--project-id", default="")
+    p_core_get.add_argument("--session-id", default="")
+    p_core_get.set_defaults(func=cmd_core_get)
+
+    p_core_list = sub.add_parser("core-list", help="list core memory blocks")
+    p_core_list.add_argument("--config", help="path to omnimem config json")
+    p_core_list.add_argument("--project-id", default="")
+    p_core_list.add_argument("--session-id", default="")
+    p_core_list.add_argument("--limit", type=int, default=64)
+    p_core_list.set_defaults(func=cmd_core_list)
 
     p_feedback = sub.add_parser("feedback", help="apply explicit feedback to one memory")
     p_feedback.add_argument("--config", help="path to omnimem config json")

@@ -2852,6 +2852,222 @@ def update_memory_content(
         return {"ok": True, "memory_id": memory_id, "updated_at": when_iso, "body_md_path": rel}
 
 
+def _normalize_core_block_name(name: str) -> str:
+    raw = str(name or "").strip().lower()
+    if not raw:
+        raise ValueError("core block name must be non-empty")
+    norm = re.sub(r"[^a-z0-9:_-]+", "-", raw).strip("-")
+    if not norm:
+        raise ValueError("core block name is invalid")
+    return norm[:64]
+
+
+def _core_block_name_from_tags(tags: list[str]) -> str:
+    for t in tags:
+        s = str(t or "").strip().lower()
+        if s.startswith("core:block:"):
+            return s.split("core:block:", 1)[1].strip()
+    return ""
+
+
+def upsert_core_block(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    name: str,
+    content: str,
+    project_id: str = "",
+    session_id: str = "system",
+    layer: str = "short",
+    tags: list[str] | None = None,
+    tool: str = "cli",
+    account: str = "default",
+    device: str = "local",
+) -> dict[str, Any]:
+    ensure_storage(paths, schema_sql_path)
+    name_n = _normalize_core_block_name(name)
+    pid = str(project_id or "").strip() or "global"
+    sid = str(session_id or "").strip() or "system"
+    body = str(content or "").strip()
+    summary = f"core block: {name_n}"
+    core_tags = ["core:block", f"core:block:{name_n}"]
+    extra_tags = [str(t).strip() for t in (tags or []) if str(t).strip()]
+    merged_tags = list(dict.fromkeys([*core_tags, *extra_tags]))
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT id
+            FROM memories
+            WHERE (json_extract(scope_json, '$.project_id') = ?)
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ?)
+              AND EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = ?)
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (pid, sid, f"core:block:{name_n}"),
+        ).fetchone()
+
+    if row:
+        out = update_memory_content(
+            paths=paths,
+            schema_sql_path=schema_sql_path,
+            memory_id=str(row["id"]),
+            summary=summary,
+            body=body,
+            tags=merged_tags,
+            tool=tool,
+            account=account,
+            device=device,
+            session_id=sid,
+            event_type="memory.update",
+        )
+        return {
+            "ok": True,
+            "action": "updated",
+            "name": name_n,
+            "memory_id": str(out.get("memory_id") or ""),
+            "project_id": pid,
+            "session_id": sid,
+        }
+
+    created = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        layer=layer if layer in LAYER_SET else "short",
+        kind="note",
+        summary=summary,
+        body=body,
+        tags=merged_tags,
+        refs=[],
+        cred_refs=[],
+        tool=tool,
+        account=account,
+        device=device,
+        session_id=sid,
+        project_id=pid,
+        workspace=str(paths.root),
+        importance=0.85,
+        confidence=0.80,
+        stability=0.85,
+        reuse_count=0,
+        volatility=0.12,
+        event_type="memory.write",
+    )
+    return {
+        "ok": True,
+        "action": "created",
+        "name": name_n,
+        "memory_id": str(((created.get("memory") or {}).get("id") or "")),
+        "project_id": pid,
+        "session_id": sid,
+    }
+
+
+def list_core_blocks(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    limit: int = 64,
+) -> dict[str, Any]:
+    ensure_storage(paths, schema_sql_path)
+    limit = max(1, min(200, int(limit)))
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, layer, kind, summary, updated_at, tags_json,
+                   COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                   COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id
+            FROM memories
+            WHERE EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = 'core:block')
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, session_id, session_id, limit),
+        ).fetchall()
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        try:
+            tags = [str(t).strip() for t in (json.loads(r["tags_json"] or "[]") or []) if str(t).strip()]
+        except Exception:
+            tags = []
+        items.append(
+            {
+                "id": str(r["id"] or ""),
+                "name": _core_block_name_from_tags(tags),
+                "layer": str(r["layer"] or ""),
+                "kind": str(r["kind"] or ""),
+                "summary": str(r["summary"] or ""),
+                "updated_at": str(r["updated_at"] or ""),
+                "project_id": str(r["project_id"] or ""),
+                "session_id": str(r["session_id"] or ""),
+                "tags": tags,
+            }
+        )
+    return {"ok": True, "count": len(items), "items": items}
+
+
+def get_core_block(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    name: str,
+    project_id: str = "",
+    session_id: str = "",
+) -> dict[str, Any]:
+    ensure_storage(paths, schema_sql_path)
+    name_n = _normalize_core_block_name(name)
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT id, layer, kind, summary, body_text, updated_at, tags_json,
+                   COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                   COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id
+            FROM memories
+            WHERE EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = 'core:block')
+              AND EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = ?)
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (f"core:block:{name_n}", project_id, project_id, session_id, session_id),
+        ).fetchone()
+    if not row:
+        return {"ok": False, "error": "core block not found", "name": name_n}
+    body_md = str(row["body_text"] or "")
+    content = body_md
+    m = re.match(r"^\s*#\s+.+?\n\n(.*)$", body_md, flags=re.DOTALL)
+    if m:
+        content = str(m.group(1) or "").rstrip()
+    try:
+        tags = [str(t).strip() for t in (json.loads(row["tags_json"] or "[]") or []) if str(t).strip()]
+    except Exception:
+        tags = []
+    return {
+        "ok": True,
+        "block": {
+            "id": str(row["id"] or ""),
+            "name": name_n,
+            "layer": str(row["layer"] or ""),
+            "kind": str(row["kind"] or ""),
+            "summary": str(row["summary"] or ""),
+            "content": content,
+            "updated_at": str(row["updated_at"] or ""),
+            "project_id": str(row["project_id"] or ""),
+            "session_id": str(row["session_id"] or ""),
+            "tags": tags,
+        },
+    }
+
+
 def apply_memory_feedback(
     *,
     paths: MemoryPaths,
@@ -4378,6 +4594,8 @@ def retrieve_thread(
     profile_aware: bool = False,
     profile_weight: float = 0.35,
     profile_limit: int = 240,
+    include_core_blocks: bool = False,
+    core_block_limit: int = 2,
     drift_aware: bool = False,
     drift_recent_days: int = 14,
     drift_baseline_days: int = 120,
@@ -4406,6 +4624,8 @@ def retrieve_thread(
     profile_aware = bool(profile_aware)
     profile_weight = max(0.0, min(1.0, float(profile_weight)))
     profile_limit = max(20, min(1200, int(profile_limit)))
+    include_core_blocks = bool(include_core_blocks)
+    core_block_limit = max(0, min(6, int(core_block_limit)))
     drift_aware = bool(drift_aware)
     drift_recent_days = max(1, min(60, int(drift_recent_days)))
     drift_baseline_days = max(drift_recent_days + 1, min(720, int(drift_baseline_days)))
@@ -4641,19 +4861,45 @@ def retrieve_thread(
         pool_limit = max(final_limit * 3, seed_limit * 2, 18)
         ids = sorted(scored.keys(), key=lambda k: scored[k], reverse=True)[:pool_limit]
         if not ids:
+            core_items: list[dict[str, Any]] = []
+            if include_core_blocks and core_block_limit > 0:
+                core_rows = conn.execute(
+                    """
+                    SELECT id, layer, kind, summary, updated_at, body_md_path, tags_json,
+                           COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                           COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
+                           importance_score, confidence_score, stability_score, reuse_count, volatility_score
+                    FROM memories
+                    WHERE EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = 'core:block')
+                      AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                      AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (project_id, project_id, session_id, session_id, core_block_limit),
+                ).fetchall()
+                for i, r in enumerate(core_rows):
+                    d = _signals_from_row(dict(r))
+                    ctags = [str(t).strip() for t in (d.get("tags") or []) if str(t).strip()]
+                    cname = _core_block_name_from_tags(ctags) or "core"
+                    d["score"] = float(round(1.02 - (i * 0.002), 6))
+                    d["why_recalled"] = [f"core-block:{cname}", f"score={float(d.get('score') or 0.0):.3f}"]
+                    core_items.append(d)
+                core_items = core_items[:final_limit]
             total_ms = int((time.perf_counter() - t0) * 1000)
             return {
                 "ok": True,
                 "query": query,
-                "items": [],
+                "items": core_items,
                 "explain": {
                     "ranking_mode": ranking_mode,
                     "seeds": seeds,
                     "paths": {},
                     "why_recalled": {},
-                    "self_check": _self_rag_check(query, []) if self_check else {"enabled": False},
+                    "self_check": _self_rag_check(query, core_items) if self_check else {"enabled": False},
                     "adaptive_feedback": {"enabled": bool(adaptive_feedback), "updated": 0},
                     "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
+                    "core_blocks": {"enabled": include_core_blocks, "limit": int(core_block_limit), "injected": int(len(core_items))},
                     "drift": drift_explain,
                     "pipeline_ms": {
                         "seed": t_seed_ms,
@@ -4715,6 +4961,61 @@ def retrieve_thread(
             )
         else:
             out_items = out_items[:final_limit]
+
+        injected_core = 0
+        if include_core_blocks and core_block_limit > 0 and final_limit > 0:
+            core_rows = conn.execute(
+                """
+                SELECT id, layer, kind, summary, updated_at, body_md_path, tags_json,
+                       COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                       COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
+                       importance_score, confidence_score, stability_score, reuse_count, volatility_score
+                FROM memories
+                WHERE EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = 'core:block')
+                  AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                  AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (project_id, project_id, session_id, session_id, core_block_limit),
+            ).fetchall()
+            prefix: list[dict[str, Any]] = []
+            seen = {str(x.get("id") or "") for x in out_items if str(x.get("id") or "")}
+            top_score = float(out_items[0].get("score") or 1.0) if out_items else 1.0
+            for i, r in enumerate(core_rows):
+                d = _signals_from_row(dict(r))
+                mid = str(d.get("id") or "")
+                if not mid:
+                    continue
+                ctags = [str(t).strip() for t in (d.get("tags") or []) if str(t).strip()]
+                cname = _core_block_name_from_tags(ctags) or "core"
+                if mid in seen:
+                    for it in out_items:
+                        if str(it.get("id") or "") == mid:
+                            wr = list(it.get("why_recalled") or [])
+                            why = f"core-block:{cname}"
+                            if why not in wr:
+                                wr.insert(0, why)
+                            it["why_recalled"] = wr[:6]
+                    continue
+                d["score"] = float(round(top_score + 0.02 - (i * 0.002), 6))
+                d["why_recalled"] = [f"core-block:{cname}", f"score={float(d.get('score') or 0.0):.3f}"]
+                prefix.append(d)
+                seen.add(mid)
+            if prefix:
+                injected_core = len(prefix)
+                merged = prefix + out_items
+                dedup: list[dict[str, Any]] = []
+                used: set[str] = set()
+                for it in merged:
+                    mid = str(it.get("id") or "")
+                    if not mid or mid in used:
+                        continue
+                    dedup.append(it)
+                    used.add(mid)
+                    if len(dedup) >= final_limit:
+                        break
+                out_items = dedup
         out_ids_set = {str(x.get("id") or "") for x in out_items if str(x.get("id") or "")}
         why_map = {str(x.get("id") or ""): list(x.get("why_recalled") or []) for x in out_items if str(x.get("id") or "")}
         t_mat_ms = int((time.perf_counter() - t_mat0) * 1000)
@@ -4756,6 +5057,7 @@ def retrieve_thread(
             "self_check": self_eval,
             "adaptive_feedback": feedback,
             "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
+            "core_blocks": {"enabled": include_core_blocks, "limit": int(core_block_limit), "injected": int(injected_core)},
             "drift": drift_explain,
             "pipeline_ms": {
                 "seed": t_seed_ms,

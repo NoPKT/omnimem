@@ -139,7 +139,11 @@ omnimem raptor --project-id OM
 omnimem enhance --project-id OM
 omnimem profile --project-id OM
 omnimem profile-drift --project-id OM --recent-days 14 --baseline-days 120
+omnimem core-set --project-id OM --name persona --body "Be concise, explicit, and test-first."
+omnimem core-list --project-id OM
+omnimem core-get --project-id OM --name persona
 omnimem retrieve "workflow guide" --project-id OM --drift-aware --drift-weight 0.4 --explain
+omnimem retrieve "workflow guide" --project-id OM --include-core-blocks --core-block-limit 2 --explain
 omnimem ingest --type url "https://example.com/doc?token=***"
 omnimem ingest --type file ./docs/notes.md
 omnimem ingest --type file ./docs/design.md --chunk-mode heading --max-chunks 12

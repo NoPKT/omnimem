@@ -29,9 +29,12 @@ from .core import (
     consolidate_memories,
     ensure_storage,
     find_memories,
+    get_core_block,
     infer_adaptive_governance_thresholds,
+    list_core_blocks,
     move_memory_layer,
     retrieve_thread,
+    upsert_core_block,
     update_memory_content,
     resolve_paths,
     save_config,
@@ -5749,6 +5752,8 @@ def run_webui(
                 diversify = _parse_bool_param(q.get("diversify", ["1"])[0], default=True)
                 profile_aware = _parse_bool_param(q.get("profile_aware", ["1"])[0], default=True)
                 profile_weight = _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
+                include_core_blocks = _parse_bool_param(q.get("include_core_blocks", ["1"])[0], default=True)
+                core_block_limit = _parse_int_param(q.get("core_block_limit", ["2"])[0], default=2, lo=0, hi=6)
                 drift_aware = _parse_bool_param(q.get("drift_aware", ["1"])[0], default=True)
                 drift_recent_days = _parse_int_param(q.get("drift_recent_days", ["14"])[0], default=14, lo=1, hi=60)
                 drift_baseline_days = _parse_int_param(q.get("drift_baseline_days", ["120"])[0], default=120, lo=2, hi=720)
@@ -5772,6 +5777,8 @@ def run_webui(
                         limit_i,
                         bool(profile_aware),
                         float(profile_weight),
+                        bool(include_core_blocks),
+                        int(core_block_limit),
                         bool(drift_aware),
                         int(drift_recent_days),
                         int(drift_baseline_days),
@@ -5800,6 +5807,8 @@ def run_webui(
                             feedback_reuse_step=1,
                             profile_aware=bool(profile_aware),
                             profile_weight=float(profile_weight),
+                            include_core_blocks=bool(include_core_blocks),
+                            core_block_limit=int(core_block_limit),
                             drift_aware=bool(drift_aware),
                             drift_recent_days=int(drift_recent_days),
                             drift_baseline_days=int(drift_baseline_days),
@@ -6271,6 +6280,34 @@ def run_webui(
                         limit=limit,
                     )
                     self._send_json(out)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/core-blocks":
+                q = parse_qs(parsed.query)
+                name = q.get("name", [""])[0].strip()
+                project_id = q.get("project_id", [""])[0].strip()
+                session_id = q.get("session_id", [""])[0].strip()
+                limit = _parse_int_param(q.get("limit", ["64"])[0], default=64, lo=1, hi=200)
+                try:
+                    if name:
+                        out = get_core_block(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            name=name,
+                            project_id=project_id,
+                            session_id=session_id,
+                        )
+                    else:
+                        out = list_core_blocks(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            project_id=project_id,
+                            session_id=session_id,
+                            limit=limit,
+                        )
+                    self._send_json(out, 200 if out.get("ok") else 404)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
@@ -7652,6 +7689,36 @@ def run_webui(
                         account="default",
                         device="local",
                         session_id="webui-session",
+                    )
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/core-blocks/upsert":
+                try:
+                    name = str(data.get("name", "")).strip()
+                    content = str(data.get("content", "") or "")
+                    project_id = str(data.get("project_id", "") or "").strip()
+                    session_id = str(data.get("session_id", "system") or "").strip()
+                    layer = str(data.get("layer", "short") or "short").strip().lower()
+                    raw_tags = data.get("tags", [])
+                    tags = [str(x).strip() for x in (raw_tags if isinstance(raw_tags, list) else []) if str(x).strip()]
+                    if not name:
+                        self._send_json({"ok": False, "error": "name is required"}, 400)
+                        return
+                    out = upsert_core_block(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        name=name,
+                        content=content,
+                        project_id=project_id,
+                        session_id=session_id,
+                        layer=layer,
+                        tags=tags,
+                        tool="webui",
+                        account="default",
+                        device="local",
                     )
                     self._send_json(out, 200 if out.get("ok") else 400)
                 except Exception as exc:  # pragma: no cover
