@@ -30,6 +30,7 @@ from .core import (
     KIND_SET,
     LAYER_SET,
     apply_decay,
+    build_user_profile,
     build_raptor_digest,
     build_brief,
     compress_session_context,
@@ -278,6 +279,20 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
     )
     if not getattr(args, "explain", False):
         out.pop("explain", None)
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_profile(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = build_user_profile(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        limit=int(args.limit),
+    )
     print_json(out)
     return 0 if out.get("ok") else 1
 
@@ -1859,6 +1874,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_retrieve.add_argument("--max-items", type=int, default=12, help="maximum retrieval results")
     p_retrieve.add_argument("--explain", action="store_true", help="include seed/paths explanation")
     p_retrieve.set_defaults(func=cmd_retrieve)
+
+    p_profile = sub.add_parser("profile", help="build deterministic user profile from memories")
+    p_profile.add_argument("--config", help="path to omnimem config json")
+    p_profile.add_argument("--project-id", default="", help="optional project filter")
+    p_profile.add_argument("--session-id", default="", help="optional session filter")
+    p_profile.add_argument("--limit", type=int, default=240)
+    p_profile.set_defaults(func=cmd_profile)
 
     p_verify = sub.add_parser("verify", help="consistency verification")
     p_verify.add_argument("--config", help="path to omnimem config json")

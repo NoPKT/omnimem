@@ -21,6 +21,7 @@ from . import __version__ as OMNIMEM_VERSION
 from .core import (
     LAYER_SET,
     apply_decay,
+    build_user_profile,
     compress_hot_sessions,
     compress_session_context,
     consolidate_memories,
@@ -6170,6 +6171,24 @@ def run_webui(
                         "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
                     }
                     self._send_json({"ok": True, "memory": mem, "body": body})
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/profile":
+                q = parse_qs(parsed.query)
+                project_id = q.get("project_id", [""])[0].strip()
+                session_id = q.get("session_id", [""])[0].strip()
+                limit = _parse_int_param(q.get("limit", ["240"])[0], default=240, lo=20, hi=1200)
+                try:
+                    out = build_user_profile(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id=project_id,
+                        session_id=session_id,
+                        limit=limit,
+                    )
+                    self._send_json(out)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return

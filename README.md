@@ -137,6 +137,7 @@ Frontier memory ops (preview by default):
 ```bash
 omnimem raptor --project-id OM
 omnimem enhance --project-id OM
+omnimem profile --project-id OM
 ```
 
 Offline LoCoMo-style retrieval eval:

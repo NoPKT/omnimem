@@ -160,7 +160,7 @@ pat = re.compile(r"(^## Unreleased\s*\n)(.*?)(?=^##\s+|\Z)", flags=re.M | re.S)
 m = pat.search(txt)
 if m:
     body = m.group(2).strip()
-    repl = f"## Unreleased\\n\\n## {nxt} - {today}\\n\\n{body}\\n\\n"
+    repl = f"## Unreleased\n\n## {nxt} - {today}\n\n{body}\n\n"
     txt = txt[:m.start()] + repl + txt[m.end():]
 cp.write_text(txt, encoding="utf-8")
 PY

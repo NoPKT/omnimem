@@ -3253,6 +3253,189 @@ def _self_rag_check(query: str, items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _extract_preference_phrases(text: str, *, max_items: int = 8) -> list[str]:
+    s = str(text or "").strip()
+    if not s:
+        return []
+    out: list[str] = []
+    patterns = [
+        r"\bi prefer\s+([^.,;\n]{2,72})",
+        r"\bi like\s+([^.,;\n]{2,72})",
+        r"\bi usually\s+([^.,;\n]{2,72})",
+        r"\bmy favorite\s+([^.,;\n]{2,72})",
+        r"(我偏好[^。；，\n]{1,48})",
+        r"(我喜欢[^。；，\n]{1,48})",
+        r"(我常用[^。；，\n]{1,48})",
+        r"(我不喜欢[^。；，\n]{1,48})",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, s, flags=re.IGNORECASE):
+            phrase = re.sub(r"\s+", " ", str(m.group(0) or "").strip())
+            if not phrase:
+                continue
+            if phrase.lower().startswith("i "):
+                phrase = phrase[0].upper() + phrase[1:]
+            if phrase not in out:
+                out.append(phrase[:96])
+            if len(out) >= max_items:
+                return out
+    return out
+
+
+def build_user_profile(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    limit: int = 240,
+) -> dict[str, Any]:
+    """Build a deterministic user profile summary from memory traces."""
+    ensure_storage(paths, schema_sql_path)
+    limit = max(20, min(1200, int(limit)))
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT kind, summary, body_text, tags_json, updated_at
+            FROM memories
+            WHERE kind NOT IN ('retrieve')
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, session_id, session_id, limit),
+        ).fetchall()
+
+    kind_counts: dict[str, int] = {}
+    tag_counts: dict[str, int] = {}
+    term_counts: dict[str, int] = {}
+    hour_counts: dict[int, int] = {}
+    goals: list[str] = []
+    preferences: list[str] = []
+
+    stopwords = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "that",
+        "this",
+        "have",
+        "has",
+        "into",
+        "then",
+        "your",
+        "about",
+        "what",
+        "when",
+        "where",
+        "which",
+        "will",
+        "shall",
+        "would",
+        "could",
+        "should",
+        "are",
+        "was",
+        "were",
+        "been",
+        "being",
+        "you",
+        "not",
+        "but",
+        "use",
+        "using",
+        "used",
+        "task",
+        "note",
+        "summary",
+        "decision",
+    }
+
+    for r in rows:
+        kind = str(r["kind"] or "").strip().lower() or "unknown"
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+
+        try:
+            tags = [str(t).strip().lower() for t in (json.loads(r["tags_json"] or "[]") or []) if str(t).strip()]
+        except Exception:
+            tags = []
+        for t in tags:
+            if t.startswith("auto:"):
+                continue
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        summary = str(r["summary"] or "").strip()
+        body = str(r["body_text"] or "").strip()
+        txt = f"{summary}\n{body[:320]}"
+        for p in _extract_preference_phrases(txt):
+            if p not in preferences:
+                preferences.append(p)
+            if len(preferences) >= 8:
+                break
+
+        if kind in {"task", "decision"}:
+            g = re.sub(r"\s+", " ", summary).strip()
+            if g and g not in goals:
+                goals.append(g[:96])
+        for m in re.finditer(r"(?:todo|next|plan|goal|待办|下一步|计划|目标)\s*[:：]?\s*([^\n.。]{2,72})", txt, flags=re.IGNORECASE):
+            g = re.sub(r"\s+", " ", str(m.group(1) or "").strip())
+            if g and g not in goals:
+                goals.append(g[:96])
+            if len(goals) >= 8:
+                break
+
+        toks = re.findall(r"[\w]+|[\u4e00-\u9fff]+", txt.lower(), flags=re.UNICODE)
+        for tk in toks:
+            t = tk.strip()
+            if not t:
+                continue
+            if t in stopwords:
+                continue
+            if t.isascii() and len(t) < 3:
+                continue
+            if t.isascii() and t.isdigit():
+                continue
+            term_counts[t] = term_counts.get(t, 0) + 1
+
+        dt = _parse_iso_dt(str(r["updated_at"] or ""))
+        hour_counts[int(dt.hour)] = hour_counts.get(int(dt.hour), 0) + 1
+
+    top_kinds = [{"kind": k, "count": int(v)} for k, v in sorted(kind_counts.items(), key=lambda x: x[1], reverse=True)[:5]]
+    top_tags = [{"tag": k, "count": int(v)} for k, v in sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:8]]
+    top_terms = [{"term": k, "count": int(v)} for k, v in sorted(term_counts.items(), key=lambda x: x[1], reverse=True)[:12]]
+    active_hours = [{"hour_utc": int(h), "count": int(c)} for h, c in sorted(hour_counts.items(), key=lambda x: x[1], reverse=True)[:3]]
+
+    highlights: list[str] = []
+    if top_tags:
+        highlights.append("focus tags: " + ", ".join([str(x["tag"]) for x in top_tags[:4]]))
+    if goals:
+        highlights.append("active goals: " + "; ".join(goals[:2]))
+    if preferences:
+        highlights.append("preferences: " + "; ".join(preferences[:2]))
+    overview = " | ".join(highlights) if highlights else "insufficient data for stable profile yet"
+
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "session_id": session_id,
+        "limit": limit,
+        "analyzed": int(len(rows)),
+        "profile": {
+            "overview": overview,
+            "top_kinds": top_kinds,
+            "top_tags": top_tags,
+            "top_terms": top_terms,
+            "preferences": preferences[:8],
+            "goals": goals[:8],
+            "active_hours_utc": active_hours,
+        },
+    }
+
+
 def weave_links(
     *,
     paths: MemoryPaths,
