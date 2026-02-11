@@ -26,6 +26,8 @@
 - Core merge CLI config defaults: `omnimem core-merge-suggest` now reads `core_merge.default_*` from config when flags are omitted (flags still take precedence).
 - WebUI cleanup: refactor `/api/memories` core-block query parsing into shared `_parse_retrieve_core_options` helper.
 - CI shell-test portability: phase B/C/D smoke scripts now fall back to `grep -F` when `rg` is unavailable, fixing release-gate failures on minimal runners.
+- CI evaluation loop: add scheduled/manual GitHub workflow `nightly-memory-eval` to run core-merge mode evaluation and dry-run auto-tuning, with reports uploaded as artifacts.
+- WebUI cleanup: extract shared drift-query parser `_parse_retrieve_drift_options` for `/api/memories`.
 
 ## 0.2.21 - 2026-02-11
 

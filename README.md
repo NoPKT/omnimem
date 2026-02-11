@@ -295,6 +295,11 @@ NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 
 `scripts/release_gate.sh` now supports environments without a global `omnimem` binary (e.g. CI): it auto-falls back to `python -m omnimem.cli`.
 
+Nightly memory-eval workflow:
+
+- GitHub Actions `nightly-memory-eval` runs `eval_core_merge` + `tune_core_merge_from_eval --dry-run` on deterministic seeded core blocks.
+- Reports are uploaded as artifact `core-merge-eval-artifacts` (`core_merge_report.json`, `core_merge_tune_dry_run.json`).
+
 ## Docs
 
 - `docs/quickstart-10min.md`

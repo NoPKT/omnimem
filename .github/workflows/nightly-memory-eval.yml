@@ -1,0 +1,57 @@
+name: nightly-memory-eval
+
+on:
+  schedule:
+    - cron: "25 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  core-merge-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Prepare eval dataset and run core merge evaluation
+        env:
+          OMNIMEM_HOME: ${{ runner.temp }}/omnimem-nightly-home
+        run: |
+          set -euo pipefail
+          CFG="$OMNIMEM_HOME/omnimem.config.json"
+          mkdir -p "$OMNIMEM_HOME"
+
+          # Seed deterministic conflicting core blocks to make merge-mode deltas comparable.
+          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name style-a --topic style --priority 60 --body "Use concise bullets."
+          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name style-b --topic style --priority 92 --body "Use numbered technical lists with explicit assumptions."
+          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name safety-a --topic safety --priority 65 --body "Prefer non-destructive commands by default."
+          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name safety-b --topic safety --priority 88 --body "Require explicit confirmation for risky write operations."
+
+          python scripts/eval_core_merge.py \
+            --config "$CFG" \
+            --project-id OM \
+            --session-id ci-seed \
+            --modes concat,synthesize,semantic \
+            --max-merged-lines 6 \
+            --out "$RUNNER_TEMP/core_merge_report.json"
+
+          python scripts/tune_core_merge_from_eval.py \
+            --config "$CFG" \
+            --report "$RUNNER_TEMP/core_merge_report.json" \
+            --dry-run > "$RUNNER_TEMP/core_merge_tune_dry_run.json"
+
+      - name: Upload eval artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-merge-eval-artifacts
+          path: |
+            ${{ runner.temp }}/core_merge_report.json
+            ${{ runner.temp }}/core_merge_tune_dry_run.json
+          if-no-files-found: error

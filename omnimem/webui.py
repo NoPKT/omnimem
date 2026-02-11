@@ -4857,6 +4857,14 @@ def _parse_retrieve_core_options(q: dict[str, list[str]]) -> tuple[bool, int, bo
     return bool(include_core_blocks), int(core_block_limit), bool(core_merge_by_topic)
 
 
+def _parse_retrieve_drift_options(q: dict[str, list[str]]) -> tuple[bool, int, int, float]:
+    drift_aware = _parse_bool_param(q.get("drift_aware", ["1"])[0], default=True)
+    drift_recent_days = _parse_int_param(q.get("drift_recent_days", ["14"])[0], default=14, lo=1, hi=60)
+    drift_baseline_days = _parse_int_param(q.get("drift_baseline_days", ["120"])[0], default=120, lo=2, hi=720)
+    drift_weight = _parse_float_param(q.get("drift_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
+    return bool(drift_aware), int(drift_recent_days), int(drift_baseline_days), float(drift_weight)
+
+
 def _cache_get(
     cache: dict[Any, tuple[float, dict[str, Any]]],
     key: Any,
@@ -5760,10 +5768,7 @@ def run_webui(
                 profile_aware = _parse_bool_param(q.get("profile_aware", ["1"])[0], default=True)
                 profile_weight = _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
                 include_core_blocks, core_block_limit, core_merge_by_topic = _parse_retrieve_core_options(q)
-                drift_aware = _parse_bool_param(q.get("drift_aware", ["1"])[0], default=True)
-                drift_recent_days = _parse_int_param(q.get("drift_recent_days", ["14"])[0], default=14, lo=1, hi=60)
-                drift_baseline_days = _parse_int_param(q.get("drift_baseline_days", ["120"])[0], default=120, lo=2, hi=720)
-                drift_weight = _parse_float_param(q.get("drift_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
+                drift_aware, drift_recent_days, drift_baseline_days, drift_weight = _parse_retrieve_drift_options(q)
                 dedup_mode = _normalize_dedup_mode(q.get("dedup", ["off"])[0])
                 mmr_lambda = _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95)
                 if mode == "smart" and query:
