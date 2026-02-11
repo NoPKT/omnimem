@@ -12,6 +12,7 @@ from omnimem.core import (
     consolidate_memories,
     distill_session_memory,
     infer_adaptive_governance_thresholds,
+    prune_memories,
     rehearse_memory_traces,
     retrieve_thread,
     trigger_reflective_summaries,
@@ -112,6 +113,97 @@ class CoreMaintenanceTest(unittest.TestCase):
             l_cold = conn.execute("SELECT layer FROM memories WHERE id = ?", (cold_id,)).fetchone()[0]
         self.assertEqual(str(l_hot), "short")
         self.assertEqual(str(l_cold), "short")
+
+    def test_prune_preview_and_apply(self) -> None:
+        old_note = self._write(
+            layer="short",
+            summary="old prune note",
+            session_id="s-prune",
+            importance=0.4,
+            confidence=0.4,
+            stability=0.4,
+            reuse_count=0,
+            volatility=0.8,
+        )
+        old_decision = write_memory(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            layer="short",
+            kind="decision",
+            summary="old protected decision",
+            body="keep me",
+            tags=[],
+            refs=[],
+            cred_refs=[],
+            tool="test",
+            account="test",
+            device="local",
+            session_id="s-prune",
+            project_id="OM",
+            workspace=str(self.root),
+            importance=0.8,
+            confidence=0.8,
+            stability=0.8,
+            reuse_count=2,
+            volatility=0.2,
+            event_type="memory.write",
+        )["memory"]["id"]
+        new_note = self._write(
+            layer="short",
+            summary="new note keep by recency",
+            session_id="s-prune",
+            importance=0.5,
+            confidence=0.5,
+            stability=0.5,
+            reuse_count=1,
+            volatility=0.3,
+        )
+
+        # Make two rows old enough for pruning.
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            conn.execute(
+                "UPDATE memories SET updated_at = datetime('now', '-80 day') WHERE id IN (?, ?)",
+                (old_note, old_decision),
+            )
+            conn.commit()
+
+        pre = prune_memories(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-prune",
+            days=30,
+            layers=["short"],
+            keep_kinds=["decision", "checkpoint"],
+            limit=100,
+            dry_run=True,
+        )
+        self.assertTrue(pre.get("ok"))
+        ids = {str(x.get("id") or "") for x in (pre.get("items") or [])}
+        self.assertIn(str(old_note), ids)
+        self.assertNotIn(str(old_decision), ids)
+        self.assertNotIn(str(new_note), ids)
+
+        ap = prune_memories(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-prune",
+            days=30,
+            layers=["short"],
+            keep_kinds=["decision", "checkpoint"],
+            limit=100,
+            dry_run=False,
+            tool="test",
+            actor_session_id="s-prune",
+        )
+        self.assertTrue(ap.get("ok"))
+        self.assertEqual(int(ap.get("deleted", 0)), 1)
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            left_old_note = int(conn.execute("SELECT COUNT(*) FROM memories WHERE id = ?", (old_note,)).fetchone()[0] or 0)
+            left_old_decision = int(conn.execute("SELECT COUNT(*) FROM memories WHERE id = ?", (old_decision,)).fetchone()[0] or 0)
+        self.assertEqual(left_old_note, 0)
+        self.assertEqual(left_old_decision, 1)
 
     def test_session_compress_preview_and_apply(self) -> None:
         for i in range(10):

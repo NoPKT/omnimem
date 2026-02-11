@@ -160,6 +160,8 @@ omnimem ingest --type file ./docs/design.md --chunk-mode heading --max-chunks 12
 omnimem ingest --type text --text "..." --chunk-mode fixed --chunk-chars 1800
 omnimem feedback --id <memory_id> --feedback positive --note "high value"
 omnimem sync --mode github-push --sync-layers long,archive --no-sync-include-jsonl
+omnimem prune --project-id OM --days 45 --layers instant,short --keep-kinds decision,checkpoint
+omnimem prune --project-id OM --days 45 --layers instant,short --keep-kinds decision,checkpoint --apply
 ```
 
 Offline LoCoMo-style retrieval eval:

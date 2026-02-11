@@ -40,6 +40,7 @@ EVENT_SET = {
     "memory.reuse",
     "memory.decay",
     "memory.feedback",
+    "memory.prune",
 }
 
 
@@ -844,6 +845,149 @@ def apply_decay(
         "layers": layers,
         "count": len(changes),
         "items": changes,
+    }
+
+
+def prune_memories(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    days: int = 30,
+    limit: int = 500,
+    project_id: str = "",
+    session_id: str = "",
+    layers: list[str] | None = None,
+    keep_kinds: list[str] | None = None,
+    dry_run: bool = True,
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Preview/apply retention pruning for old memories.
+
+    Default policy targets high-churn layers (`instant`,`short`) while protecting
+    strategic kinds like `decision` and `checkpoint`.
+    """
+    ensure_storage(paths, schema_sql_path)
+    days = max(1, min(3650, int(days)))
+    limit = max(1, min(5000, int(limit)))
+    if layers is None:
+        layers = ["instant", "short"]
+    layers = [str(x).strip() for x in layers if str(x).strip()]
+    if not layers:
+        layers = ["instant", "short"]
+    for lyr in layers:
+        if lyr not in LAYER_SET:
+            raise ValueError(f"invalid layer: {lyr}")
+
+    if keep_kinds is None:
+        keep_kinds = ["decision", "checkpoint"]
+    keep_kinds = [str(x).strip() for x in keep_kinds if str(x).strip()]
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cutoff = (now - timedelta(days=days)).isoformat()
+    lyr_placeholders = ",".join(["?"] * len(layers))
+    keep_placeholders = ",".join(["?"] * len(keep_kinds))
+    keep_sql = f"AND kind NOT IN ({keep_placeholders})" if keep_kinds else ""
+    sid_where = ""
+    sid_args: list[Any] = []
+    if session_id:
+        sid_where = "AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?"
+        sid_args.append(session_id)
+
+    with _sqlite_connect(paths.sqlite_path, timeout=8.0) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        rows = conn.execute(
+            f"""
+            SELECT id, layer, kind, summary, updated_at, body_md_path,
+                   COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                   COALESCE(json_extract(source_json, '$.session_id'), '') AS source_session_id
+            FROM memories
+            WHERE layer IN ({lyr_placeholders})
+              {keep_sql}
+              AND updated_at <= ?
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              {sid_where}
+            ORDER BY updated_at ASC
+            LIMIT ?
+            """,
+            (
+                *layers,
+                *(keep_kinds if keep_kinds else []),
+                cutoff,
+                project_id,
+                project_id,
+                *sid_args,
+                limit,
+            ),
+        ).fetchall()
+
+        items: list[dict[str, Any]] = []
+        deleted_ids: list[str] = []
+        layer_counts: dict[str, int] = {}
+        for r in rows:
+            item = {
+                "id": str(r["id"]),
+                "layer": str(r["layer"]),
+                "kind": str(r["kind"]),
+                "summary": str(r["summary"] or ""),
+                "updated_at": str(r["updated_at"] or ""),
+                "project_id": str(r["project_id"] or ""),
+                "session_id": str(r["source_session_id"] or ""),
+                "body_md_path": str(r["body_md_path"] or ""),
+            }
+            items.append(item)
+            layer_counts[item["layer"]] = layer_counts.get(item["layer"], 0) + 1
+            if dry_run:
+                continue
+            md_rel = str(r["body_md_path"] or "").strip()
+            if md_rel:
+                fp = paths.markdown_root / md_rel
+                try:
+                    if fp.exists():
+                        fp.unlink()
+                except Exception:
+                    pass
+            conn.execute("DELETE FROM memories WHERE id = ?", (str(r["id"]),))
+            deleted_ids.append(str(r["id"]))
+
+        if not dry_run:
+            conn.commit()
+
+    if not dry_run and items:
+        log_system_event(
+            paths,
+            schema_sql_path,
+            "memory.prune",
+            {
+                "tool": tool,
+                "actor_session_id": actor_session_id,
+                "project_id": project_id,
+                "session_id": session_id,
+                "days": days,
+                "layers": layers,
+                "keep_kinds": keep_kinds,
+                "limit": limit,
+                "deleted": len(deleted_ids),
+                "layer_counts": layer_counts,
+                "sample_ids": deleted_ids[:100],
+            },
+            portable=False,
+        )
+
+    return {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "project_id": project_id,
+        "session_id": session_id,
+        "days": int(days),
+        "layers": layers,
+        "keep_kinds": keep_kinds,
+        "limit": int(limit),
+        "count": len(items),
+        "deleted": len(deleted_ids),
+        "layer_counts": layer_counts,
+        "items": items,
     }
 
 

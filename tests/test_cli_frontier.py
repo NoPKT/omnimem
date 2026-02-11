@@ -80,6 +80,25 @@ class CLIFrontierCommandTest(unittest.TestCase):
         self.assertEqual(str(a.sync_layers or ""), "long,archive")
         self.assertFalse(bool(a.sync_include_jsonl))
 
+    def test_prune_command_registered(self) -> None:
+        p = build_parser()
+        a = p.parse_args(
+            [
+                "prune",
+                "--project-id",
+                "OM",
+                "--days",
+                "45",
+                "--layers",
+                "instant,short",
+                "--keep-kinds",
+                "decision,checkpoint",
+                "--limit",
+                "300",
+            ]
+        )
+        self.assertEqual(a.cmd, "prune")
+
 
 if __name__ == "__main__":
     unittest.main()

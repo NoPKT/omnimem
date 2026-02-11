@@ -44,6 +44,7 @@ from .core import (
     list_core_blocks,
     apply_memory_feedback,
     retrieve_thread,
+    prune_memories,
     load_config,
     load_config_with_path,
     parse_list_csv,
@@ -573,6 +574,32 @@ def cmd_decay(args: argparse.Namespace) -> int:
         dry_run=not bool(args.apply),
         tool="cli",
         session_id=str(args.session_id or "system"),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_prune(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    layers = None
+    if args.layers:
+        layers = [x.strip() for x in str(args.layers).split(",") if x.strip()]
+    keep_kinds = None
+    if args.keep_kinds:
+        keep_kinds = [x.strip() for x in str(args.keep_kinds).split(",") if x.strip()]
+    out = prune_memories(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        days=int(args.days),
+        limit=int(args.limit),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        layers=layers,
+        keep_kinds=keep_kinds,
+        dry_run=not bool(args.apply),
+        tool="cli",
+        actor_session_id=str(args.actor_session_id or "system"),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -2270,6 +2297,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_decay.add_argument("--limit", type=int, default=200)
     p_decay.add_argument("--apply", action="store_true", help="apply decay (default is preview/dry-run)")
     p_decay.set_defaults(func=cmd_decay)
+
+    p_prune = sub.add_parser("prune", help="preview/apply retention pruning for old memories")
+    p_prune.add_argument("--config", help="path to omnimem config json")
+    p_prune.add_argument("--project-id", default="")
+    p_prune.add_argument("--session-id", default="")
+    p_prune.add_argument("--actor-session-id", default="system")
+    p_prune.add_argument("--days", type=int, default=30, help="prune memories older than N days")
+    p_prune.add_argument("--layers", default="instant,short", help="comma-separated layers, default instant,short")
+    p_prune.add_argument(
+        "--keep-kinds",
+        default="decision,checkpoint",
+        help="comma-separated kinds to keep even if old; default decision,checkpoint",
+    )
+    p_prune.add_argument("--limit", type=int, default=500)
+    p_prune.add_argument("--apply", action="store_true", help="delete candidates (default preview)")
+    p_prune.set_defaults(func=cmd_prune)
 
     p_consolidate = sub.add_parser("consolidate", help="preview/apply adaptive memory consolidation (promote/demote)")
     p_consolidate.add_argument("--config", help="path to omnimem config json")
