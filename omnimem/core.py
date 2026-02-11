@@ -870,6 +870,10 @@ def infer_adaptive_governance_thresholds(
     q_demote_vol: float = 0.78,
     q_demote_stab: float = 0.28,
     q_demote_reuse: float = 0.30,
+    drift_aware: bool = False,
+    drift_recent_days: int = 14,
+    drift_baseline_days: int = 120,
+    drift_weight: float = 0.45,
 ) -> dict[str, Any]:
     """Infer consolidation thresholds from recent signal distributions."""
     ensure_storage(paths, schema_sql_path)
@@ -952,6 +956,45 @@ def infer_adaptive_governance_thresholds(
         d_stab = max(0.10, min(0.75, d_stab + (0.07 * feedback_bias)))
         d_reuse = max(0, min(8, int(round(d_reuse + (2.0 * feedback_bias)))))
 
+    drift_info: dict[str, Any] = {"enabled": bool(drift_aware), "applied": False}
+    if drift_aware:
+        try:
+            dr = analyze_profile_drift(
+                paths=paths,
+                schema_sql_path=schema_sql_path,
+                project_id=project_id,
+                session_id=session_id,
+                recent_days=max(1, min(60, int(drift_recent_days))),
+                baseline_days=max(2, min(720, int(drift_baseline_days))),
+                limit=1200,
+            )
+            score = max(0.0, min(1.0, float((dr.get("drift") or {}).get("score", 0.0) or 0.0)))
+            status = str((dr.get("drift") or {}).get("status", "insufficient") or "insufficient")
+            drift_info = {
+                "enabled": True,
+                "applied": False,
+                "status": status,
+                "score": float(round(score, 4)),
+                "weight": float(max(0.0, min(1.0, float(drift_weight)))),
+            }
+            if status != "insufficient":
+                # Higher drift implies less stable memory regime:
+                # tighten promotion slightly and ease demotion.
+                drift_bias = max(0.0, min(1.0, (score - 0.20) / 0.80))
+                bias = drift_bias * float(max(0.0, min(1.0, float(drift_weight))))
+                if bias > 1e-6:
+                    p_imp = max(0.55, min(0.95, p_imp + (0.035 * bias)))
+                    p_conf = max(0.50, min(0.92, p_conf + (0.040 * bias)))
+                    p_stab = max(0.50, min(0.95, p_stab + (0.040 * bias)))
+                    p_vol = max(0.20, min(0.85, p_vol - (0.030 * bias)))
+                    d_vol = max(0.50, min(0.98, d_vol - (0.065 * bias)))
+                    d_stab = max(0.10, min(0.75, d_stab + (0.050 * bias)))
+                    d_reuse = max(0, min(8, int(round(d_reuse + (1.5 * bias)))))
+                    drift_info["applied"] = True
+                    drift_info["bias"] = float(round(bias, 4))
+        except Exception:
+            drift_info = {"enabled": True, "applied": False, "error": "drift analysis unavailable"}
+
     return {
         "ok": True,
         "project_id": project_id,
@@ -981,6 +1024,7 @@ def infer_adaptive_governance_thresholds(
             "total": fb_total,
             "bias": float(round(feedback_bias, 4)),
         },
+        "drift": drift_info,
     }
 
 
@@ -1008,6 +1052,10 @@ def consolidate_memories(
     adaptive_q_demote_vol: float = 0.78,
     adaptive_q_demote_stab: float = 0.28,
     adaptive_q_demote_reuse: float = 0.30,
+    adaptive_drift_aware: bool = False,
+    adaptive_drift_recent_days: int = 14,
+    adaptive_drift_baseline_days: int = 120,
+    adaptive_drift_weight: float = 0.45,
     tool: str = "omnimem",
     actor_session_id: str = "system",
 ) -> dict[str, Any]:
@@ -1034,6 +1082,10 @@ def consolidate_memories(
             q_demote_vol=adaptive_q_demote_vol,
             q_demote_stab=adaptive_q_demote_stab,
             q_demote_reuse=adaptive_q_demote_reuse,
+            drift_aware=bool(adaptive_drift_aware),
+            drift_recent_days=int(adaptive_drift_recent_days),
+            drift_baseline_days=int(adaptive_drift_baseline_days),
+            drift_weight=float(adaptive_drift_weight),
         )
         th = dict(learned.get("thresholds") or {})
         p_imp = float(th.get("p_imp", p_imp))
@@ -4326,6 +4378,10 @@ def retrieve_thread(
     profile_aware: bool = False,
     profile_weight: float = 0.35,
     profile_limit: int = 240,
+    drift_aware: bool = False,
+    drift_recent_days: int = 14,
+    drift_baseline_days: int = 120,
+    drift_weight: float = 0.35,
 ) -> dict[str, Any]:
     """Progressive, graph-aware retrieval.
 
@@ -4350,6 +4406,54 @@ def retrieve_thread(
     profile_aware = bool(profile_aware)
     profile_weight = max(0.0, min(1.0, float(profile_weight)))
     profile_limit = max(20, min(1200, int(profile_limit)))
+    drift_aware = bool(drift_aware)
+    drift_recent_days = max(1, min(60, int(drift_recent_days)))
+    drift_baseline_days = max(drift_recent_days + 1, min(720, int(drift_baseline_days)))
+    drift_weight = max(0.0, min(1.0, float(drift_weight)))
+
+    drift_explain: dict[str, Any] = {
+        "enabled": drift_aware,
+        "applied": False,
+        "status": "disabled",
+        "score": 0.0,
+        "weight": float(drift_weight),
+        "adjustments": {},
+    }
+    if drift_aware:
+        try:
+            dout = analyze_profile_drift(
+                paths=paths,
+                schema_sql_path=schema_sql_path,
+                project_id=project_id,
+                session_id=session_id,
+                recent_days=drift_recent_days,
+                baseline_days=drift_baseline_days,
+                limit=1200,
+            )
+            drift = dict(dout.get("drift") or {})
+            status = str(drift.get("status", "insufficient") or "insufficient")
+            score = max(0.0, min(1.0, float(drift.get("score", 0.0) or 0.0)))
+            drift_explain.update({"status": status, "score": round(float(score), 4)})
+            if status != "insufficient":
+                # During profile drift, prioritize exploration/diversity and weaken stale profile bias.
+                factor = max(0.0, min(1.0, (score - 0.20) / 0.80))
+                adj = factor * drift_weight
+                if adj > 1e-6:
+                    old_depth, old_per_hop, old_mmr, old_pw = depth, per_hop, mmr_lambda, profile_weight
+                    depth = max(0, min(4, int(round(depth + (1.0 * adj)))))
+                    per_hop = max(1, min(30, int(round(per_hop + (2.0 * adj)))))
+                    mmr_lambda = max(0.05, min(0.95, float(mmr_lambda - (0.10 * adj))))
+                    profile_weight = max(0.0, min(1.0, float(profile_weight * (1.0 - (0.55 * adj)))))
+                    drift_explain["applied"] = True
+                    drift_explain["adjustments"] = {
+                        "depth": {"from": int(old_depth), "to": int(depth)},
+                        "per_hop": {"from": int(old_per_hop), "to": int(per_hop)},
+                        "mmr_lambda": {"from": float(round(old_mmr, 4)), "to": float(round(mmr_lambda, 4))},
+                        "profile_weight": {"from": float(round(old_pw, 4)), "to": float(round(profile_weight, 4))},
+                        "bias": float(round(adj, 4)),
+                    }
+        except Exception:
+            drift_explain.update({"status": "error", "error": "drift analysis unavailable"})
 
     # Best-effort: keep the link graph from being perpetually empty when running without a daemon.
     # Guard per home so repeated retrieves don't constantly try to weave while DB is busy.
@@ -4550,6 +4654,7 @@ def retrieve_thread(
                     "self_check": _self_rag_check(query, []) if self_check else {"enabled": False},
                     "adaptive_feedback": {"enabled": bool(adaptive_feedback), "updated": 0},
                     "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
+                    "drift": drift_explain,
                     "pipeline_ms": {
                         "seed": t_seed_ms,
                         "graph": t_graph_ms,
@@ -4651,6 +4756,7 @@ def retrieve_thread(
             "self_check": self_eval,
             "adaptive_feedback": feedback,
             "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
+            "drift": drift_explain,
             "pipeline_ms": {
                 "seed": t_seed_ms,
                 "graph": t_graph_ms,

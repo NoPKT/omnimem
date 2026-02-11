@@ -10,6 +10,7 @@
 - Governance upgrade: adaptive threshold inference now incorporates explicit memory feedback distribution (`memory.feedback`) so negative/forget-heavy periods make demotion easier and promotion stricter.
 - Profile analytics: add profile drift detection (`omnimem profile-drift` / `GET /api/profile/drift`) to compare recent focus against baseline and surface emerged terms/tags.
 - WebUI cleanup: unify repeated boolean query parsing with shared `_parse_bool_param` helper.
+- Drift-aware retrieval/governance: `retrieve_thread` can now adapt exploration/diversity/profile bias using profile drift signal (`--drift-aware`), and adaptive governance threshold inference can optionally incorporate drift signal (`drift_aware`) for safer promote/demote decisions.
 
 ## 0.2.21 - 2026-02-11
 

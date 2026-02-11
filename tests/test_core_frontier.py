@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from omnimem.core import (
     MemoryPaths,
@@ -141,6 +142,36 @@ class CoreFrontierFeatureTest(unittest.TestCase):
         ex = out.get("explain") or {}
         prof = ex.get("profile") or {}
         self.assertTrue(bool(prof.get("enabled")))
+
+    def test_retrieve_thread_drift_aware_adjusts_params(self) -> None:
+        self._write("drift runbook one", "content one")
+        self._write("drift runbook two", "content two")
+        with patch(
+            "omnimem.core.analyze_profile_drift",
+            return_value={"ok": True, "drift": {"status": "high", "score": 0.9}},
+        ):
+            out = retrieve_thread(
+                paths=self.paths,
+                schema_sql_path=self.schema,
+                query="drift runbook",
+                project_id="OM",
+                session_id="s1",
+                depth=1,
+                per_hop=3,
+                mmr_lambda=0.72,
+                profile_aware=True,
+                profile_weight=0.40,
+                drift_aware=True,
+                drift_weight=0.50,
+            )
+        self.assertTrue(out.get("ok"))
+        ex = out.get("explain") or {}
+        dr = ex.get("drift") or {}
+        self.assertTrue(bool(dr.get("enabled")))
+        self.assertTrue(bool(dr.get("applied")))
+        adj = dr.get("adjustments") or {}
+        self.assertGreaterEqual(int(((adj.get("depth") or {}).get("to", 0))), 1)
+        self.assertLess(float(((adj.get("mmr_lambda") or {}).get("to", 1.0))), 0.72)
 
 
 if __name__ == "__main__":

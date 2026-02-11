@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from omnimem.core import MemoryPaths, apply_memory_feedback, infer_adaptive_governance_thresholds, write_memory
 
@@ -99,6 +100,39 @@ class CoreGovernanceFeedbackTest(unittest.TestCase):
         t0 = base.get("thresholds") or {}
         t1 = adj.get("thresholds") or {}
         self.assertGreaterEqual(float(t1.get("p_conf", 0.0)), float(t0.get("p_conf", 0.0)))
+        self.assertLessEqual(float(t1.get("d_vol", 1.0)), float(t0.get("d_vol", 1.0)))
+
+    def test_drift_aware_adjusts_thresholds(self) -> None:
+        base = infer_adaptive_governance_thresholds(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            days=30,
+            drift_aware=False,
+        )
+        self.assertTrue(base.get("ok"))
+
+        with patch(
+            "omnimem.core.analyze_profile_drift",
+            return_value={"ok": True, "drift": {"status": "high", "score": 0.9}},
+        ):
+            drifted = infer_adaptive_governance_thresholds(
+                paths=self.paths,
+                schema_sql_path=self.schema,
+                project_id="OM",
+                session_id="s1",
+                days=30,
+                drift_aware=True,
+                drift_weight=0.6,
+            )
+        self.assertTrue(drifted.get("ok"))
+        di = drifted.get("drift") or {}
+        self.assertTrue(bool(di.get("enabled")))
+        self.assertTrue(bool(di.get("applied")))
+        t0 = base.get("thresholds") or {}
+        t1 = drifted.get("thresholds") or {}
+        self.assertGreaterEqual(float(t1.get("p_imp", 0.0)), float(t0.get("p_imp", 0.0)))
         self.assertLessEqual(float(t1.get("d_vol", 1.0)), float(t0.get("d_vol", 1.0)))
 
 

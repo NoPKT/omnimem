@@ -5749,6 +5749,10 @@ def run_webui(
                 diversify = _parse_bool_param(q.get("diversify", ["1"])[0], default=True)
                 profile_aware = _parse_bool_param(q.get("profile_aware", ["1"])[0], default=True)
                 profile_weight = _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
+                drift_aware = _parse_bool_param(q.get("drift_aware", ["1"])[0], default=True)
+                drift_recent_days = _parse_int_param(q.get("drift_recent_days", ["14"])[0], default=14, lo=1, hi=60)
+                drift_baseline_days = _parse_int_param(q.get("drift_baseline_days", ["120"])[0], default=120, lo=2, hi=720)
+                drift_weight = _parse_float_param(q.get("drift_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
                 dedup_mode = _normalize_dedup_mode(q.get("dedup", ["off"])[0])
                 mmr_lambda = _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95)
                 if mode == "smart" and query:
@@ -5768,6 +5772,10 @@ def run_webui(
                         limit_i,
                         bool(profile_aware),
                         float(profile_weight),
+                        bool(drift_aware),
+                        int(drift_recent_days),
+                        int(drift_baseline_days),
+                        float(drift_weight),
                     )
                     out: dict[str, Any] | None = None
                     now = time.time()
@@ -5792,6 +5800,10 @@ def run_webui(
                             feedback_reuse_step=1,
                             profile_aware=bool(profile_aware),
                             profile_weight=float(profile_weight),
+                            drift_aware=bool(drift_aware),
+                            drift_recent_days=int(drift_recent_days),
+                            drift_baseline_days=int(drift_baseline_days),
+                            drift_weight=float(drift_weight),
                         )
                         with smart_retrieve_lock:
                             _cache_set(smart_retrieve_cache, cache_key, out, now=now, max_items=96)
@@ -5972,11 +5984,17 @@ def run_webui(
                             q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
                             q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
                             q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
+                            drift_aware=True,
+                            drift_recent_days=14,
+                            drift_baseline_days=120,
+                            drift_weight=0.45,
                         )
                         if rec.get("ok"):
                             recommended = {
                                 "thresholds": dict(rec.get("thresholds") or {}),
                                 "quantiles": dict(rec.get("quantiles") or {}),
+                                "feedback": dict(rec.get("feedback") or {}),
+                                "drift": dict(rec.get("drift") or {}),
                                 "sample_size": int(rec.get("sample_size", 0) or 0),
                                 "window_days": int(rec.get("days", 14) or 14),
                             }
@@ -6059,10 +6077,19 @@ def run_webui(
                             q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
                             q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
                             q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
+                            drift_aware=True,
+                            drift_recent_days=14,
+                            drift_baseline_days=120,
+                            drift_weight=0.45,
                         )
                         if inf.get("ok"):
                             thresholds = dict(inf.get("thresholds") or thresholds)
                             quantiles = dict(inf.get("quantiles") or {})
+                            drift_info = dict(inf.get("drift") or {})
+                        else:
+                            drift_info = {}
+                    else:
+                        drift_info = {}
 
                     explain = _evaluate_governance_action(
                         layer=str(row["layer"] or ""),
@@ -6084,6 +6111,7 @@ def run_webui(
                             "adaptive": adaptive,
                             "days": days,
                             "quantiles": quantiles,
+                            "drift": drift_info,
                             "explain": explain,
                         }
                     )

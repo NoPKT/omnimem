@@ -139,6 +139,7 @@ omnimem raptor --project-id OM
 omnimem enhance --project-id OM
 omnimem profile --project-id OM
 omnimem profile-drift --project-id OM --recent-days 14 --baseline-days 120
+omnimem retrieve "workflow guide" --project-id OM --drift-aware --drift-weight 0.4 --explain
 omnimem ingest --type url "https://example.com/doc?token=***"
 omnimem ingest --type file ./docs/notes.md
 omnimem ingest --type file ./docs/design.md --chunk-mode heading --max-chunks 12

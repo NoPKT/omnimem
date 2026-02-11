@@ -36,6 +36,12 @@ class CLIFrontierCommandTest(unittest.TestCase):
         args = p.parse_args(["feedback", "--id", "m1", "--feedback", "positive"])
         self.assertEqual(args.cmd, "feedback")
 
+    def test_retrieve_drift_args_registered(self) -> None:
+        p = build_parser()
+        args = p.parse_args(["retrieve", "hello", "--drift-aware", "--drift-weight", "0.4"])
+        self.assertEqual(args.cmd, "retrieve")
+        self.assertTrue(bool(args.drift_aware))
+
 
 if __name__ == "__main__":
     unittest.main()

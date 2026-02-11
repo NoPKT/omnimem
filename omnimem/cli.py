@@ -315,6 +315,10 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         profile_aware=bool(getattr(args, "profile_aware", False)),
         profile_weight=float(getattr(args, "profile_weight", 0.35)),
         profile_limit=int(getattr(args, "profile_limit", 240)),
+        drift_aware=bool(getattr(args, "drift_aware", False)),
+        drift_recent_days=int(getattr(args, "drift_recent_days", 14)),
+        drift_baseline_days=int(getattr(args, "drift_baseline_days", 120)),
+        drift_weight=float(getattr(args, "drift_weight", 0.35)),
     )
     if not getattr(args, "explain", False):
         out.pop("explain", None)
@@ -1976,6 +1980,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_retrieve.add_argument("--profile-weight", type=float, default=0.35, help="profile boost weight (0..1)")
     p_retrieve.add_argument("--profile-limit", type=int, default=240, help="max memories sampled for profile inference")
+    p_retrieve.add_argument(
+        "--drift-aware",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="adapt retrieval exploration/profile bias using profile drift signal",
+    )
+    p_retrieve.add_argument("--drift-recent-days", type=int, default=14)
+    p_retrieve.add_argument("--drift-baseline-days", type=int, default=120)
+    p_retrieve.add_argument("--drift-weight", type=float, default=0.35, help="drift adaptation weight (0..1)")
     p_retrieve.add_argument("--explain", action="store_true", help="include seed/paths explanation")
     p_retrieve.set_defaults(func=cmd_retrieve)
 
