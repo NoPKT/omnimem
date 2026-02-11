@@ -766,8 +766,13 @@ HTML_PAGE = """<!doctype html>
             <label><span>Protocol</span><select name=\"gh_protocol\"><option value=\"ssh\">ssh</option><option value=\"https\">https</option></select></label>
             <label><span>Create If Missing</span><select name=\"gh_create_if_missing\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
             <label><span>Create As Private</span><select name=\"gh_private_repo\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
+            <label><span>Repo Filter</span><input name=\"gh_repo_filter\" placeholder=\"keyword\" /></label>
+            <label><span>Choose Existing Repo</span><select name=\"gh_repo_picker\"><option value=\"\">(click Refresh Repo List)</option></select></label>
             <div class=\"row-btn\">
+              <button type=\"button\" id=\"btnGithubAuthStart\">Sign In via GitHub</button>
               <button type=\"button\" id=\"btnGithubStatus\">Check GitHub Auth</button>
+              <button type=\"button\" id=\"btnGithubRepos\">Refresh Repo List</button>
+              <button type=\"button\" id=\"btnGithubUseSelected\">Use Selected Repo</button>
               <button type=\"button\" id=\"btnGithubQuickSetup\">Apply GitHub Setup</button>
             </div>
             <pre id=\"githubQuickOut\" class=\"small\"></pre>
@@ -1993,6 +1998,61 @@ HTML_PAGE = """<!doctype html>
       return d;
     }
 
+    async function githubAuthStart() {
+      const f = document.getElementById('cfgForm');
+      const out = document.getElementById('githubQuickOut');
+      const payload = { protocol: f.elements['gh_protocol'].value || 'https' };
+      const d = await jpost('/api/github/auth/start', payload);
+      out.textContent = JSON.stringify(d, null, 2);
+      if (d.ok && d.started) {
+        toast('GitHub', 'Browser auth started; complete login and click Check GitHub Auth.', true);
+      } else if (d.ok && d.already_authenticated) {
+        toast('GitHub', 'Already authenticated.', true);
+      } else {
+        toast('GitHub', d.error || 'failed to start auth', false);
+      }
+      return d;
+    }
+
+    async function loadGithubRepos() {
+      const f = document.getElementById('cfgForm');
+      const out = document.getElementById('githubQuickOut');
+      const picker = f.elements['gh_repo_picker'];
+      const q = encodeURIComponent(String(f.elements['gh_repo_filter'].value || '').trim());
+      const d = await jget(`/api/github/repos?limit=80&query=${q}`);
+      picker.innerHTML = '';
+      if (!d.ok) {
+        out.textContent = JSON.stringify(d, null, 2);
+        return d;
+      }
+      const items = Array.isArray(d.items) ? d.items : [];
+      if (!items.length) {
+        const op = document.createElement('option');
+        op.value = '';
+        op.textContent = '(no repos)';
+        picker.appendChild(op);
+      } else {
+        for (const it of items) {
+          const nm = String(it.full_name || '');
+          const vis = it.private ? 'private' : 'public';
+          const op = document.createElement('option');
+          op.value = nm;
+          op.textContent = `${nm} (${vis})`;
+          picker.appendChild(op);
+        }
+      }
+      out.textContent = JSON.stringify(d, null, 2);
+      return d;
+    }
+
+    function useSelectedGithubRepo() {
+      const f = document.getElementById('cfgForm');
+      const picker = f.elements['gh_repo_picker'];
+      const v = String((picker && picker.value) || '').trim();
+      if (!v) return;
+      f.elements['gh_full_name'].value = v;
+    }
+
     async function githubQuickSetup() {
       const f = document.getElementById('cfgForm');
       const out = document.getElementById('githubQuickOut');
@@ -2460,7 +2520,10 @@ HTML_PAGE = """<!doctype html>
       await loadLayerStats();
       await loadInsights();
     };
+    document.getElementById('btnGithubAuthStart').onclick = async () => { await githubAuthStart(); };
     document.getElementById('btnGithubStatus').onclick = async () => { await checkGithubStatus(); };
+    document.getElementById('btnGithubRepos').onclick = async () => { await loadGithubRepos(); };
+    document.getElementById('btnGithubUseSelected').onclick = () => { useSelectedGithubRepo(); };
     document.getElementById('btnGithubQuickSetup').onclick = async () => { await githubQuickSetup(); };
 
     async function runSync(mode) {
@@ -4539,6 +4602,82 @@ def _github_status() -> dict[str, Any]:
         return {"ok": True, "installed": True, "authenticated": False, "error": str(exc)}
 
 
+def _github_repo_list(*, query: str = "", limit: int = 50) -> dict[str, Any]:
+    gh = shutil.which("gh")
+    if not gh:
+        return {"ok": True, "installed": False, "authenticated": False, "items": []}
+    n = max(1, min(200, int(limit)))
+    try:
+        cp = subprocess.run(
+            [gh, "repo", "list", "--limit", str(n), "--json", "nameWithOwner,isPrivate,viewerPermission,url"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if int(cp.returncode) != 0:
+            txt = ((cp.stderr or "") + "\n" + (cp.stdout or "")).strip()
+            return {
+                "ok": True,
+                "installed": True,
+                "authenticated": False,
+                "items": [],
+                "error": txt[:1200],
+            }
+        raw_items = json.loads(cp.stdout or "[]")
+        q = str(query or "").strip().lower()
+        items: list[dict[str, Any]] = []
+        for it in raw_items if isinstance(raw_items, list) else []:
+            name = str((it or {}).get("nameWithOwner") or "").strip()
+            if not name:
+                continue
+            if q and q not in name.lower():
+                continue
+            items.append(
+                {
+                    "full_name": name,
+                    "private": bool((it or {}).get("isPrivate", False)),
+                    "permission": str((it or {}).get("viewerPermission") or ""),
+                    "url": str((it or {}).get("url") or ""),
+                }
+            )
+        items.sort(key=lambda x: str(x.get("full_name") or "").lower())
+        return {"ok": True, "installed": True, "authenticated": True, "count": len(items), "items": items[:n]}
+    except Exception as exc:
+        return {"ok": True, "installed": True, "authenticated": False, "items": [], "error": str(exc)}
+
+
+def _github_auth_start(*, protocol: str = "https") -> dict[str, Any]:
+    gh = shutil.which("gh")
+    if not gh:
+        return {"ok": False, "error": "gh CLI is not installed"}
+    proto = str(protocol or "https").strip().lower()
+    if proto not in {"https", "ssh"}:
+        proto = "https"
+    status = _github_status()
+    if bool(status.get("authenticated", False)):
+        return {"ok": True, "already_authenticated": True}
+    cmd = [gh, "auth", "login", "--hostname", "github.com", "--git-protocol", proto, "--web"]
+    if proto == "ssh":
+        cmd.append("--skip-ssh-key")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return {
+            "ok": True,
+            "started": True,
+            "pid": int(proc.pid),
+            "protocol": proto,
+            "hint": "Complete authentication in browser, then click Check GitHub Auth.",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def _github_quick_setup(
     *,
     cfg: dict[str, Any],
@@ -6061,6 +6200,13 @@ def run_webui(
                 self._send_json(_github_status())
                 return
 
+            if parsed.path == "/api/github/repos":
+                q = parse_qs(parsed.query)
+                limit = _parse_int_param(q.get("limit", ["80"])[0], default=80, lo=1, hi=200)
+                query = str(q.get("query", [""])[0] or "").strip()
+                self._send_json(_github_repo_list(query=query, limit=limit))
+                return
+
             if parsed.path == "/api/route-templates":
                 try:
                     items = _normalize_route_templates(cfg.get("webui", {}).get("route_templates", []))
@@ -7338,6 +7484,14 @@ def run_webui(
                         private_repo=bool(data.get("private_repo", True)),
                     )
                     self._send_json(out)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 400)
+                return
+
+            if parsed.path == "/api/github/auth/start":
+                try:
+                    protocol = str(data.get("protocol", "https") or "https").strip().lower()
+                    self._send_json(_github_auth_start(protocol=protocol))
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 400)
                 return

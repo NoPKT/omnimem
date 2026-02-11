@@ -314,7 +314,9 @@ Optional daemon prune maintenance (default off):
 GitHub quick setup in WebUI:
 
 - Config page now includes `GitHub Quick Setup` (repo `owner/repo`, protocol, optional create-if-missing).
+- `Sign In via GitHub` starts browser auth (`gh auth login --web`) so you can authenticate without manually creating SSH keys/tokens in OM.
 - `Check GitHub Auth` uses local `gh auth status` (if `gh` is installed).
+- `Refresh Repo List` can pull account-visible repos (via `gh repo list`) and fill `owner/repo` by selection.
 - `Apply GitHub Setup` writes sync remote config without manually pasting long remote URLs.
 - Optional repo auto-create requires authenticated `gh` CLI on the server host.
 

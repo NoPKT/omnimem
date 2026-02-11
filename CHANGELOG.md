@@ -33,6 +33,8 @@
 - Retention cleanup: add `omnimem prune` (preview/apply) to remove old memories by layer/age with keep-kind guards (defaults keep `decision,checkpoint`) for storage and sync-size control.
 - Daemon maintenance: add optional prune pass controls (`maintenance_prune_*`) in CLI/WebUI config path (disabled by default) to automate safe retention cleanup.
 - WebUI UX: add GitHub quick-setup flow (`/api/github/status`, `/api/github/quick-setup`) for short repo selection/configuration and optional `gh`-based repo auto-create.
+- WebUI UX upgrade: add GitHub repo picker (`/api/github/repos`) to select `owner/repo` from `gh repo list` results instead of manual entry.
+- WebUI UX upgrade: add one-click GitHub browser auth start (`/api/github/auth/start`) so users can authenticate via `gh auth login --web` without manual SSH key/token setup in OM.
 - WebUI cleanup: extract governance query/packing helpers (`_parse_governance_request`, `_governance_scope_filters`, `_pack_governance_rows`, `_infer_governance_thresholds`) to reduce endpoint complexity.
 
 ## 0.2.21 - 2026-02-11

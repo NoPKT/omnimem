@@ -5,11 +5,14 @@ import unittest
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import sqlite3
+from unittest.mock import patch
 
 from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
+    _github_auth_start,
     _build_github_remote_url,
     _cfg_to_ui,
+    _github_repo_list,
     _github_status,
     _normalize_github_full_name,
     _aggregate_event_stats,
@@ -244,6 +247,27 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         self.assertTrue(bool(out.get("ok")))
         self.assertIn("installed", out)
         self.assertIn("authenticated", out)
+
+    def test_github_repo_list_returns_shape(self) -> None:
+        out = _github_repo_list(query="", limit=5)
+        self.assertTrue(bool(out.get("ok")))
+        self.assertIn("installed", out)
+        self.assertIn("authenticated", out)
+        self.assertIn("items", out)
+
+    def test_github_auth_start_reports_missing_cli(self) -> None:
+        with patch("omnimem.webui.shutil.which", return_value=None):
+            out = _github_auth_start(protocol="https")
+        self.assertFalse(bool(out.get("ok")))
+        self.assertIn("error", out)
+
+    def test_github_auth_start_already_authenticated(self) -> None:
+        with patch("omnimem.webui.shutil.which", return_value="/usr/bin/gh"), patch(
+            "omnimem.webui._github_status", return_value={"ok": True, "installed": True, "authenticated": True}
+        ):
+            out = _github_auth_start(protocol="ssh")
+        self.assertTrue(bool(out.get("ok")))
+        self.assertTrue(bool(out.get("already_authenticated")))
 
     def test_memory_route_inference(self) -> None:
         self.assertEqual(_normalize_memory_route("procedural"), "procedural")

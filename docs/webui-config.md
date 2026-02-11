@@ -60,6 +60,11 @@ WebUI provides:
 - Route templates can be persisted server-side (`/api/route-templates`) and shared across sessions/devices via config sync
 - Optional approval gate for apply actions: `webui.approval_required=true`
 - Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
+- GitHub quick auth/setup actions on Config tab:
+  - `Sign In via GitHub`: launches browser auth via local `gh auth login --web`
+  - `Check GitHub Auth`: checks local `gh auth status`
+  - `Refresh Repo List` + `Use Selected Repo`: pick `owner/repo` from `gh repo list`
+  - `Apply GitHub Setup`: writes sync remote settings from selected protocol/repo
 
 Recommended safe rollout:
 
