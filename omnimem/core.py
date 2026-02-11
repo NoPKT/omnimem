@@ -2592,6 +2592,12 @@ def _query_tokens(raw: str, *, max_tokens: int = 12) -> list[str]:
 
 
 def _signals_from_row(d: dict[str, Any]) -> dict[str, Any]:
+    raw_tags = d.pop("tags_json", None)
+    if raw_tags is not None and "tags" not in d:
+        try:
+            d["tags"] = json.loads(raw_tags or "[]")
+        except Exception:
+            d["tags"] = []
     d["signals"] = {
         "importance_score": float(d.pop("importance_score", 0.0) or 0.0),
         "confidence_score": float(d.pop("confidence_score", 0.0) or 0.0),
@@ -3341,6 +3347,7 @@ def retrieve_thread(
         rows2 = conn.execute(
             f"""
             SELECT id, layer, kind, summary, updated_at, body_md_path,
+                   tags_json,
                    COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
                    COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
                    importance_score, confidence_score, stability_score, reuse_count, volatility_score

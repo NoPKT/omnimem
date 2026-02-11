@@ -550,7 +550,9 @@ HTML_PAGE = """<!doctype html>
             </label>
             <div class=\"row-btn\">
               <button id=\"btnGovernReload\" class=\"secondary\" style=\"margin-top:8px\">Apply</button>
+              <button id=\"btnGovernApplyReco\" class=\"secondary\" style=\"margin-top:8px\">Apply Recommended</button>
             </div>
+            <div id=\"govReco\" class=\"small mono\" style=\"margin-top:8px\"></div>
           </div>
           <div id=\"insGovern\" class=\"small\"></div>
         </div>
@@ -827,6 +829,34 @@ HTML_PAGE = """<!doctype html>
 	          <label>Query
 	            <input id=\"memQuery\" placeholder=\"(optional) FTS query\" />
 	          </label>
+            <div class=\"row-btn\">
+              <button id=\"btnPresetQuick\" class=\"secondary\" style=\"margin-top:0\">Preset: Quick Context</button>
+              <button id=\"btnPresetDeep\" class=\"secondary\" style=\"margin-top:0\">Preset: Deep Research</button>
+              <button id=\"btnPresetPrecise\" class=\"secondary\" style=\"margin-top:0\">Preset: Precision FTS</button>
+            </div>
+            <div class=\"muted-box\" style=\"margin-top:8px\">
+              <div class=\"small\"><b>Query Builder</b></div>
+              <div class=\"row-btn\" style=\"margin-top:8px\">
+                <label style=\"margin-top:0\">kind
+                  <select id=\"memQKind\" class=\"lang\" style=\"max-width:180px;\">
+                    <option value=\"\">(any)</option>
+                    <option value=\"note\">note</option>
+                    <option value=\"decision\">decision</option>
+                    <option value=\"task\">task</option>
+                    <option value=\"checkpoint\">checkpoint</option>
+                    <option value=\"summary\">summary</option>
+                    <option value=\"evidence\">evidence</option>
+                  </select>
+                </label>
+                <label style=\"margin-top:0\">tag
+                  <input id=\"memQTag\" placeholder=\"e.g. auto:distill\" style=\"max-width:220px\" />
+                </label>
+                <label style=\"margin-top:0\">since(days)
+                  <input id=\"memQSinceDays\" type=\"number\" min=\"0\" max=\"365\" value=\"0\" style=\"max-width:110px\" />
+                </label>
+                <button id=\"btnMemBuildQuery\" class=\"secondary\" style=\"margin-top:0\">Build Query</button>
+              </div>
+            </div>
 	          <div class=\"row-btn\">
 	            <label style=\"margin-top:0\">Retrieve Mode
 	              <select id=\"memRetrieveMode\" class=\"lang\" style=\"max-width:180px;\">
@@ -1366,6 +1396,7 @@ HTML_PAGE = """<!doctype html>
 		    let selectedEventIdx = -1;
 		    let eventsSort = { key: 'event_time', dir: 'desc' };
 		    let lastEventsCtx = { project_id:'', session_id:'', event_type:'' };
+        let governanceRecommended = null;
 		    let pendingWsImport = null;
 		    let pendingWsSource = '';
 
@@ -1897,17 +1928,29 @@ HTML_PAGE = """<!doctype html>
 	      const r = x && x.retrieval ? x.retrieval : null;
         const why = Array.isArray(x?.why_recalled) ? x.why_recalled.filter(Boolean).slice(0, 2) : [];
         const whyHtml = why.length ? `<div class=\"small\">why: ${escHtml(why.join(' | '))}</div>` : '';
+        const sig = (x && x.signals && typeof x.signals === 'object') ? x.signals : {};
+        const conf = Math.max(0, Math.min(1, Number(sig.confidence_score || 0)));
+        const stab = Math.max(0, Math.min(1, Number(sig.stability_score || 0)));
+        const imp = Math.max(0, Math.min(1, Number(sig.importance_score || 0)));
+        function spark(v, cls) {
+          return `<span class=\"${cls}\" style=\"display:inline-block; width:${Math.round(v * 56)}px; max-width:56px; min-width:6px; height:6px; border-radius:999px;\"></span>`;
+        }
+        const heat = `<div class=\"small\" style=\"display:flex; gap:6px; align-items:center\">`
+          + `<span class=\"mono\">I</span>${spark(imp, 'ok')}`
+          + `<span class=\"mono\">C</span>${spark(conf, 'ok')}`
+          + `<span class=\"mono\">S</span>${spark(stab, 'warn')}`
+          + `</div>`;
 	      if ((!r || typeof r !== 'object') && typeof x.score === 'number') {
-	        return `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>${whyHtml}`;
+	        return `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>${heat}${whyHtml}`;
 	      }
-	      if (!r || typeof r !== 'object') return whyHtml;
+	      if (!r || typeof r !== 'object') return heat + whyHtml;
 	      const c = (r.components && typeof r.components === 'object') ? r.components : {};
 	      const score = Number(r.score || 0);
 	      const rel = Number(c.relevance || 0);
 	      const rec = Number(c.recency || 0);
-	      const imp = Number(c.importance || 0);
+	      const impRel = Number(c.importance || 0);
 	      const strat = String(r.strategy || '');
-	      return `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(imp.toFixed(2))} ${escHtml(strat)}</div>${whyHtml}`;
+	      return `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(impRel.toFixed(2))} ${escHtml(strat)}</div>${heat}${whyHtml}`;
 	    }
 
 	    function smartTuneRetrieveParams() {
@@ -1949,6 +1992,47 @@ HTML_PAGE = """<!doctype html>
 	      safeSetRetrievePrefs({ mode: 'smart', depth, per_hop, ranking, route: 'auto', diversify: true, mmr_lambda: 0.72 });
 	    }
 
+      function buildComposedQuery() {
+        const base = document.getElementById('memQuery')?.value?.trim() || '';
+        const qKind = document.getElementById('memQKind')?.value?.trim() || '';
+        const qTag = document.getElementById('memQTag')?.value?.trim() || '';
+        const sinceDays = Number(document.getElementById('memQSinceDays')?.value || 0);
+        const parts = [];
+        if (base) parts.push(base);
+        if (qKind) parts.push(`kind:${qKind}`);
+        if (qTag) parts.push(`tag:${qTag}`);
+        return {
+          query: parts.join(' ').trim(),
+          since_days: Number.isFinite(sinceDays) ? Math.max(0, Math.min(365, Math.floor(sinceDays))) : 0,
+          kind: qKind,
+          tag: qTag,
+        };
+      }
+
+      function applyRetrievePreset(name) {
+        const modeEl = document.getElementById('memRetrieveMode');
+        const depthEl = document.getElementById('memRetrieveDepth');
+        const hopEl = document.getElementById('memRetrievePerHop');
+        const rankEl = document.getElementById('memRankingMode');
+        const divEl = document.getElementById('memDiversify');
+        const mmrEl = document.getElementById('memMmrLambda');
+        const routeEl = document.getElementById('memRouteMode');
+        let cfg = { mode: 'smart', depth: 2, per_hop: 6, ranking: 'hybrid', diversify: true, mmr_lambda: 0.72, route: 'auto' };
+        if (name === 'quick') cfg = { mode: 'smart', depth: 1, per_hop: 4, ranking: 'path', diversify: true, mmr_lambda: 0.70, route: 'auto' };
+        if (name === 'deep') cfg = { mode: 'smart', depth: 3, per_hop: 8, ranking: 'ppr', diversify: true, mmr_lambda: 0.64, route: 'semantic' };
+        if (name === 'precise') cfg = { mode: 'basic', depth: 1, per_hop: 3, ranking: 'path', diversify: false, mmr_lambda: 0.90, route: 'procedural' };
+        if (modeEl) modeEl.value = cfg.mode;
+        if (depthEl) depthEl.value = String(cfg.depth);
+        if (hopEl) hopEl.value = String(cfg.per_hop);
+        if (rankEl) rankEl.value = cfg.ranking;
+        if (divEl) divEl.value = cfg.diversify ? 'true' : 'false';
+        if (mmrEl) mmrEl.value = String(cfg.mmr_lambda);
+        if (routeEl) routeEl.value = cfg.route;
+        safeSetRetrievePrefs(cfg);
+        const hint = document.getElementById('memRetrieveHint');
+        if (hint) hint.textContent = `preset=${name} mode=${cfg.mode} depth=${cfg.depth} per_hop=${cfg.per_hop} ranking=${cfg.ranking}`;
+      }
+
 	    function loadRetrievePrefs() {
 	      const p = safeGetRetrievePrefs();
 	      const modeEl = document.getElementById('memRetrieveMode');
@@ -1970,7 +2054,8 @@ HTML_PAGE = """<!doctype html>
 	    async function loadMem() {
 	      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
 	      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
-	      const query = document.getElementById('memQuery')?.value?.trim() || '';
+	      const composed = buildComposedQuery();
+	      const query = composed.query || '';
 	      const layer = document.getElementById('memLayer')?.value?.trim() || '';
 	      const mode = document.getElementById('memRetrieveMode')?.value?.trim() || 'basic';
 	      const depth = Number(document.getElementById('memRetrieveDepth')?.value || 2);
@@ -1994,6 +2079,9 @@ HTML_PAGE = """<!doctype html>
 	        + '&session_id=' + encodeURIComponent(session_id)
 	        + '&layer=' + encodeURIComponent(layer)
 	        + '&query=' + encodeURIComponent(query)
+          + '&kind=' + encodeURIComponent(composed.kind || '')
+          + '&tag=' + encodeURIComponent(composed.tag || '')
+          + '&since_days=' + encodeURIComponent(String(composed.since_days || 0))
 	        + '&mode=' + encodeURIComponent(mode)
 	        + '&depth=' + encodeURIComponent(String(Number.isFinite(depth) ? depth : 2))
 	        + '&per_hop=' + encodeURIComponent(String(Number.isFinite(per_hop) ? per_hop : 6))
@@ -2523,6 +2611,32 @@ HTML_PAGE = """<!doctype html>
       });
     }
 
+    function applyGovernanceRecommended() {
+      const r = governanceRecommended || {};
+      if (!Object.keys(r).length) {
+        toast('Governance', 'no recommended thresholds available', false);
+        return false;
+      }
+      const m = {
+        thrPImp: Number(r.p_imp),
+        thrPConf: Number(r.p_conf),
+        thrPStab: Number(r.p_stab),
+        thrPVol: Number(r.p_vol),
+        thrDVol: Number(r.d_vol),
+        thrDStab: Number(r.d_stab),
+        thrDReuse: Number(r.d_reuse),
+      };
+      Object.entries(m).forEach(([id, v]) => {
+        const el = document.getElementById(id);
+        if (!el || !Number.isFinite(v)) return;
+        el.value = String(v);
+      });
+      syncThrLabels();
+      saveThrToStorage();
+      toast('Governance', 'recommended thresholds applied', true);
+      return true;
+    }
+
     function renderCandidateRow(x, targetLayer) {
       const sig = x.signals || {};
       const s = `imp=${(sig.importance_score||0).toFixed(2)} conf=${(sig.confidence_score||0).toFixed(2)} stab=${(sig.stability_score||0).toFixed(2)} vol=${(sig.volatility_score||0).toFixed(2)} reuse=${sig.reuse_count||0}`;
@@ -2557,6 +2671,17 @@ HTML_PAGE = """<!doctype html>
       if (!d.ok) {
         el.innerHTML = `<span class="err">${escHtml(d.error || 'governance failed')}</span>`;
         return;
+      }
+      const reco = (d.recommended && d.recommended.thresholds && typeof d.recommended.thresholds === 'object')
+        ? d.recommended.thresholds : {};
+      governanceRecommended = Object.keys(reco).length ? reco : null;
+      const recoEl = document.getElementById('govReco');
+      if (recoEl) {
+        if (Object.keys(reco).length) {
+          recoEl.textContent = `recommended: p_imp=${Number(reco.p_imp || 0).toFixed(2)} p_conf=${Number(reco.p_conf || 0).toFixed(2)} p_stab=${Number(reco.p_stab || 0).toFixed(2)} p_vol=${Number(reco.p_vol || 0).toFixed(2)} d_vol=${Number(reco.d_vol || 0).toFixed(2)} d_stab=${Number(reco.d_stab || 0).toFixed(2)} d_reuse=${Number(reco.d_reuse || 0).toFixed(0)}`;
+        } else {
+          recoEl.textContent = '';
+        }
       }
       function whyPromote(x) {
         const s = x.signals || {};
@@ -3551,6 +3676,19 @@ HTML_PAGE = """<!doctype html>
 	          document.getElementById('btnMemReload').onclick = () => loadMem();
 	          document.getElementById('btnMemOpenBoard').onclick = async () => { setActiveTab('insightsTab'); await loadInsights(); };
           document.getElementById('btnMemAutoTune').onclick = async () => { smartTuneRetrieveParams(); await loadMem(); };
+          const bPresetQuick = document.getElementById('btnPresetQuick');
+          const bPresetDeep = document.getElementById('btnPresetDeep');
+          const bPresetPrecise = document.getElementById('btnPresetPrecise');
+          if (bPresetQuick) bPresetQuick.onclick = async () => { applyRetrievePreset('quick'); await loadMem(); };
+          if (bPresetDeep) bPresetDeep.onclick = async () => { applyRetrievePreset('deep'); await loadMem(); };
+          if (bPresetPrecise) bPresetPrecise.onclick = async () => { applyRetrievePreset('precise'); await loadMem(); };
+          const bBuildQ = document.getElementById('btnMemBuildQuery');
+          if (bBuildQ) bBuildQ.onclick = async () => {
+            const c = buildComposedQuery();
+            const q = document.getElementById('memQuery');
+            if (q) q.value = c.query || '';
+            await loadMem();
+          };
 	          document.getElementById('memLayer').onchange = () => loadMem();
           document.getElementById('memRetrieveMode').onchange = () => loadMem();
           document.getElementById('memRankingMode').onchange = () => loadMem();
@@ -3577,6 +3715,16 @@ HTML_PAGE = """<!doctype html>
                 document.getElementById('insSessionId').value.trim()
               );
               toast('Governance', 'thresholds applied', true);
+            };
+          }
+          const govReco = document.getElementById('btnGovernApplyReco');
+          if (govReco) {
+            govReco.onclick = async () => {
+              if (!applyGovernanceRecommended()) return;
+              await loadGovernance(
+                document.getElementById('insProjectId').value.trim(),
+                document.getElementById('insSessionId').value.trim()
+              );
             };
           }
           ['thrPImp','thrPConf','thrPStab','thrPVol','thrDVol','thrDStab','thrDReuse'].forEach(id => {
@@ -3984,6 +4132,35 @@ HTML_PAGE = """<!doctype html>
 
 	    window.addEventListener('keydown', (e) => {
 	      if (e.key === 'Escape') showDrawer(false);
+        if (shouldIgnoreKeys(e)) return;
+        if (e.key === '/') {
+          e.preventDefault();
+          setActiveTab('memoryTab');
+          const q = document.getElementById('memQuery');
+          if (q) q.focus();
+          return;
+        }
+        if (e.key === '[' || e.key === ']') {
+          e.preventDefault();
+          const tabs = Array.from(document.querySelectorAll('.tab-btn'));
+          const cur = tabs.findIndex(b => b.classList.contains('active'));
+          if (cur < 0) return;
+          const next = e.key === '[' ? Math.max(0, cur - 1) : Math.min(tabs.length - 1, cur + 1);
+          const btn = tabs[next];
+          if (btn) btn.click();
+          return;
+        }
+        if (e.key === '1') { e.preventDefault(); applyRetrievePreset('quick'); loadMem(); return; }
+        if (e.key === '2') { e.preventDefault(); applyRetrievePreset('deep'); loadMem(); return; }
+        if (e.key === '3') { e.preventDefault(); applyRetrievePreset('precise'); loadMem(); return; }
+        if (e.key.toLowerCase() === 'm') {
+          const drawer = document.getElementById('drawer');
+          if (drawer && drawer.classList.contains('show')) {
+            e.preventDefault();
+            const btn = document.getElementById('btnPromote');
+            if (btn && !btn.disabled) btn.click();
+          }
+        }
 	    });
 	
 	    function shouldIgnoreKeys(e) {
@@ -5128,6 +5305,12 @@ def run_webui(
                 session_id = q.get("session_id", [""])[0].strip()
                 layer = q.get("layer", [""])[0].strip() or None
                 query = q.get("query", [""])[0].strip()
+                kind_filter = q.get("kind", [""])[0].strip().lower()
+                tag_filter = q.get("tag", [""])[0].strip().lower()
+                try:
+                    since_days = max(0, min(365, int(float(q.get("since_days", ["0"])[0]))))
+                except Exception:
+                    since_days = 0
                 mode = q.get("mode", ["basic"])[0].strip().lower() or "basic"
                 route_raw = _normalize_memory_route(q.get("route", ["auto"])[0].strip())
                 route = _infer_memory_route(query) if route_raw == "auto" else route_raw
@@ -5172,6 +5355,29 @@ def run_webui(
                     if layer:
                         items = [x for x in items if str(x.get("layer") or "") == layer]
                     items = _filter_items_by_route(paths, items, route)
+                    if kind_filter:
+                        items = [x for x in items if str(x.get("kind") or "").strip().lower() == kind_filter]
+                    if tag_filter:
+                        items = [
+                            x
+                            for x in items
+                            if any(str(t).strip().lower() == tag_filter for t in (x.get("tags") or []))
+                        ]
+                    if since_days > 0:
+                        cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
+                        keep: list[dict[str, Any]] = []
+                        for x in items:
+                            try:
+                                raw = str(x.get("updated_at") or "")
+                                raw = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+                                dt = datetime.fromisoformat(raw)
+                                if dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=timezone.utc)
+                                if dt.astimezone(timezone.utc) >= cutoff:
+                                    keep.append(x)
+                            except Exception:
+                                continue
+                        items = keep
                     self._send_json(
                         {
                             "ok": True,
@@ -5192,6 +5398,29 @@ def run_webui(
                         session_id=session_id,
                     )
                     items = _filter_items_by_route(paths, items, route)
+                    if kind_filter:
+                        items = [x for x in items if str(x.get("kind") or "").strip().lower() == kind_filter]
+                    if tag_filter:
+                        items = [
+                            x
+                            for x in items
+                            if any(str(t).strip().lower() == tag_filter for t in (x.get("tags") or []))
+                        ]
+                    if since_days > 0:
+                        cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
+                        keep: list[dict[str, Any]] = []
+                        for x in items:
+                            try:
+                                raw = str(x.get("updated_at") or "")
+                                raw = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+                                dt = datetime.fromisoformat(raw)
+                                if dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=timezone.utc)
+                                if dt.astimezone(timezone.utc) >= cutoff:
+                                    keep.append(x)
+                            except Exception:
+                                continue
+                        items = keep
                     self._send_json({"ok": True, "items": items, "mode": "basic", "route": route})
                 return
 
@@ -5305,6 +5534,32 @@ def run_webui(
                             )
                         return out
 
+                    recommended: dict[str, Any] = {}
+                    try:
+                        rec = infer_adaptive_governance_thresholds(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            project_id=project_id,
+                            session_id=session_id,
+                            days=14,
+                            q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
+                            q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
+                            q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
+                            q_promote_vol=float(cfg.get("daemon", {}).get("adaptive_q_promote_vol", 0.42)),
+                            q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
+                            q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
+                            q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
+                        )
+                        if rec.get("ok"):
+                            recommended = {
+                                "thresholds": dict(rec.get("thresholds") or {}),
+                                "quantiles": dict(rec.get("quantiles") or {}),
+                                "sample_size": int(rec.get("sample_size", 0) or 0),
+                                "window_days": int(rec.get("days", 14) or 14),
+                            }
+                    except Exception:
+                        recommended = {}
+
                     self._send_json(
                         {
                             "ok": True,
@@ -5321,6 +5576,7 @@ def run_webui(
                             },
                             "promote": pack(promote),
                             "demote": pack(demote),
+                            "recommended": recommended,
                         }
                     )
                 except Exception as exc:  # pragma: no cover
