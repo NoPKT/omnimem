@@ -15,6 +15,7 @@
 - CI hardening/docs: set pack-job npm cache to a runner-local writable directory and fix README evaluation commands to use existing dataset + drift-aware A/B flags.
 - CI fix: `scripts/release_gate.sh` no longer requires a global `omnimem` executable; it auto-falls back to `python -m omnimem.cli`, fixing `command not found` failures in GitHub Actions smoke step.
 - Core memory blocks: add explicit editable long-lived memory blocks (`core-set` / `core-get` / `core-list`, plus WebUI APIs) and retrieval-time optional core-block injection (`retrieve --include-core-blocks`) to strengthen persistent instruction/persona handling.
+- Core memory blocks upgrade: support per-block priority (`core:priority`) and expiry (`core:expires`) with retrieval/list filters that skip expired blocks by default.
 
 ## 0.2.21 - 2026-02-11
 

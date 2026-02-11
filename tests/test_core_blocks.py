@@ -34,6 +34,7 @@ class CoreBlocksTest(unittest.TestCase):
             content="Respond in concise technical style.",
             project_id="OM",
             session_id="s1",
+            priority=70,
         )
         self.assertTrue(c1.get("ok"))
         self.assertEqual(str(c1.get("action")), "created")
@@ -45,6 +46,7 @@ class CoreBlocksTest(unittest.TestCase):
             content="Respond in concise technical style. Prefer bullet points.",
             project_id="OM",
             session_id="s1",
+            priority=75,
         )
         self.assertTrue(c2.get("ok"))
         self.assertEqual(str(c2.get("action")), "updated")
@@ -60,6 +62,7 @@ class CoreBlocksTest(unittest.TestCase):
         self.assertTrue(got.get("ok"))
         block = got.get("block") or {}
         self.assertIn("Prefer bullet points", str(block.get("content") or ""))
+        self.assertEqual(int(block.get("priority", 0) or 0), 75)
 
         ls = list_core_blocks(
             paths=self.paths,
@@ -81,6 +84,28 @@ class CoreBlocksTest(unittest.TestCase):
             content="Always include security and rollback notes.",
             project_id="OM",
             session_id="s1",
+            priority=90,
+        )
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="expired-note",
+            content="this should not be injected",
+            project_id="OM",
+            session_id="s1",
+            priority=99,
+            ttl_days=1,
+        )
+        # Force one block to expired by replacing with an explicit old expiry.
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="expired-note",
+            content="this should not be injected",
+            project_id="OM",
+            session_id="s1",
+            priority=99,
+            expires_at="2000-01-01T00:00:00+00:00",
         )
         out = retrieve_thread(
             paths=self.paths,
@@ -103,6 +128,53 @@ class CoreBlocksTest(unittest.TestCase):
                 for it in (out.get("items") or [])
             )
         )
+        self.assertFalse(
+            any(
+                any(str(w) == "core-block:expired-note" for w in (it.get("why_recalled") or []))
+                for it in (out.get("items") or [])
+            )
+        )
+
+    def test_list_core_blocks_exclude_expired_by_default(self) -> None:
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="a",
+            content="active",
+            project_id="OM",
+            session_id="s1",
+            priority=60,
+        )
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="b",
+            content="expired",
+            project_id="OM",
+            session_id="s1",
+            priority=80,
+            expires_at="2000-01-01T00:00:00+00:00",
+        )
+        out0 = list_core_blocks(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            include_expired=False,
+        )
+        names0 = [str(x.get("name") or "") for x in (out0.get("items") or [])]
+        self.assertIn("a", names0)
+        self.assertNotIn("b", names0)
+
+        out1 = list_core_blocks(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            include_expired=True,
+        )
+        names1 = [str(x.get("name") or "") for x in (out1.get("items") or [])]
+        self.assertIn("b", names1)
 
 
 if __name__ == "__main__":

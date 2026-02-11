@@ -374,6 +374,9 @@ def cmd_core_set(args: argparse.Namespace) -> int:
         session_id=str(args.session_id or "").strip(),
         layer=str(args.layer or "short"),
         tags=parse_list_csv(getattr(args, "tags", None)),
+        priority=int(getattr(args, "priority", 50)),
+        ttl_days=int(getattr(args, "ttl_days", 0)),
+        expires_at=str(getattr(args, "expires_at", "") or "").strip(),
         tool="cli",
         account="default",
         device="local",
@@ -405,6 +408,7 @@ def cmd_core_list(args: argparse.Namespace) -> int:
         project_id=str(args.project_id or "").strip(),
         session_id=str(args.session_id or "").strip(),
         limit=int(getattr(args, "limit", 64)),
+        include_expired=bool(getattr(args, "include_expired", False)),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -2077,6 +2081,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_core_set.add_argument("--project-id", default="")
     p_core_set.add_argument("--session-id", default="system")
     p_core_set.add_argument("--layer", choices=sorted(LAYER_SET), default="short")
+    p_core_set.add_argument("--priority", type=int, default=50, help="core block priority (0..100)")
+    p_core_set.add_argument("--ttl-days", type=int, default=0, help="expiry in days from now (0 means no expiry)")
+    p_core_set.add_argument("--expires-at", default="", help="absolute ISO-8601 expiry time (overrides ttl-days)")
     p_core_set.add_argument("--tags", help="comma-separated")
     p_core_set.set_defaults(func=cmd_core_set)
 
@@ -2092,6 +2099,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_core_list.add_argument("--project-id", default="")
     p_core_list.add_argument("--session-id", default="")
     p_core_list.add_argument("--limit", type=int, default=64)
+    p_core_list.add_argument(
+        "--include-expired",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="include expired core blocks",
+    )
     p_core_list.set_defaults(func=cmd_core_list)
 
     p_feedback = sub.add_parser("feedback", help="apply explicit feedback to one memory")

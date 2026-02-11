@@ -44,11 +44,11 @@ class CLIFrontierCommandTest(unittest.TestCase):
 
     def test_core_block_commands_registered(self) -> None:
         p = build_parser()
-        a1 = p.parse_args(["core-set", "--name", "persona", "--body", "be concise"])
+        a1 = p.parse_args(["core-set", "--name", "persona", "--body", "be concise", "--priority", "80", "--ttl-days", "7"])
         self.assertEqual(a1.cmd, "core-set")
         a2 = p.parse_args(["core-get", "--name", "persona"])
         self.assertEqual(a2.cmd, "core-get")
-        a3 = p.parse_args(["core-list", "--project-id", "OM"])
+        a3 = p.parse_args(["core-list", "--project-id", "OM", "--include-expired"])
         self.assertEqual(a3.cmd, "core-list")
 
 

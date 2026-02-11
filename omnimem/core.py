@@ -2870,6 +2870,33 @@ def _core_block_name_from_tags(tags: list[str]) -> str:
     return ""
 
 
+def _core_block_priority_from_tags(tags: list[str], *, default: int = 50) -> int:
+    for t in tags:
+        s = str(t or "").strip().lower()
+        if s.startswith("core:priority:"):
+            try:
+                v = int(float(s.split("core:priority:", 1)[1].strip()))
+                return max(0, min(100, v))
+            except Exception:
+                return int(default)
+    return int(default)
+
+
+def _core_block_expires_from_tags(tags: list[str]) -> str:
+    for t in tags:
+        s = str(t or "").strip()
+        if s.lower().startswith("core:expires:"):
+            return s.split(":", 2)[2].strip()
+    return ""
+
+
+def _is_core_block_expired(expires_at: str) -> bool:
+    ex = str(expires_at or "").strip()
+    if not ex:
+        return False
+    return _parse_iso_dt(ex) <= datetime.now(timezone.utc)
+
+
 def upsert_core_block(
     *,
     paths: MemoryPaths,
@@ -2880,6 +2907,9 @@ def upsert_core_block(
     session_id: str = "system",
     layer: str = "short",
     tags: list[str] | None = None,
+    priority: int = 50,
+    ttl_days: int = 0,
+    expires_at: str = "",
     tool: str = "cli",
     account: str = "default",
     device: str = "local",
@@ -2890,8 +2920,26 @@ def upsert_core_block(
     sid = str(session_id or "").strip() or "system"
     body = str(content or "").strip()
     summary = f"core block: {name_n}"
-    core_tags = ["core:block", f"core:block:{name_n}"]
-    extra_tags = [str(t).strip() for t in (tags or []) if str(t).strip()]
+    p = max(0, min(100, int(priority)))
+    ex_raw = str(expires_at or "").strip()
+    if not ex_raw and int(ttl_days) > 0:
+        ex_raw = (datetime.now(timezone.utc) + timedelta(days=max(1, int(ttl_days)))).replace(microsecond=0).isoformat()
+    ex_norm = ""
+    if ex_raw:
+        ex_norm = _parse_iso_dt(ex_raw).replace(microsecond=0).isoformat()
+
+    core_tags = ["core:block", f"core:block:{name_n}", f"core:priority:{p}"]
+    if ex_norm:
+        core_tags.append(f"core:expires:{ex_norm}")
+    extra_tags = []
+    for t in (tags or []):
+        s = str(t).strip()
+        if not s:
+            continue
+        sl = s.lower()
+        if sl.startswith("core:priority:") or sl.startswith("core:expires:"):
+            continue
+        extra_tags.append(s)
     merged_tags = list(dict.fromkeys([*core_tags, *extra_tags]))
 
     with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
@@ -2972,6 +3020,7 @@ def list_core_blocks(
     project_id: str = "",
     session_id: str = "",
     limit: int = 64,
+    include_expired: bool = False,
 ) -> dict[str, Any]:
     ensure_storage(paths, schema_sql_path)
     limit = max(1, min(200, int(limit)))
@@ -2997,10 +3046,18 @@ def list_core_blocks(
             tags = [str(t).strip() for t in (json.loads(r["tags_json"] or "[]") or []) if str(t).strip()]
         except Exception:
             tags = []
+        priority = _core_block_priority_from_tags(tags)
+        expires_at = _core_block_expires_from_tags(tags)
+        expired = _is_core_block_expired(expires_at)
+        if expired and not bool(include_expired):
+            continue
         items.append(
             {
                 "id": str(r["id"] or ""),
                 "name": _core_block_name_from_tags(tags),
+                "priority": int(priority),
+                "expires_at": expires_at,
+                "expired": bool(expired),
                 "layer": str(r["layer"] or ""),
                 "kind": str(r["kind"] or ""),
                 "summary": str(r["summary"] or ""),
@@ -3051,11 +3108,17 @@ def get_core_block(
         tags = [str(t).strip() for t in (json.loads(row["tags_json"] or "[]") or []) if str(t).strip()]
     except Exception:
         tags = []
+    priority = _core_block_priority_from_tags(tags)
+    expires_at = _core_block_expires_from_tags(tags)
+    expired = _is_core_block_expired(expires_at)
     return {
         "ok": True,
         "block": {
             "id": str(row["id"] or ""),
             "name": name_n,
+            "priority": int(priority),
+            "expires_at": expires_at,
+            "expired": bool(expired),
             "layer": str(row["layer"] or ""),
             "kind": str(row["kind"] or ""),
             "summary": str(row["summary"] or ""),
@@ -4878,10 +4941,27 @@ def retrieve_thread(
                     """,
                     (project_id, project_id, session_id, session_id, core_block_limit),
                 ).fetchall()
-                for i, r in enumerate(core_rows):
+                parsed_core_rows: list[dict[str, Any]] = []
+                for r in core_rows:
                     d = _signals_from_row(dict(r))
                     ctags = [str(t).strip() for t in (d.get("tags") or []) if str(t).strip()]
-                    cname = _core_block_name_from_tags(ctags) or "core"
+                    priority = _core_block_priority_from_tags(ctags)
+                    expires_at = _core_block_expires_from_tags(ctags)
+                    expired = _is_core_block_expired(expires_at)
+                    if expired:
+                        continue
+                    parsed_core_rows.append(
+                        {
+                            "item": d,
+                            "name": _core_block_name_from_tags(ctags) or "core",
+                            "priority": int(priority),
+                            "updated_at": str(d.get("updated_at") or ""),
+                        }
+                    )
+                parsed_core_rows.sort(key=lambda x: (int(x.get("priority", 0)), str(x.get("updated_at", ""))), reverse=True)
+                for i, rc in enumerate(parsed_core_rows[:core_block_limit]):
+                    d = dict(rc["item"] or {})
+                    cname = str(rc.get("name") or "core")
                     d["score"] = float(round(1.02 - (i * 0.002), 6))
                     d["why_recalled"] = [f"core-block:{cname}", f"score={float(d.get('score') or 0.0):.3f}"]
                     core_items.append(d)
@@ -4982,13 +5062,31 @@ def retrieve_thread(
             prefix: list[dict[str, Any]] = []
             seen = {str(x.get("id") or "") for x in out_items if str(x.get("id") or "")}
             top_score = float(out_items[0].get("score") or 1.0) if out_items else 1.0
-            for i, r in enumerate(core_rows):
+            parsed_core_rows: list[dict[str, Any]] = []
+            for r in core_rows:
                 d = _signals_from_row(dict(r))
                 mid = str(d.get("id") or "")
                 if not mid:
                     continue
                 ctags = [str(t).strip() for t in (d.get("tags") or []) if str(t).strip()]
-                cname = _core_block_name_from_tags(ctags) or "core"
+                priority = _core_block_priority_from_tags(ctags)
+                expires_at = _core_block_expires_from_tags(ctags)
+                expired = _is_core_block_expired(expires_at)
+                if expired:
+                    continue
+                parsed_core_rows.append(
+                    {
+                        "item": d,
+                        "name": _core_block_name_from_tags(ctags) or "core",
+                        "priority": int(priority),
+                        "updated_at": str(d.get("updated_at") or ""),
+                    }
+                )
+            parsed_core_rows.sort(key=lambda x: (int(x.get("priority", 0)), str(x.get("updated_at", ""))), reverse=True)
+            for i, rc in enumerate(parsed_core_rows[:core_block_limit]):
+                d = dict(rc["item"] or {})
+                mid = str(d.get("id") or "")
+                cname = str(rc.get("name") or "core")
                 if mid in seen:
                     for it in out_items:
                         if str(it.get("id") or "") == mid:

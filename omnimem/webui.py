@@ -6290,6 +6290,7 @@ def run_webui(
                 project_id = q.get("project_id", [""])[0].strip()
                 session_id = q.get("session_id", [""])[0].strip()
                 limit = _parse_int_param(q.get("limit", ["64"])[0], default=64, lo=1, hi=200)
+                include_expired = _parse_bool_param(q.get("include_expired", ["0"])[0], default=False)
                 try:
                     if name:
                         out = get_core_block(
@@ -6306,6 +6307,7 @@ def run_webui(
                             project_id=project_id,
                             session_id=session_id,
                             limit=limit,
+                            include_expired=bool(include_expired),
                         )
                     self._send_json(out, 200 if out.get("ok") else 404)
                 except Exception as exc:  # pragma: no cover
@@ -7702,6 +7704,9 @@ def run_webui(
                     project_id = str(data.get("project_id", "") or "").strip()
                     session_id = str(data.get("session_id", "system") or "").strip()
                     layer = str(data.get("layer", "short") or "short").strip().lower()
+                    priority = _parse_int_param(data.get("priority", 50), default=50, lo=0, hi=100)
+                    ttl_days = _parse_int_param(data.get("ttl_days", 0), default=0, lo=0, hi=3650)
+                    expires_at = str(data.get("expires_at", "") or "").strip()
                     raw_tags = data.get("tags", [])
                     tags = [str(x).strip() for x in (raw_tags if isinstance(raw_tags, list) else []) if str(x).strip()]
                     if not name:
@@ -7716,6 +7721,9 @@ def run_webui(
                         session_id=session_id,
                         layer=layer,
                         tags=tags,
+                        priority=priority,
+                        ttl_days=ttl_days,
+                        expires_at=expires_at,
                         tool="webui",
                         account="default",
                         device="local",
