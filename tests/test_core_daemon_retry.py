@@ -5,6 +5,7 @@ from pathlib import Path
 
 from omnimem.core import (
     MemoryPaths,
+    _daemon_should_attempt_push,
     classify_sync_error,
     run_sync_with_retry,
     should_retry_sync_error,
@@ -13,6 +14,30 @@ from omnimem.core import (
 
 
 class SyncRetryTest(unittest.TestCase):
+    def test_daemon_push_trigger_on_repo_dirty(self) -> None:
+        self.assertTrue(
+            _daemon_should_attempt_push(
+                now=20.0,
+                last_push_attempt=0.0,
+                scan_interval=8,
+                current_seen=100.0,
+                last_seen=100.0,
+                repo_dirty=True,
+            )
+        )
+
+    def test_daemon_push_not_triggered_before_interval(self) -> None:
+        self.assertFalse(
+            _daemon_should_attempt_push(
+                now=2.0,
+                last_push_attempt=0.0,
+                scan_interval=8,
+                current_seen=101.0,
+                last_seen=100.0,
+                repo_dirty=True,
+            )
+        )
+
     def test_retry_succeeds_after_transient_failures(self) -> None:
         calls = {"n": 0}
 

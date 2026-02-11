@@ -3874,6 +3874,31 @@ def latest_content_mtime(paths: MemoryPaths) -> float:
     return latest
 
 
+def _repo_has_pending_sync_changes(paths: MemoryPaths) -> bool:
+    try:
+        proc = _run_git(paths, ["status", "--porcelain"], check=False)
+        if int(proc.returncode) != 0:
+            return False
+        return bool((proc.stdout or "").strip())
+    except Exception:
+        return False
+
+
+def _daemon_should_attempt_push(
+    *,
+    now: float,
+    last_push_attempt: float,
+    scan_interval: int,
+    current_seen: float,
+    last_seen: float,
+    repo_dirty: bool,
+) -> bool:
+    push_every = max(3, min(60, int(scan_interval)))
+    if now - float(last_push_attempt) < float(push_every):
+        return False
+    return bool(current_seen > last_seen or repo_dirty)
+
+
 def classify_sync_error(message: str, detail: Any = "") -> str:
     text = f"{message}\n{detail}".lower()
 
@@ -4045,6 +4070,7 @@ def run_sync_daemon(
     ensure_system_memory(paths, schema_sql_path)
     last_seen = latest_content_mtime(paths)
     last_pull = 0.0
+    last_push_attempt = 0.0
     cycles = 0
     pull_failures = 0
     push_failures = 0
@@ -4095,7 +4121,15 @@ def run_sync_daemon(
             last_seen = latest_content_mtime(paths)
 
         current_seen = latest_content_mtime(paths)
-        if current_seen > last_seen:
+        repo_dirty = _repo_has_pending_sync_changes(paths)
+        if _daemon_should_attempt_push(
+            now=now,
+            last_push_attempt=last_push_attempt,
+            scan_interval=scan_interval,
+            current_seen=current_seen,
+            last_seen=last_seen,
+            repo_dirty=repo_dirty,
+        ):
             last_push_result = run_sync_with_retry(
                 runner=sync_git,
                 paths=paths,
@@ -4111,7 +4145,8 @@ def run_sync_daemon(
             if not last_push_result.get("ok"):
                 push_failures += 1
                 last_error_kind = str(last_push_result.get("error_kind", "unknown"))
-            last_seen = current_seen
+            last_seen = latest_content_mtime(paths)
+            last_push_attempt = now
             want_weave = True
 
         if weave_enabled:
@@ -4349,6 +4384,10 @@ def run_sync_daemon(
             "max_attempts": max(1, int(retry_max_attempts)),
             "initial_backoff": max(1, int(retry_initial_backoff)),
             "max_backoff": max(1, int(retry_max_backoff)),
+        },
+        "push_strategy": {
+            "mode": "mtime_or_dirty",
+            "push_check_interval": max(3, min(60, int(scan_interval))),
         },
     }
     log_system_event(paths, schema_sql_path, "memory.sync", {"daemon": result}, portable=False)
