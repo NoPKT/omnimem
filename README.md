@@ -311,6 +311,13 @@ Optional daemon prune maintenance (default off):
 - Config keys under `daemon`: `maintenance_prune_enabled`, `maintenance_prune_days`, `maintenance_prune_limit`, `maintenance_prune_layers`, `maintenance_prune_keep_kinds`.
 - Recommended safe baseline: keep prune disabled until you validate `omnimem prune` preview output for your dataset.
 
+GitHub quick setup in WebUI:
+
+- Config page now includes `GitHub Quick Setup` (repo `owner/repo`, protocol, optional create-if-missing).
+- `Check GitHub Auth` uses local `gh auth status` (if `gh` is installed).
+- `Apply GitHub Setup` writes sync remote config without manually pasting long remote URLs.
+- Optional repo auto-create requires authenticated `gh` CLI on the server host.
+
 Nightly memory-eval workflow:
 
 - GitHub Actions `nightly-memory-eval` runs `eval_core_merge` + `tune_core_merge_from_eval --dry-run` on deterministic seeded core blocks.

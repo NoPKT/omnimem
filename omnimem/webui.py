@@ -5,8 +5,10 @@ import json
 import os
 import re
 import resource
+import shutil
 import signal
 import sqlite3
+import subprocess
 import sys
 import threading
 import traceback
@@ -758,6 +760,17 @@ HTML_PAGE = """<!doctype html>
             <label><span data-i18n=\"cfg_remote_name\">Git Remote Name</span><input name=\"remote_name\" /></label>
             <label><span data-i18n=\"cfg_remote_url\">Git Remote URL</span><input name=\"remote_url\" placeholder=\"git@github.com:user/repo.git\" /></label>
             <label><span data-i18n=\"cfg_branch\">Git Branch</span><input name=\"branch\" /></label>
+            <div class=\"divider\"></div>
+            <div class=\"small\"><b>GitHub Quick Setup</b></div>
+            <label><span>Repo (owner/repo)</span><input name=\"gh_full_name\" placeholder=\"yourname/omnimem-memory\" /></label>
+            <label><span>Protocol</span><select name=\"gh_protocol\"><option value=\"ssh\">ssh</option><option value=\"https\">https</option></select></label>
+            <label><span>Create If Missing</span><select name=\"gh_create_if_missing\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
+            <label><span>Create As Private</span><select name=\"gh_private_repo\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
+            <div class=\"row-btn\">
+              <button type=\"button\" id=\"btnGithubStatus\">Check GitHub Auth</button>
+              <button type=\"button\" id=\"btnGithubQuickSetup\">Apply GitHub Setup</button>
+            </div>
+            <pre id=\"githubQuickOut\" class=\"small\"></pre>
             <div class=\"divider\"></div>
             <label><span>Daemon Scan Interval (s)</span><input name=\"daemon_scan_interval\" type=\"number\" min=\"1\" max=\"3600\" /></label>
             <label><span>Daemon Pull Interval (s)</span><input name=\"daemon_pull_interval\" type=\"number\" min=\"5\" max=\"86400\" /></label>
@@ -1973,6 +1986,33 @@ HTML_PAGE = """<!doctype html>
       renderInitState(Boolean(d.initialized));
     }
 
+    async function checkGithubStatus() {
+      const out = document.getElementById('githubQuickOut');
+      const d = await jget('/api/github/status');
+      out.textContent = JSON.stringify(d, null, 2);
+      return d;
+    }
+
+    async function githubQuickSetup() {
+      const f = document.getElementById('cfgForm');
+      const out = document.getElementById('githubQuickOut');
+      const payload = {
+        full_name: f.elements['gh_full_name'].value || '',
+        protocol: f.elements['gh_protocol'].value || 'ssh',
+        create_if_missing: String(f.elements['gh_create_if_missing'].value || 'false') === 'true',
+        private_repo: String(f.elements['gh_private_repo'].value || 'true') === 'true',
+        remote_name: f.elements['remote_name'].value || 'origin',
+        branch: f.elements['branch'].value || 'main',
+      };
+      const d = await jpost('/api/github/quick-setup', payload);
+      out.textContent = JSON.stringify(d, null, 2);
+      toast('GitHub', d.ok ? 'Quick setup applied' : (d.error || 'setup failed'), !!d.ok);
+      if (d.ok) {
+        await loadCfg();
+      }
+      return d;
+    }
+
 	    function retrievalHintHtml(x, opts = {}) {
         const showReason = opts.showReason !== false;
         const showDetail = !!opts.showDetail;
@@ -2420,6 +2460,8 @@ HTML_PAGE = """<!doctype html>
       await loadLayerStats();
       await loadInsights();
     };
+    document.getElementById('btnGithubStatus').onclick = async () => { await checkGithubStatus(); };
+    document.getElementById('btnGithubQuickSetup').onclick = async () => { await githubQuickSetup(); };
 
     async function runSync(mode) {
       const d = await jpost('/api/sync', {mode});
@@ -4451,6 +4493,104 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
     }
 
 
+def _normalize_github_full_name(owner: str, repo: str, full_name: str) -> str:
+    f = str(full_name or "").strip().strip("/")
+    if f:
+        if "/" not in f:
+            raise ValueError("full_name must be in owner/repo format")
+        a, b = [x.strip() for x in f.split("/", 1)]
+        if not a or not b:
+            raise ValueError("full_name must be in owner/repo format")
+        return f"{a}/{b}"
+    a = str(owner or "").strip().strip("/")
+    b = str(repo or "").strip().strip("/")
+    if not a or not b:
+        raise ValueError("owner and repo are required")
+    return f"{a}/{b}"
+
+
+def _build_github_remote_url(full_name: str, protocol: str) -> str:
+    proto = str(protocol or "ssh").strip().lower()
+    if proto == "https":
+        return f"https://github.com/{full_name}.git"
+    return f"git@github.com:{full_name}.git"
+
+
+def _github_status() -> dict[str, Any]:
+    gh = shutil.which("gh")
+    if not gh:
+        return {"ok": True, "installed": False, "authenticated": False}
+    try:
+        cp = subprocess.run(
+            [gh, "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        txt = (cp.stdout or "") + "\n" + (cp.stderr or "")
+        return {
+            "ok": True,
+            "installed": True,
+            "authenticated": bool(cp.returncode == 0),
+            "details": txt.strip()[:1200],
+        }
+    except Exception as exc:
+        return {"ok": True, "installed": True, "authenticated": False, "error": str(exc)}
+
+
+def _github_quick_setup(
+    *,
+    cfg: dict[str, Any],
+    cfg_path: Path,
+    owner: str,
+    repo: str,
+    full_name: str,
+    protocol: str,
+    remote_name: str,
+    branch: str,
+    create_if_missing: bool,
+    private_repo: bool,
+) -> dict[str, Any]:
+    full = _normalize_github_full_name(owner=owner, repo=repo, full_name=full_name)
+    remote_url = _build_github_remote_url(full, protocol)
+
+    created = False
+    if bool(create_if_missing):
+        gh = shutil.which("gh")
+        if not gh:
+            raise RuntimeError("gh CLI is not installed; cannot auto-create repository")
+        view = subprocess.run([gh, "repo", "view", full], capture_output=True, text=True, timeout=12, check=False)
+        if int(view.returncode) != 0:
+            vis_flag = "--private" if bool(private_repo) else "--public"
+            crt = subprocess.run(
+                [gh, "repo", "create", full, vis_flag, "--disable-wiki"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if int(crt.returncode) != 0:
+                msg = ((crt.stderr or "") + "\n" + (crt.stdout or "")).strip()
+                raise RuntimeError(f"failed to create GitHub repo: {msg[:800]}")
+            created = True
+
+    cfg.setdefault("sync", {}).setdefault("github", {})
+    cfg["sync"]["github"]["remote_name"] = str(remote_name or "origin").strip() or "origin"
+    cfg["sync"]["github"]["remote_url"] = remote_url
+    cfg["sync"]["github"]["branch"] = str(branch or "main").strip() or "main"
+    save_config(cfg_path, cfg)
+    return {
+        "ok": True,
+        "created": bool(created),
+        "full_name": full,
+        "remote_url": remote_url,
+        "remote_name": str(cfg["sync"]["github"]["remote_name"]),
+        "branch": str(cfg["sync"]["github"]["branch"]),
+        "protocol": str(protocol or "ssh").strip().lower(),
+    }
+
+
 def _sync_options_from_cfg(cfg: dict[str, Any]) -> tuple[list[str], bool]:
     gh = cfg.get("sync", {}).get("github", {})
     raw_layers = gh.get("include_layers")
@@ -5917,6 +6057,10 @@ def run_webui(
                 self._send_json(_cfg_to_ui(cfg, cfg_path))
                 return
 
+            if parsed.path == "/api/github/status":
+                self._send_json(_github_status())
+                return
+
             if parsed.path == "/api/route-templates":
                 try:
                     items = _normalize_route_templates(cfg.get("webui", {}).get("route_templates", []))
@@ -7177,6 +7321,25 @@ def run_webui(
                     self._send_json(out)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/github/quick-setup":
+                try:
+                    out = _github_quick_setup(
+                        cfg=cfg,
+                        cfg_path=cfg_path,
+                        owner=str(data.get("owner", "") or ""),
+                        repo=str(data.get("repo", "") or ""),
+                        full_name=str(data.get("full_name", "") or ""),
+                        protocol=str(data.get("protocol", "ssh") or "ssh"),
+                        remote_name=str(data.get("remote_name", "origin") or "origin"),
+                        branch=str(data.get("branch", "main") or "main"),
+                        create_if_missing=bool(data.get("create_if_missing", False)),
+                        private_repo=bool(data.get("private_repo", True)),
+                    )
+                    self._send_json(out)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 400)
                 return
 
             if parsed.path == "/api/daemon/toggle":

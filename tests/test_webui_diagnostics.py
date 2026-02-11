@@ -8,7 +8,10 @@ import sqlite3
 
 from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
+    _build_github_remote_url,
     _cfg_to_ui,
+    _github_status,
+    _normalize_github_full_name,
     _aggregate_event_stats,
     _apply_memory_filters,
     _build_smart_memories_cache_key,
@@ -219,6 +222,28 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         self.assertEqual(int(out.get("daemon_maintenance_prune_limit", 0)), 420)
         self.assertEqual(str(out.get("daemon_maintenance_prune_layers") or ""), "instant,short")
         self.assertEqual(str(out.get("daemon_maintenance_prune_keep_kinds") or ""), "decision,checkpoint")
+
+    def test_github_remote_url_builder(self) -> None:
+        self.assertEqual(
+            _build_github_remote_url("owner/repo", "ssh"),
+            "git@github.com:owner/repo.git",
+        )
+        self.assertEqual(
+            _build_github_remote_url("owner/repo", "https"),
+            "https://github.com/owner/repo.git",
+        )
+
+    def test_normalize_github_full_name(self) -> None:
+        self.assertEqual(_normalize_github_full_name("", "", "abc/def"), "abc/def")
+        self.assertEqual(_normalize_github_full_name("abc", "def", ""), "abc/def")
+        with self.assertRaises(ValueError):
+            _normalize_github_full_name("", "", "bad")
+
+    def test_github_status_returns_shape(self) -> None:
+        out = _github_status()
+        self.assertTrue(bool(out.get("ok")))
+        self.assertIn("installed", out)
+        self.assertIn("authenticated", out)
 
     def test_memory_route_inference(self) -> None:
         self.assertEqual(_normalize_memory_route("procedural"), "procedural")
