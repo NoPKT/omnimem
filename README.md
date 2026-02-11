@@ -124,6 +124,7 @@ Notes:
 - Use `--no-webui` to disable sidecar UI startup.
 - Wrapper sessions now auto-stop the shared WebUI when the last active wrapper exits (default on-demand lifecycle).
 - Use `--webui-persist` (or `OMNIMEM_WEBUI_PERSIST=1`) to keep WebUI running after wrapper exit.
+- Wrapper coordination (pid/lease) is now per-user global runtime (not tied to `OMNIMEM_HOME`), so parallel wrappers in different projects reuse the same sidecar safely.
 - Injected memory context now uses a budgeted planner with delta-state by default in smart/inject flows, to reduce repeated context tokens.
 - For safer governance rollout in WebUI, you can enable apply approval and a preview-only window in Configuration:
   - `webui.approval_required=true`

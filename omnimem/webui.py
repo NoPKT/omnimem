@@ -5052,6 +5052,37 @@ def _is_local_bind_host(host: str) -> bool:
     return v in {"127.0.0.1", "localhost", "::1"}
 
 
+def _endpoint_key(host: str, port: int) -> str:
+    raw = f"{str(host).strip().lower()}_{int(port)}"
+    return "".join(ch if ch.isalnum() else "_" for ch in raw)
+
+
+def _resolve_runtime_dir(paths) -> Path:
+    env_dir = os.getenv("OMNIMEM_RUNTIME_DIR", "").strip()
+    candidates: list[Path] = []
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    xdg = os.getenv("XDG_RUNTIME_DIR", "").strip()
+    if xdg:
+        candidates.append(Path(xdg).expanduser() / "omnimem")
+    uid = getattr(os, "getuid", lambda: None)()
+    if uid is not None:
+        candidates.append(Path("/tmp") / f"omnimem-{int(uid)}")
+    else:
+        candidates.append(Path("/tmp") / "omnimem")
+    candidates.append(paths.root / "runtime")
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            probe = d / ".probe"
+            probe.write_text("ok\n", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return d
+        except Exception:
+            continue
+    return paths.root / "runtime"
+
+
 def _resolve_auth_token(cfg: dict[str, Any], explicit_token: str | None) -> str:
     if explicit_token:
         return explicit_token
@@ -7543,7 +7574,8 @@ def run_webui(
     )
     # PID file enables wrappers (e.g. `omnimem codex --webui-on-demand`) to stop the WebUI
     # when no active sessions remain. Best-effort; failure should not prevent startup.
-    pid_fp = paths.root / "runtime" / "webui.pid"
+    runtime_dir = _resolve_runtime_dir(paths)
+    pid_fp = runtime_dir / f"webui-{_endpoint_key(host, port)}.pid"
     try:
         pid_fp.parent.mkdir(parents=True, exist_ok=True)
         pid_fp.write_text(

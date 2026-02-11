@@ -805,7 +805,15 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         webui_on_demand = True
 
     if not args.no_webui:
-        started_by_me = ensure_webui_running(cfg_path_arg(args), args.webui_host, args.webui_port, args.no_daemon)
+        fallback_home = Path(os.environ.get("OMNIMEM_HOME", "") or "").expanduser().resolve()
+        runtime_dir = _resolve_shared_runtime_dir(fallback_home=fallback_home)
+        started_by_me = ensure_webui_running(
+            cfg_path_arg(args),
+            args.webui_host,
+            args.webui_port,
+            args.no_daemon,
+            runtime_dir=runtime_dir,
+        )
         try:
             daemon_url = f"http://{args.webui_host}:{int(args.webui_port)}/api/daemon"
             with urllib.request.urlopen(daemon_url, timeout=1.0) as resp:
@@ -824,11 +832,12 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         except Exception:
             pass
         if webui_on_demand:
-            home = Path(os.environ.get("OMNIMEM_HOME", "") or "").expanduser().resolve()
             if started_by_me:
                 try:
-                    _webui_managed_marker(home).parent.mkdir(parents=True, exist_ok=True)
-                    _webui_managed_marker(home).write_text(
+                    _webui_managed_marker(runtime_dir, host=str(args.webui_host), port=int(args.webui_port)).parent.mkdir(
+                        parents=True, exist_ok=True
+                    )
+                    _webui_managed_marker(runtime_dir, host=str(args.webui_host), port=int(args.webui_port)).write_text(
                         json.dumps(
                             {
                                 "mode": "on_demand",
@@ -845,7 +854,7 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
                     pass
 
             lease_fp = _create_webui_lease(
-                home,
+                runtime_dir,
                 parent_pid=os.getpid(),
                 host=str(args.webui_host),
                 port=int(args.webui_port),
@@ -855,8 +864,12 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
                 "-m",
                 "omnimem.cli",
                 "webui-guard",
-                "--home",
-                str(home),
+                "--runtime-dir",
+                str(runtime_dir),
+                "--host",
+                str(args.webui_host),
+                "--port",
+                str(int(args.webui_port)),
                 "--parent-pid",
                 str(os.getpid()),
                 "--lease",
@@ -1022,16 +1035,24 @@ def webui_alive(host: str, port: int) -> bool:
         return False
 
 
-def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon: bool) -> bool:
+def ensure_webui_running(
+    cfg_path: Path | None,
+    host: str,
+    port: int,
+    no_daemon: bool,
+    *,
+    runtime_dir: Path | None = None,
+) -> bool:
     if webui_alive(host, port):
         return False
 
     cfg = load_config(cfg_path)
     paths = resolve_paths(cfg)
+    rt_dir = runtime_dir or _resolve_shared_runtime_dir(fallback_home=paths.root)
     # Avoid repeatedly spawning `omnimem start` when the WebUI is already running but
     # liveness probing is flaky/slow: if a pidfile exists and the pid is alive, do not
     # attempt another bind on the same port.
-    pid_fp = paths.root / "runtime" / "webui.pid"
+    pid_fp = _webui_pid_file(rt_dir, host=host, port=port)
     if pid_fp.exists():
         try:
             obj = json.loads(pid_fp.read_text(encoding="utf-8"))
@@ -1042,7 +1063,7 @@ def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon:
                 return False
         except Exception:
             pass
-    log_dir = paths.root / "runtime"
+    log_dir = rt_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     log_fp = log_dir / "webui.log"
     cmd = [sys.executable, "-m", "omnimem.cli", "start", "--host", host, "--port", str(port)]
@@ -1051,6 +1072,8 @@ def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon:
     if cfg_path:
         cmd.extend(["--config", str(cfg_path)])
 
+    env = dict(os.environ)
+    env["OMNIMEM_RUNTIME_DIR"] = str(rt_dir)
     with log_fp.open("ab") as f:
         subprocess.Popen(
             cmd,
@@ -1058,6 +1081,7 @@ def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon:
             stderr=f,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
+            env=env,
         )
     # Best-effort: give the background server a brief moment to bind and serve.
     deadline = time.time() + 2.0
@@ -1088,16 +1112,45 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _webui_runtime_dir(home: Path) -> Path:
-    return home / "runtime"
+def _endpoint_key(host: str, port: int) -> str:
+    raw = f"{str(host).strip().lower()}_{int(port)}"
+    return "".join(ch if ch.isalnum() else "_" for ch in raw)
 
 
-def _webui_leases_dir(home: Path) -> Path:
-    return _webui_runtime_dir(home) / "webui_leases"
+def _resolve_shared_runtime_dir(*, fallback_home: Path | None = None) -> Path:
+    candidates: list[Path] = []
+    env_dir = os.getenv("OMNIMEM_RUNTIME_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    xdg = os.getenv("XDG_RUNTIME_DIR", "").strip()
+    if xdg:
+        candidates.append(Path(xdg).expanduser() / "omnimem")
+    uid = getattr(os, "getuid", lambda: None)()
+    if uid is not None:
+        candidates.append(Path("/tmp") / f"omnimem-{int(uid)}")
+    else:
+        candidates.append(Path("/tmp") / "omnimem")
+    if fallback_home is not None:
+        candidates.append(fallback_home / "runtime")
+
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            probe = d / ".probe"
+            probe.write_text("ok\n", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return d
+        except Exception:
+            continue
+    raise RuntimeError("unable to create runtime dir for webui coordination")
 
 
-def _create_webui_lease(home: Path, *, parent_pid: int, host: str, port: int) -> Path:
-    d = _webui_leases_dir(home)
+def _webui_leases_dir(runtime_dir: Path, *, host: str, port: int) -> Path:
+    return runtime_dir / "webui_leases" / _endpoint_key(host, port)
+
+
+def _create_webui_lease(runtime_dir: Path, *, parent_pid: int, host: str, port: int) -> Path:
+    d = _webui_leases_dir(runtime_dir, host=host, port=port)
     d.mkdir(parents=True, exist_ok=True)
     lease_fp = d / f"lease-{uuid.uuid4().hex}.json"
     lease_fp.write_text(
@@ -1116,8 +1169,8 @@ def _create_webui_lease(home: Path, *, parent_pid: int, host: str, port: int) ->
     return lease_fp
 
 
-def _cleanup_stale_leases(home: Path) -> list[Path]:
-    d = _webui_leases_dir(home)
+def _cleanup_stale_leases(runtime_dir: Path, *, host: str, port: int) -> list[Path]:
+    d = _webui_leases_dir(runtime_dir, host=host, port=port)
     if not d.exists():
         return []
     keep: list[Path] = []
@@ -1138,16 +1191,16 @@ def _cleanup_stale_leases(home: Path) -> list[Path]:
     return keep
 
 
-def _webui_pid_file(home: Path) -> Path:
-    return _webui_runtime_dir(home) / "webui.pid"
+def _webui_pid_file(runtime_dir: Path, *, host: str, port: int) -> Path:
+    return runtime_dir / f"webui-{_endpoint_key(host, port)}.pid"
 
 
-def _webui_managed_marker(home: Path) -> Path:
-    return _webui_runtime_dir(home) / "webui.managed.json"
+def _webui_managed_marker(runtime_dir: Path, *, host: str, port: int) -> Path:
+    return runtime_dir / f"webui-{_endpoint_key(host, port)}.managed.json"
 
 
-def _read_webui_pid(home: Path) -> int:
-    fp = _webui_pid_file(home)
+def _read_webui_pid(runtime_dir: Path, *, host: str, port: int) -> int:
+    fp = _webui_pid_file(runtime_dir, host=host, port=port)
     if not fp.exists():
         return 0
     try:
@@ -1160,7 +1213,7 @@ def _read_webui_pid(home: Path) -> int:
             return 0
 
 
-def _kill_webui(home: Path, pid: int) -> None:
+def _kill_webui(pid: int) -> None:
     if pid <= 0:
         return
     # WebUI is started with start_new_session=True; pid is typically its own process group id.
@@ -1186,9 +1239,11 @@ def _kill_webui(home: Path, pid: int) -> None:
 
 
 def cmd_webui_guard(args: argparse.Namespace) -> int:
-    home = Path(args.home).expanduser().resolve()
+    runtime_dir = Path(args.runtime_dir).expanduser().resolve()
     lease_fp = Path(args.lease).expanduser().resolve()
     parent_pid = int(args.parent_pid)
+    host = str(args.host)
+    port = int(args.port)
 
     # Wait until the parent (wrapper which becomes codex/claude) exits.
     while _pid_alive(parent_pid):
@@ -1204,15 +1259,15 @@ def cmd_webui_guard(args: argparse.Namespace) -> int:
         return 0
 
     # Only auto-stop WebUI if it was started/managed by the wrapper (avoid killing a manually started server).
-    if not _webui_managed_marker(home).exists():
+    if not _webui_managed_marker(runtime_dir, host=host, port=port).exists():
         return 0
 
-    keep = _cleanup_stale_leases(home)
+    keep = _cleanup_stale_leases(runtime_dir, host=host, port=port)
     if keep:
         return 0
 
-    pid = _read_webui_pid(home)
-    _kill_webui(home, pid)
+    pid = _read_webui_pid(runtime_dir, host=host, port=port)
+    _kill_webui(pid)
     return 0
 
 
@@ -1478,7 +1533,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Internal helper: background guard used by wrappers to implement "on-demand" WebUI lifecycle.
     p_guard = sub.add_parser("webui-guard", help=argparse.SUPPRESS)
-    p_guard.add_argument("--home", required=True)
+    p_guard.add_argument("--runtime-dir", required=True)
+    p_guard.add_argument("--host", required=True)
+    p_guard.add_argument("--port", type=int, required=True)
     p_guard.add_argument("--parent-pid", type=int, required=True)
     p_guard.add_argument("--lease", required=True)
     p_guard.add_argument("--stop-when-idle", action="store_true")

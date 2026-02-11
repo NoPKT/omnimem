@@ -29,7 +29,19 @@ class CLIDemandWebUITest(unittest.TestCase):
     def test_webui_guard_command_is_registered(self) -> None:
         p = build_parser()
         args = p.parse_args(
-            ["webui-guard", "--home", "/tmp/omnimem-home", "--parent-pid", "123", "--lease", "/tmp/lease.json"]
+            [
+                "webui-guard",
+                "--runtime-dir",
+                "/tmp/omnimem-runtime",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8765",
+                "--parent-pid",
+                "123",
+                "--lease",
+                "/tmp/lease.json",
+            ]
         )
         self.assertEqual(args.cmd, "webui-guard")
 
