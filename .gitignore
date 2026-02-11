@@ -2,6 +2,9 @@
 *.db
 *.sqlite
 *.sqlite3
+runtime/
+data/jsonl/events-*.jsonl
+data/markdown/archive/system/
 
 # OS
 .DS_Store

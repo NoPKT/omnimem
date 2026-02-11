@@ -1,12 +1,8 @@
 # Changelog
 
-## Unreleased
-
-- Release workflow: add one-command release gate script `scripts/release_gate.sh` to run preflight, doctor, pack dry-run, phase-D verification, and frontier smoke checks.
+## Unreleased\n\n## 0.2.21 - 2026-02-11\n\n- Release workflow: add one-command release gate script `scripts/release_gate.sh` to run preflight, doctor, pack dry-run, phase-D verification, and frontier smoke checks.
 - CI: keep frontier smoke checks in CI and align docs/scripts so local pre-publish flow matches automated checks.
-- Release automation: add `scripts/release_prepare.sh` (`npm run release:prepare`) to compute next semver, build release draft notes, and optionally apply version/changelog updates.
-
-## 0.2.20
+- Release automation: add `scripts/release_prepare.sh` (`npm run release:prepare`) to compute next semver, build release draft notes, and optionally apply version/changelog updates.\n\n## 0.2.20
 
 - Retrieval frontier: `retrieve_thread` now exposes deterministic self-check (`coverage`, `missing_tokens`, `confidence`) and end-to-end pipeline timing metrics (`seed/graph/materialize/total`), with optional adaptive feedback to increment reuse on retrieved memories.
 - New memory operations: add `omnimem raptor` (RAPTOR-style hierarchical digest builder) and `omnimem enhance` (heuristic summary enhancement) with preview-by-default and `--apply` write mode.
