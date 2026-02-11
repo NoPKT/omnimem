@@ -530,6 +530,18 @@ def cmd_sync(args: argparse.Namespace) -> int:
     remote_name = args.remote_name or sync_cfg.get("remote_name", "origin")
     branch = args.branch or sync_cfg.get("branch", "main")
     remote_url = args.remote_url or sync_cfg.get("remote_url")
+    raw_layers = getattr(args, "sync_layers", None)
+    if raw_layers is None:
+        raw_layers = sync_cfg.get("include_layers")
+    if isinstance(raw_layers, list):
+        sync_layers = [str(x).strip() for x in raw_layers if str(x).strip()]
+    else:
+        sync_layers = [x.strip() for x in str(raw_layers or "").split(",") if x.strip()]
+    include_jsonl_arg = getattr(args, "sync_include_jsonl", None)
+    if include_jsonl_arg is None:
+        include_jsonl = bool(sync_cfg.get("include_jsonl", True))
+    else:
+        include_jsonl = bool(include_jsonl_arg)
     out = sync_git(
         paths,
         schema_sql_path(),
@@ -538,6 +550,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         branch=branch,
         remote_url=remote_url,
         commit_message=args.commit_message,
+        sync_include_layers=sync_layers,
+        sync_include_jsonl=include_jsonl,
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -2234,6 +2248,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--remote-url", help="remote url (https://... or git@...); optional")
     p_sync.add_argument("--branch", help="target branch, default main")
     p_sync.add_argument("--commit-message", default="chore(memory): sync snapshot")
+    p_sync.add_argument(
+        "--sync-layers",
+        default=None,
+        help="comma-separated markdown layers to sync (instant,short,long,archive); default from config or all",
+    )
+    p_sync.add_argument(
+        "--sync-include-jsonl",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="include JSONL event stream in git sync (default from config or true)",
+    )
     p_sync.set_defaults(func=cmd_sync)
 
     p_decay = sub.add_parser("decay", help="apply or preview time-based signal decay")

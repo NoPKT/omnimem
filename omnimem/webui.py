@@ -4402,6 +4402,8 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "remote_name": gh.get("remote_name", "origin"),
         "remote_url": gh.get("remote_url", ""),
         "branch": gh.get("branch", "main"),
+        "sync_include_layers": ",".join([str(x).strip() for x in (gh.get("include_layers") or []) if str(x).strip()]),
+        "sync_include_jsonl": bool(gh.get("include_jsonl", True)),
         "daemon_scan_interval": dm.get("scan_interval", 8),
         "daemon_pull_interval": dm.get("pull_interval", 30),
         "daemon_retry_max_attempts": dm.get("retry_max_attempts", 3),
@@ -4427,6 +4429,17 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "webui_approval_required": bool(wu.get("approval_required", False)),
         "webui_maintenance_preview_only_until": str(wu.get("maintenance_preview_only_until", "")),
     }
+
+
+def _sync_options_from_cfg(cfg: dict[str, Any]) -> tuple[list[str], bool]:
+    gh = cfg.get("sync", {}).get("github", {})
+    raw_layers = gh.get("include_layers")
+    if isinstance(raw_layers, list):
+        layers = [str(x).strip() for x in raw_layers if str(x).strip()]
+    else:
+        layers = [x.strip() for x in str(raw_layers or "").split(",") if x.strip()]
+    include_jsonl = bool(gh.get("include_jsonl", True))
+    return layers, include_jsonl
 
 
 def _projects_registry_path(home: str) -> Path:
@@ -4948,6 +4961,89 @@ def _process_memories_items(
     before_dedup = len(out)
     out = _dedup_memory_items(out, mode=dedup_mode)
     return out, before_dedup
+
+
+def _parse_governance_request(q: dict[str, list[str]]) -> dict[str, Any]:
+    return {
+        "project_id": q.get("project_id", [""])[0].strip(),
+        "session_id": q.get("session_id", [""])[0].strip(),
+        "limit": _parse_int_param(q.get("limit", ["6"])[0], default=6, lo=1, hi=200),
+        "thresholds": {
+            "p_imp": _parse_float_param(q.get("p_imp", ["0.75"])[0], default=0.75, lo=0.0, hi=1.0),
+            "p_conf": _parse_float_param(q.get("p_conf", ["0.65"])[0], default=0.65, lo=0.0, hi=1.0),
+            "p_stab": _parse_float_param(q.get("p_stab", ["0.65"])[0], default=0.65, lo=0.0, hi=1.0),
+            "p_vol": _parse_float_param(q.get("p_vol", ["0.65"])[0], default=0.65, lo=0.0, hi=1.0),
+            "d_vol": _parse_float_param(q.get("d_vol", ["0.75"])[0], default=0.75, lo=0.0, hi=1.0),
+            "d_stab": _parse_float_param(q.get("d_stab", ["0.45"])[0], default=0.45, lo=0.0, hi=1.0),
+            "d_reuse": _parse_int_param(q.get("d_reuse", ["1"])[0], default=1, lo=0, hi=100000),
+        },
+    }
+
+
+def _governance_scope_filters(project_id: str, session_id: str) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    args: list[Any] = []
+    if project_id:
+        clauses.append("json_extract(scope_json, '$.project_id') = ?")
+        args.append(project_id)
+    if session_id:
+        clauses.append("COALESCE(json_extract(source_json, '$.session_id'), '') = ?")
+        args.append(session_id)
+    if not clauses:
+        return "", args
+    return " AND " + " AND ".join(clauses), args
+
+
+def _pack_governance_rows(rows: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        out.append(
+            {
+                "id": r["id"],
+                "layer": r["layer"],
+                "kind": r["kind"],
+                "summary": r["summary"],
+                "updated_at": r["updated_at"],
+                "signals": {
+                    "importance_score": float(r["importance_score"]),
+                    "confidence_score": float(r["confidence_score"]),
+                    "stability_score": float(r["stability_score"]),
+                    "reuse_count": int(r["reuse_count"]),
+                    "volatility_score": float(r["volatility_score"]),
+                },
+            }
+        )
+    return out
+
+
+def _infer_governance_thresholds(
+    *,
+    paths: Any,
+    schema_sql_path: Path,
+    cfg: dict[str, Any],
+    project_id: str,
+    session_id: str,
+    days: int,
+) -> dict[str, Any]:
+    dm = dict(cfg.get("daemon", {}) or {})
+    return infer_adaptive_governance_thresholds(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        project_id=project_id,
+        session_id=session_id,
+        days=int(days),
+        q_promote_imp=float(dm.get("adaptive_q_promote_imp", 0.68)),
+        q_promote_conf=float(dm.get("adaptive_q_promote_conf", 0.60)),
+        q_promote_stab=float(dm.get("adaptive_q_promote_stab", 0.62)),
+        q_promote_vol=float(dm.get("adaptive_q_promote_vol", 0.42)),
+        q_demote_vol=float(dm.get("adaptive_q_demote_vol", 0.78)),
+        q_demote_stab=float(dm.get("adaptive_q_demote_stab", 0.28)),
+        q_demote_reuse=float(dm.get("adaptive_q_demote_reuse", 0.30)),
+        drift_aware=True,
+        drift_recent_days=14,
+        drift_baseline_days=120,
+        drift_weight=0.45,
+    )
 
 
 def _cache_get(
@@ -5607,6 +5703,8 @@ def run_webui(
                     remote_name=gh.get("remote_name", "origin"),
                     branch=gh.get("branch", "main"),
                     remote_url=gh.get("remote_url"),
+                    sync_include_layers=_sync_options_from_cfg(cfg)[0],
+                    sync_include_jsonl=_sync_options_from_cfg(cfg)[1],
                     scan_interval=scan_every,
                     pull_interval=pull_every,
                     maintenance_enabled=bool(daemon_state.get("maintenance_enabled", True)),
@@ -5959,29 +6057,22 @@ def run_webui(
                 return
 
             if parsed.path == "/api/governance":
-                q = parse_qs(parsed.query)
-                project_id = q.get("project_id", [""])[0].strip()
-                session_id = q.get("session_id", [""])[0].strip()
-                limit = int(q.get("limit", ["6"])[0])
-                p_imp = float(q.get("p_imp", ["0.75"])[0])
-                p_conf = float(q.get("p_conf", ["0.65"])[0])
-                p_stab = float(q.get("p_stab", ["0.65"])[0])
-                p_vol = float(q.get("p_vol", ["0.65"])[0])
-                d_vol = float(q.get("d_vol", ["0.75"])[0])
-                d_stab = float(q.get("d_stab", ["0.45"])[0])
-                d_reuse = int(float(q.get("d_reuse", ["1"])[0]))
+                req = _parse_governance_request(parse_qs(parsed.query))
+                project_id = str(req["project_id"])
+                session_id = str(req["session_id"])
+                limit = int(req["limit"])
+                thresholds = dict(req["thresholds"])
+                p_imp = float(thresholds["p_imp"])
+                p_conf = float(thresholds["p_conf"])
+                p_stab = float(thresholds["p_stab"])
+                p_vol = float(thresholds["p_vol"])
+                d_vol = float(thresholds["d_vol"])
+                d_stab = float(thresholds["d_stab"])
+                d_reuse = int(thresholds["d_reuse"])
                 try:
                     with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
-                        pid_where = ""
-                        sid_where = ""
-                        args: list[Any] = []
-                        if project_id:
-                            pid_where = "AND json_extract(scope_json, '$.project_id') = ?"
-                            args.append(project_id)
-                        if session_id:
-                            sid_where = "AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?"
-                            args.append(session_id)
+                        scope_where, scope_args = _governance_scope_filters(project_id, session_id)
 
                         promote = conn.execute(
                             f"""
@@ -5993,12 +6084,11 @@ def run_webui(
                               AND confidence_score >= ?
                               AND stability_score >= ?
                               AND volatility_score <= ?
-                              {pid_where}
-                              {sid_where}
+                              {scope_where}
                             ORDER BY importance_score DESC, stability_score DESC, updated_at DESC
                             LIMIT ?
                             """,
-                            (p_imp, p_conf, p_stab, p_vol, *args, limit),
+                            (p_imp, p_conf, p_stab, p_vol, *scope_args, limit),
                         ).fetchall()
 
                         demote = conn.execute(
@@ -6009,54 +6099,22 @@ def run_webui(
                             WHERE layer = 'long'
                               AND (volatility_score >= ? OR stability_score <= ?)
                               AND reuse_count <= ?
-                              {pid_where}
-                              {sid_where}
+                              {scope_where}
                             ORDER BY volatility_score DESC, stability_score ASC, updated_at DESC
                             LIMIT ?
                             """,
-                            (d_vol, d_stab, d_reuse, *args, limit),
+                            (d_vol, d_stab, d_reuse, *scope_args, limit),
                         ).fetchall()
-
-                    def pack(rows):
-                        out = []
-                        for r in rows:
-                            out.append(
-                                {
-                                    "id": r["id"],
-                                    "layer": r["layer"],
-                                    "kind": r["kind"],
-                                    "summary": r["summary"],
-                                    "updated_at": r["updated_at"],
-                                    "signals": {
-                                        "importance_score": float(r["importance_score"]),
-                                        "confidence_score": float(r["confidence_score"]),
-                                        "stability_score": float(r["stability_score"]),
-                                        "reuse_count": int(r["reuse_count"]),
-                                        "volatility_score": float(r["volatility_score"]),
-                                    },
-                                }
-                            )
-                        return out
 
                     recommended: dict[str, Any] = {}
                     try:
-                        rec = infer_adaptive_governance_thresholds(
+                        rec = _infer_governance_thresholds(
                             paths=paths,
                             schema_sql_path=schema_sql_path,
+                            cfg=cfg,
                             project_id=project_id,
                             session_id=session_id,
                             days=14,
-                            q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
-                            q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
-                            q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
-                            q_promote_vol=float(cfg.get("daemon", {}).get("adaptive_q_promote_vol", 0.42)),
-                            q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
-                            q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
-                            q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
-                            drift_aware=True,
-                            drift_recent_days=14,
-                            drift_baseline_days=120,
-                            drift_weight=0.45,
                         )
                         if rec.get("ok"):
                             recommended = {
@@ -6084,8 +6142,8 @@ def run_webui(
                                 "d_stab": d_stab,
                                 "d_reuse": d_reuse,
                             },
-                            "promote": pack(promote),
-                            "demote": pack(demote),
+                            "promote": _pack_governance_rows(promote),
+                            "demote": _pack_governance_rows(demote),
                             "recommended": recommended,
                         }
                     )
@@ -6133,23 +6191,13 @@ def run_webui(
                     }
                     quantiles: dict[str, Any] = {}
                     if adaptive:
-                        inf = infer_adaptive_governance_thresholds(
+                        inf = _infer_governance_thresholds(
                             paths=paths,
                             schema_sql_path=schema_sql_path,
+                            cfg=cfg,
                             project_id=project_id,
                             session_id=session_id,
                             days=days,
-                            q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
-                            q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
-                            q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
-                            q_promote_vol=float(cfg.get("daemon", {}).get("adaptive_q_promote_vol", 0.42)),
-                            q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
-                            q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
-                            q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
-                            drift_aware=True,
-                            drift_recent_days=14,
-                            drift_baseline_days=120,
-                            drift_weight=0.45,
                         )
                         if inf.get("ok"):
                             thresholds = dict(inf.get("thresholds") or thresholds)
@@ -6939,6 +6987,16 @@ def run_webui(
                 cfg["sync"]["github"]["remote_name"] = data.get("remote_name", "origin")
                 cfg["sync"]["github"]["remote_url"] = data.get("remote_url", "")
                 cfg["sync"]["github"]["branch"] = data.get("branch", "main")
+                if "sync_include_layers" in data:
+                    raw_layers = data.get("sync_include_layers")
+                    if isinstance(raw_layers, list):
+                        cfg["sync"]["github"]["include_layers"] = [str(x).strip() for x in raw_layers if str(x).strip()]
+                    else:
+                        cfg["sync"]["github"]["include_layers"] = [
+                            x.strip() for x in str(raw_layers or "").split(",") if x.strip()
+                        ]
+                if "sync_include_jsonl" in data:
+                    cfg["sync"]["github"]["include_jsonl"] = bool(data.get("sync_include_jsonl"))
                 cfg.setdefault("daemon", {})
                 dm = cfg["daemon"]
 
@@ -7033,6 +7091,7 @@ def run_webui(
                 mode = data.get("mode", "github-status")
                 gh = cfg.get("sync", {}).get("github", {})
                 try:
+                    sync_layers, sync_include_jsonl = _sync_options_from_cfg(cfg)
                     out = sync_runner(
                         paths,
                         schema_sql_path,
@@ -7041,6 +7100,8 @@ def run_webui(
                         branch=gh.get("branch", "main"),
                         remote_url=gh.get("remote_url"),
                         commit_message="chore(memory): sync from webui",
+                        sync_include_layers=sync_layers,
+                        sync_include_jsonl=sync_include_jsonl,
                     )
                     self._send_json(out)
                 except Exception as exc:  # pragma: no cover

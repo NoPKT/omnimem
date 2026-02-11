@@ -73,6 +73,13 @@ class CLIFrontierCommandTest(unittest.TestCase):
         )
         self.assertEqual(a5.cmd, "core-merge-suggest")
 
+    def test_sync_scope_args_registered(self) -> None:
+        p = build_parser()
+        a = p.parse_args(["sync", "--mode", "github-push", "--sync-layers", "long,archive", "--no-sync-include-jsonl"])
+        self.assertEqual(a.cmd, "sync")
+        self.assertEqual(str(a.sync_layers or ""), "long,archive")
+        self.assertFalse(bool(a.sync_include_jsonl))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -159,6 +159,7 @@ omnimem ingest --type file ./docs/notes.md
 omnimem ingest --type file ./docs/design.md --chunk-mode heading --max-chunks 12
 omnimem ingest --type text --text "..." --chunk-mode fixed --chunk-chars 1800
 omnimem feedback --id <memory_id> --feedback positive --note "high value"
+omnimem sync --mode github-push --sync-layers long,archive --no-sync-include-jsonl
 ```
 
 Offline LoCoMo-style retrieval eval:
@@ -294,6 +295,13 @@ NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 ```
 
 `scripts/release_gate.sh` now supports environments without a global `omnimem` binary (e.g. CI): it auto-falls back to `python -m omnimem.cli`.
+
+Git sync size-control options:
+
+- `sync.github.include_layers`: markdown layers to include in Git sync (e.g. `["long","archive"]`).
+- `sync.github.include_jsonl`: whether to include `data/jsonl` event files in Git sync (default `true`).
+- CLI overrides: `omnimem sync --sync-layers long,archive --no-sync-include-jsonl`.
+- Same options are also respected by WebUI-triggered sync and daemon background sync.
 
 Nightly memory-eval workflow:
 

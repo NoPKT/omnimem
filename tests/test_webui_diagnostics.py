@@ -23,7 +23,11 @@ from omnimem.webui import (
     _parse_int_param,
     _parse_memories_request,
     _normalize_route_templates,
+    _parse_governance_request,
     _process_memories_items,
+    _governance_scope_filters,
+    _pack_governance_rows,
+    _sync_options_from_cfg,
     _quality_alerts,
     _quality_window_summary,
     _rollback_preview_items,
@@ -144,6 +148,59 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(before, 2)
         self.assertEqual([x["id"] for x in out], ["m1"])
+
+    def test_parse_governance_request_bounds(self) -> None:
+        req = _parse_governance_request(
+            {
+                "project_id": ["OM"],
+                "session_id": ["s1"],
+                "limit": ["9999"],
+                "d_reuse": ["-3"],
+                "p_imp": ["bad"],
+            }
+        )
+        self.assertEqual(str(req.get("project_id") or ""), "OM")
+        self.assertEqual(str(req.get("session_id") or ""), "s1")
+        self.assertEqual(int(req.get("limit", 0)), 200)
+        th = dict(req.get("thresholds") or {})
+        self.assertEqual(int(th.get("d_reuse", -1)), 0)
+        self.assertAlmostEqual(float(th.get("p_imp", 0.0)), 0.75, places=6)
+
+    def test_governance_scope_filters(self) -> None:
+        sql, args = _governance_scope_filters("OM", "s1")
+        self.assertIn("project_id", sql)
+        self.assertIn("session_id", sql)
+        self.assertEqual(args, ["OM", "s1"])
+        sql2, args2 = _governance_scope_filters("", "")
+        self.assertEqual(sql2, "")
+        self.assertEqual(args2, [])
+
+    def test_pack_governance_rows(self) -> None:
+        rows = [
+            {
+                "id": "m1",
+                "layer": "short",
+                "kind": "note",
+                "summary": "s",
+                "updated_at": "2026-02-11T00:00:00+00:00",
+                "importance_score": 0.8,
+                "confidence_score": 0.7,
+                "stability_score": 0.6,
+                "reuse_count": 2,
+                "volatility_score": 0.3,
+            }
+        ]
+        out = _pack_governance_rows(rows)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["id"], "m1")
+        self.assertEqual(int((out[0]["signals"] or {}).get("reuse_count", -1)), 2)
+
+    def test_sync_options_from_cfg(self) -> None:
+        layers, include_jsonl = _sync_options_from_cfg(
+            {"sync": {"github": {"include_layers": ["long", "archive"], "include_jsonl": False}}}
+        )
+        self.assertEqual(layers, ["long", "archive"])
+        self.assertFalse(include_jsonl)
 
     def test_memory_route_inference(self) -> None:
         self.assertEqual(_normalize_memory_route("procedural"), "procedural")

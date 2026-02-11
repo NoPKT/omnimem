@@ -5738,8 +5738,26 @@ def _git_merge_in_progress(paths: MemoryPaths) -> bool:
     return proc.returncode == 0
 
 
-def _ensure_sync_gitignore(paths: MemoryPaths) -> None:
+def _normalize_sync_include_layers(sync_include_layers: list[str] | None) -> list[str]:
+    if sync_include_layers is None:
+        return ["instant", "short", "long", "archive"]
+    out: list[str] = []
+    for x in sync_include_layers:
+        s = str(x or "").strip().lower()
+        if s in LAYER_SET and s not in out:
+            out.append(s)
+    return out
+
+
+def _ensure_sync_gitignore(
+    paths: MemoryPaths,
+    *,
+    sync_include_layers: list[str] | None,
+    sync_include_jsonl: bool,
+) -> None:
     """Keep the memory Git repo focused on shareable memory artifacts, not runtime/install files."""
+    include_layers = _normalize_sync_include_layers(sync_include_layers)
+    excluded_layers = [x for x in ["instant", "short", "long", "archive"] if x not in include_layers]
     ignore_path = paths.root / ".gitignore"
     start = "# OMNIMEM:SYNC:START"
     end = "# OMNIMEM:SYNC:END"
@@ -5765,9 +5783,29 @@ def _ensure_sync_gitignore(paths: MemoryPaths) -> None:
         "data/omnimemory.db-*",
         "data/omnimemory.db-shm",
         "data/omnimemory.db-wal",
+    ]
+    if not bool(sync_include_jsonl):
+        block_lines.extend(
+            [
+                "",
+                "# Optional: skip syncing JSONL event stream (size-control mode).",
+                "data/jsonl/",
+            ]
+        )
+    if excluded_layers:
+        block_lines.extend(
+            [
+                "",
+                "# Optional: skip syncing selected markdown layers.",
+            ]
+        )
+        for lyr in excluded_layers:
+            block_lines.append(f"data/markdown/{lyr}/")
+    block_lines.extend(
+        [
         end,
         "",
-    ]
+    ])
 
     if ignore_path.exists():
         txt = ignore_path.read_text(encoding="utf-8", errors="ignore")
@@ -5785,7 +5823,12 @@ def _ensure_sync_gitignore(paths: MemoryPaths) -> None:
         ignore_path.write_text(new_txt, encoding="utf-8")
 
 
-def _untrack_sync_ignored(paths: MemoryPaths) -> None:
+def _untrack_sync_ignored(
+    paths: MemoryPaths,
+    *,
+    sync_include_layers: list[str] | None,
+    sync_include_jsonl: bool,
+) -> None:
     # If these were previously committed, .gitignore won't help; drop from index but keep local files.
     _run_git(paths, ["rm", "-r", "--cached", "--ignore-unmatch", "runtime"], check=False)
     for name in ["bin", "lib", "docs", "spec", "templates", "db", "__pycache__"]:
@@ -5794,6 +5837,12 @@ def _untrack_sync_ignored(paths: MemoryPaths) -> None:
         _run_git(paths, ["rm", "--cached", "--ignore-unmatch", name], check=False)
     for name in ["data/omnimemory.db", "data/omnimemory.db-wal", "data/omnimemory.db-shm"]:
         _run_git(paths, ["rm", "--cached", "--ignore-unmatch", name], check=False)
+    if not bool(sync_include_jsonl):
+        _run_git(paths, ["rm", "-r", "--cached", "--ignore-unmatch", "data/jsonl"], check=False)
+    include_layers = _normalize_sync_include_layers(sync_include_layers)
+    excluded_layers = [x for x in ["instant", "short", "long", "archive"] if x not in include_layers]
+    for lyr in excluded_layers:
+        _run_git(paths, ["rm", "-r", "--cached", "--ignore-unmatch", f"data/markdown/{lyr}"], check=False)
 
 
 def _parse_jsonl_union(stage2: str, stage3: str) -> str:
@@ -5850,6 +5899,8 @@ def sync_git(
     branch: str = "main",
     remote_url: str | None = None,
     commit_message: str = "chore(memory): sync snapshot",
+    sync_include_layers: list[str] | None = None,
+    sync_include_jsonl: bool = True,
     log_event: bool = True,
 ) -> dict[str, Any]:
     if mode not in SYNC_MODES:
@@ -5879,8 +5930,16 @@ def sync_git(
             try:
                 _ensure_git_repo(paths)
                 _ensure_remote(paths, remote_name, remote_url)
-                _ensure_sync_gitignore(paths)
-                _untrack_sync_ignored(paths)
+                _ensure_sync_gitignore(
+                    paths,
+                    sync_include_layers=sync_include_layers,
+                    sync_include_jsonl=bool(sync_include_jsonl),
+                )
+                _untrack_sync_ignored(
+                    paths,
+                    sync_include_layers=sync_include_layers,
+                    sync_include_jsonl=bool(sync_include_jsonl),
+                )
                 if _git_rebase_in_progress(paths) or _git_merge_in_progress(paths) or _git_unmerged_paths(paths):
                     st = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
                     raise RuntimeError(f"git repo has an in-progress merge/rebase or unmerged files; resolve first\n{st}")
@@ -5904,8 +5963,16 @@ def sync_git(
             try:
                 _ensure_git_repo(paths)
                 _ensure_remote(paths, remote_name, remote_url)
-                _ensure_sync_gitignore(paths)
-                _untrack_sync_ignored(paths)
+                _ensure_sync_gitignore(
+                    paths,
+                    sync_include_layers=sync_include_layers,
+                    sync_include_jsonl=bool(sync_include_jsonl),
+                )
+                _untrack_sync_ignored(
+                    paths,
+                    sync_include_layers=sync_include_layers,
+                    sync_include_jsonl=bool(sync_include_jsonl),
+                )
 
                 _run_git(paths, ["fetch", remote_name, branch])
                 remote_ref = f"{remote_name}/{branch}"
@@ -5968,6 +6035,8 @@ def sync_git(
                 branch=branch,
                 remote_url=remote_url,
                 commit_message=commit_message,
+                sync_include_layers=sync_include_layers,
+                sync_include_jsonl=bool(sync_include_jsonl),
                 log_event=False,
             )
             reindex_out = reindex_from_jsonl(paths, schema_sql_path, reset=True)
@@ -5979,6 +6048,8 @@ def sync_git(
                 branch=branch,
                 remote_url=remote_url,
                 commit_message=commit_message,
+                sync_include_layers=sync_include_layers,
+                sync_include_jsonl=bool(sync_include_jsonl),
                 log_event=False,
             )
             ok = bool(pull_out.get("ok") and reindex_out.get("ok") and push_out.get("ok"))
@@ -6008,6 +6079,8 @@ def sync_placeholder(
     branch: str = "main",
     remote_url: str | None = None,
     commit_message: str = "chore(memory): sync snapshot",
+    sync_include_layers: list[str] | None = None,
+    sync_include_jsonl: bool = True,
     log_event: bool = True,
 ) -> dict[str, Any]:
     # Backward-compatible alias for older callers/docs.
@@ -6019,6 +6092,8 @@ def sync_placeholder(
         branch=branch,
         remote_url=remote_url,
         commit_message=commit_message,
+        sync_include_layers=sync_include_layers,
+        sync_include_jsonl=bool(sync_include_jsonl),
         log_event=log_event,
     )
 
@@ -6140,6 +6215,8 @@ def run_sync_with_retry(
     remote_name: str,
     branch: str,
     remote_url: str | None,
+    sync_include_layers: list[str] | None = None,
+    sync_include_jsonl: bool = True,
     max_attempts: int = 3,
     initial_backoff: int = 1,
     max_backoff: int = 8,
@@ -6159,6 +6236,8 @@ def run_sync_with_retry(
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
+                sync_include_layers=sync_include_layers,
+                sync_include_jsonl=bool(sync_include_jsonl),
                 log_event=False,
             )
         except Exception as exc:  # pragma: no cover
@@ -6191,8 +6270,10 @@ def run_sync_daemon(
     remote_name: str,
     branch: str,
     remote_url: str | None,
-    scan_interval: int,
-    pull_interval: int,
+    sync_include_layers: list[str] | None = None,
+    sync_include_jsonl: bool = True,
+    scan_interval: int = 8,
+    pull_interval: int = 30,
     weave_enabled: bool = True,
     weave_interval: int = 300,
     weave_limit: int = 220,
@@ -6269,6 +6350,8 @@ def run_sync_daemon(
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
+                sync_include_layers=sync_include_layers,
+                sync_include_jsonl=bool(sync_include_jsonl),
                 max_attempts=retry_max_attempts,
                 initial_backoff=retry_initial_backoff,
                 max_backoff=retry_max_backoff,
@@ -6304,6 +6387,8 @@ def run_sync_daemon(
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
+                sync_include_layers=sync_include_layers,
+                sync_include_jsonl=bool(sync_include_jsonl),
                 max_attempts=retry_max_attempts,
                 initial_backoff=retry_initial_backoff,
                 max_backoff=retry_max_backoff,

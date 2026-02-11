@@ -29,6 +29,8 @@
 - CI evaluation loop: add scheduled/manual GitHub workflow `nightly-memory-eval` to run core-merge mode evaluation and dry-run auto-tuning, with reports uploaded as artifacts.
 - WebUI cleanup: extract shared drift-query parser `_parse_retrieve_drift_options` for `/api/memories`.
 - WebUI cleanup: decompose `/api/memories` GET handling into reusable helpers (`_parse_memories_request`, `_build_smart_memories_cache_key`, `_process_memories_items`) with regression tests.
+- Sync size control: add configurable Git sync scope via `sync.github.include_layers` and `sync.github.include_jsonl`; supported by CLI (`omnimem sync`) and daemon/WebUI sync paths to reduce repository growth.
+- WebUI cleanup: extract governance query/packing helpers (`_parse_governance_request`, `_governance_scope_filters`, `_pack_governance_rows`, `_infer_governance_thresholds`) to reduce endpoint complexity.
 
 ## 0.2.21 - 2026-02-11
 
