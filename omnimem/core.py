@@ -2897,6 +2897,22 @@ def _is_core_block_expired(expires_at: str) -> bool:
     return _parse_iso_dt(ex) <= datetime.now(timezone.utc)
 
 
+def _normalize_core_block_topic(topic: str) -> str:
+    raw = str(topic or "").strip().lower()
+    if not raw:
+        return ""
+    norm = re.sub(r"[^a-z0-9:_-]+", "-", raw).strip("-")
+    return norm[:64]
+
+
+def _core_block_topic_from_tags(tags: list[str]) -> str:
+    for t in tags:
+        s = str(t or "").strip().lower()
+        if s.startswith("core:topic:"):
+            return s.split("core:topic:", 1)[1].strip()
+    return ""
+
+
 def upsert_core_block(
     *,
     paths: MemoryPaths,
@@ -2907,6 +2923,7 @@ def upsert_core_block(
     session_id: str = "system",
     layer: str = "short",
     tags: list[str] | None = None,
+    topic: str = "",
     priority: int = 50,
     ttl_days: int = 0,
     expires_at: str = "",
@@ -2920,6 +2937,7 @@ def upsert_core_block(
     sid = str(session_id or "").strip() or "system"
     body = str(content or "").strip()
     summary = f"core block: {name_n}"
+    topic_n = _normalize_core_block_topic(topic)
     p = max(0, min(100, int(priority)))
     ex_raw = str(expires_at or "").strip()
     if not ex_raw and int(ttl_days) > 0:
@@ -2929,6 +2947,8 @@ def upsert_core_block(
         ex_norm = _parse_iso_dt(ex_raw).replace(microsecond=0).isoformat()
 
     core_tags = ["core:block", f"core:block:{name_n}", f"core:priority:{p}"]
+    if topic_n:
+        core_tags.append(f"core:topic:{topic_n}")
     if ex_norm:
         core_tags.append(f"core:expires:{ex_norm}")
     extra_tags = []
@@ -2975,6 +2995,7 @@ def upsert_core_block(
             "ok": True,
             "action": "updated",
             "name": name_n,
+            "topic": topic_n,
             "memory_id": str(out.get("memory_id") or ""),
             "project_id": pid,
             "session_id": sid,
@@ -3007,6 +3028,7 @@ def upsert_core_block(
         "ok": True,
         "action": "created",
         "name": name_n,
+        "topic": topic_n,
         "memory_id": str(((created.get("memory") or {}).get("id") or "")),
         "project_id": pid,
         "session_id": sid,
@@ -3048,6 +3070,7 @@ def list_core_blocks(
             tags = []
         priority = _core_block_priority_from_tags(tags)
         expires_at = _core_block_expires_from_tags(tags)
+        topic = _core_block_topic_from_tags(tags)
         expired = _is_core_block_expired(expires_at)
         if expired and not bool(include_expired):
             continue
@@ -3055,6 +3078,7 @@ def list_core_blocks(
             {
                 "id": str(r["id"] or ""),
                 "name": _core_block_name_from_tags(tags),
+                "topic": topic,
                 "priority": int(priority),
                 "expires_at": expires_at,
                 "expired": bool(expired),
@@ -3110,12 +3134,14 @@ def get_core_block(
         tags = []
     priority = _core_block_priority_from_tags(tags)
     expires_at = _core_block_expires_from_tags(tags)
+    topic = _core_block_topic_from_tags(tags)
     expired = _is_core_block_expired(expires_at)
     return {
         "ok": True,
         "block": {
             "id": str(row["id"] or ""),
             "name": name_n,
+            "topic": topic,
             "priority": int(priority),
             "expires_at": expires_at,
             "expired": bool(expired),
@@ -3129,6 +3155,48 @@ def get_core_block(
             "tags": tags,
         },
     }
+
+
+def _parse_core_block_candidates(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = _signals_from_row(dict(r))
+        ctags = [str(t).strip() for t in (d.get("tags") or []) if str(t).strip()]
+        priority = _core_block_priority_from_tags(ctags)
+        expires_at = _core_block_expires_from_tags(ctags)
+        expired = _is_core_block_expired(expires_at)
+        if expired:
+            continue
+        name = _core_block_name_from_tags(ctags) or "core"
+        topic = _core_block_topic_from_tags(ctags)
+        out.append(
+            {
+                "item": d,
+                "name": name,
+                "topic": topic,
+                "priority": int(priority),
+                "updated_at": str(d.get("updated_at") or ""),
+            }
+        )
+    out.sort(key=lambda x: (int(x.get("priority", 0)), str(x.get("updated_at", ""))), reverse=True)
+    return out
+
+
+def _merge_core_block_conflicts(rows: list[dict[str, Any]], *, merge_by_topic: bool) -> list[dict[str, Any]]:
+    if not merge_by_topic:
+        return rows
+    kept: list[dict[str, Any]] = []
+    seen_topics: set[str] = set()
+    for r in rows:
+        topic = str(r.get("topic") or "").strip().lower()
+        if not topic:
+            kept.append(r)
+            continue
+        if topic in seen_topics:
+            continue
+        seen_topics.add(topic)
+        kept.append(r)
+    return kept
 
 
 def apply_memory_feedback(
@@ -4659,6 +4727,7 @@ def retrieve_thread(
     profile_limit: int = 240,
     include_core_blocks: bool = False,
     core_block_limit: int = 2,
+    core_merge_by_topic: bool = True,
     drift_aware: bool = False,
     drift_recent_days: int = 14,
     drift_baseline_days: int = 120,
@@ -4689,6 +4758,7 @@ def retrieve_thread(
     profile_limit = max(20, min(1200, int(profile_limit)))
     include_core_blocks = bool(include_core_blocks)
     core_block_limit = max(0, min(6, int(core_block_limit)))
+    core_merge_by_topic = bool(core_merge_by_topic)
     drift_aware = bool(drift_aware)
     drift_recent_days = max(1, min(60, int(drift_recent_days)))
     drift_baseline_days = max(drift_recent_days + 1, min(720, int(drift_baseline_days)))
@@ -4941,29 +5011,18 @@ def retrieve_thread(
                     """,
                     (project_id, project_id, session_id, session_id, core_block_limit),
                 ).fetchall()
-                parsed_core_rows: list[dict[str, Any]] = []
-                for r in core_rows:
-                    d = _signals_from_row(dict(r))
-                    ctags = [str(t).strip() for t in (d.get("tags") or []) if str(t).strip()]
-                    priority = _core_block_priority_from_tags(ctags)
-                    expires_at = _core_block_expires_from_tags(ctags)
-                    expired = _is_core_block_expired(expires_at)
-                    if expired:
-                        continue
-                    parsed_core_rows.append(
-                        {
-                            "item": d,
-                            "name": _core_block_name_from_tags(ctags) or "core",
-                            "priority": int(priority),
-                            "updated_at": str(d.get("updated_at") or ""),
-                        }
-                    )
-                parsed_core_rows.sort(key=lambda x: (int(x.get("priority", 0)), str(x.get("updated_at", ""))), reverse=True)
+                parsed_core_rows = _parse_core_block_candidates(core_rows)
+                parsed_core_rows = _merge_core_block_conflicts(parsed_core_rows, merge_by_topic=core_merge_by_topic)
                 for i, rc in enumerate(parsed_core_rows[:core_block_limit]):
                     d = dict(rc["item"] or {})
                     cname = str(rc.get("name") or "core")
+                    ctopic = str(rc.get("topic") or "").strip()
                     d["score"] = float(round(1.02 - (i * 0.002), 6))
-                    d["why_recalled"] = [f"core-block:{cname}", f"score={float(d.get('score') or 0.0):.3f}"]
+                    why = [f"core-block:{cname}"]
+                    if ctopic:
+                        why.append(f"core-topic:{ctopic}")
+                    why.append(f"score={float(d.get('score') or 0.0):.3f}")
+                    d["why_recalled"] = why
                     core_items.append(d)
                 core_items = core_items[:final_limit]
             total_ms = int((time.perf_counter() - t0) * 1000)
@@ -4979,7 +5038,12 @@ def retrieve_thread(
                     "self_check": _self_rag_check(query, core_items) if self_check else {"enabled": False},
                     "adaptive_feedback": {"enabled": bool(adaptive_feedback), "updated": 0},
                     "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
-                    "core_blocks": {"enabled": include_core_blocks, "limit": int(core_block_limit), "injected": int(len(core_items))},
+                    "core_blocks": {
+                        "enabled": include_core_blocks,
+                        "limit": int(core_block_limit),
+                        "merge_by_topic": bool(core_merge_by_topic),
+                        "injected": int(len(core_items)),
+                    },
                     "drift": drift_explain,
                     "pipeline_ms": {
                         "seed": t_seed_ms,
@@ -5062,31 +5126,13 @@ def retrieve_thread(
             prefix: list[dict[str, Any]] = []
             seen = {str(x.get("id") or "") for x in out_items if str(x.get("id") or "")}
             top_score = float(out_items[0].get("score") or 1.0) if out_items else 1.0
-            parsed_core_rows: list[dict[str, Any]] = []
-            for r in core_rows:
-                d = _signals_from_row(dict(r))
-                mid = str(d.get("id") or "")
-                if not mid:
-                    continue
-                ctags = [str(t).strip() for t in (d.get("tags") or []) if str(t).strip()]
-                priority = _core_block_priority_from_tags(ctags)
-                expires_at = _core_block_expires_from_tags(ctags)
-                expired = _is_core_block_expired(expires_at)
-                if expired:
-                    continue
-                parsed_core_rows.append(
-                    {
-                        "item": d,
-                        "name": _core_block_name_from_tags(ctags) or "core",
-                        "priority": int(priority),
-                        "updated_at": str(d.get("updated_at") or ""),
-                    }
-                )
-            parsed_core_rows.sort(key=lambda x: (int(x.get("priority", 0)), str(x.get("updated_at", ""))), reverse=True)
+            parsed_core_rows = _parse_core_block_candidates(core_rows)
+            parsed_core_rows = _merge_core_block_conflicts(parsed_core_rows, merge_by_topic=core_merge_by_topic)
             for i, rc in enumerate(parsed_core_rows[:core_block_limit]):
                 d = dict(rc["item"] or {})
                 mid = str(d.get("id") or "")
                 cname = str(rc.get("name") or "core")
+                ctopic = str(rc.get("topic") or "").strip()
                 if mid in seen:
                     for it in out_items:
                         if str(it.get("id") or "") == mid:
@@ -5094,10 +5140,18 @@ def retrieve_thread(
                             why = f"core-block:{cname}"
                             if why not in wr:
                                 wr.insert(0, why)
+                            if ctopic:
+                                tw = f"core-topic:{ctopic}"
+                                if tw not in wr:
+                                    wr.insert(1 if wr else 0, tw)
                             it["why_recalled"] = wr[:6]
                     continue
                 d["score"] = float(round(top_score + 0.02 - (i * 0.002), 6))
-                d["why_recalled"] = [f"core-block:{cname}", f"score={float(d.get('score') or 0.0):.3f}"]
+                why = [f"core-block:{cname}"]
+                if ctopic:
+                    why.append(f"core-topic:{ctopic}")
+                why.append(f"score={float(d.get('score') or 0.0):.3f}")
+                d["why_recalled"] = why
                 prefix.append(d)
                 seen.add(mid)
             if prefix:
@@ -5155,7 +5209,12 @@ def retrieve_thread(
             "self_check": self_eval,
             "adaptive_feedback": feedback,
             "profile": {"enabled": profile_aware, "weight": profile_weight, "limit": profile_limit},
-            "core_blocks": {"enabled": include_core_blocks, "limit": int(core_block_limit), "injected": int(injected_core)},
+            "core_blocks": {
+                "enabled": include_core_blocks,
+                "limit": int(core_block_limit),
+                "merge_by_topic": bool(core_merge_by_topic),
+                "injected": int(injected_core),
+            },
             "drift": drift_explain,
             "pipeline_ms": {
                 "seed": t_seed_ms,

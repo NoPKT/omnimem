@@ -320,6 +320,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         profile_limit=int(getattr(args, "profile_limit", 240)),
         include_core_blocks=bool(getattr(args, "include_core_blocks", False)),
         core_block_limit=int(getattr(args, "core_block_limit", 2)),
+        core_merge_by_topic=bool(getattr(args, "core_merge_by_topic", True)),
         drift_aware=bool(getattr(args, "drift_aware", False)),
         drift_recent_days=int(getattr(args, "drift_recent_days", 14)),
         drift_baseline_days=int(getattr(args, "drift_baseline_days", 120)),
@@ -374,6 +375,7 @@ def cmd_core_set(args: argparse.Namespace) -> int:
         session_id=str(args.session_id or "").strip(),
         layer=str(args.layer or "short"),
         tags=parse_list_csv(getattr(args, "tags", None)),
+        topic=str(getattr(args, "topic", "") or "").strip(),
         priority=int(getattr(args, "priority", 50)),
         ttl_days=int(getattr(args, "ttl_days", 0)),
         expires_at=str(getattr(args, "expires_at", "") or "").strip(),
@@ -2046,6 +2048,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_retrieve.add_argument("--core-block-limit", type=int, default=2, help="max injected core blocks")
     p_retrieve.add_argument(
+        "--core-merge-by-topic",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="merge conflicting core blocks by topic (keep highest priority per topic)",
+    )
+    p_retrieve.add_argument(
         "--drift-aware",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -2081,6 +2089,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_core_set.add_argument("--project-id", default="")
     p_core_set.add_argument("--session-id", default="system")
     p_core_set.add_argument("--layer", choices=sorted(LAYER_SET), default="short")
+    p_core_set.add_argument("--topic", default="", help="optional conflict-merge topic")
     p_core_set.add_argument("--priority", type=int, default=50, help="core block priority (0..100)")
     p_core_set.add_argument("--ttl-days", type=int, default=0, help="expiry in days from now (0 means no expiry)")
     p_core_set.add_argument("--expires-at", default="", help="absolute ISO-8601 expiry time (overrides ttl-days)")

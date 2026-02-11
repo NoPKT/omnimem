@@ -5754,6 +5754,7 @@ def run_webui(
                 profile_weight = _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
                 include_core_blocks = _parse_bool_param(q.get("include_core_blocks", ["1"])[0], default=True)
                 core_block_limit = _parse_int_param(q.get("core_block_limit", ["2"])[0], default=2, lo=0, hi=6)
+                core_merge_by_topic = _parse_bool_param(q.get("core_merge_by_topic", ["1"])[0], default=True)
                 drift_aware = _parse_bool_param(q.get("drift_aware", ["1"])[0], default=True)
                 drift_recent_days = _parse_int_param(q.get("drift_recent_days", ["14"])[0], default=14, lo=1, hi=60)
                 drift_baseline_days = _parse_int_param(q.get("drift_baseline_days", ["120"])[0], default=120, lo=2, hi=720)
@@ -5779,6 +5780,7 @@ def run_webui(
                         float(profile_weight),
                         bool(include_core_blocks),
                         int(core_block_limit),
+                        bool(core_merge_by_topic),
                         bool(drift_aware),
                         int(drift_recent_days),
                         int(drift_baseline_days),
@@ -5809,6 +5811,7 @@ def run_webui(
                             profile_weight=float(profile_weight),
                             include_core_blocks=bool(include_core_blocks),
                             core_block_limit=int(core_block_limit),
+                            core_merge_by_topic=bool(core_merge_by_topic),
                             drift_aware=bool(drift_aware),
                             drift_recent_days=int(drift_recent_days),
                             drift_baseline_days=int(drift_baseline_days),
@@ -7704,6 +7707,7 @@ def run_webui(
                     project_id = str(data.get("project_id", "") or "").strip()
                     session_id = str(data.get("session_id", "system") or "").strip()
                     layer = str(data.get("layer", "short") or "short").strip().lower()
+                    topic = str(data.get("topic", "") or "").strip()
                     priority = _parse_int_param(data.get("priority", 50), default=50, lo=0, hi=100)
                     ttl_days = _parse_int_param(data.get("ttl_days", 0), default=0, lo=0, hi=3650)
                     expires_at = str(data.get("expires_at", "") or "").strip()
@@ -7721,6 +7725,7 @@ def run_webui(
                         session_id=session_id,
                         layer=layer,
                         tags=tags,
+                        topic=topic,
                         priority=priority,
                         ttl_days=ttl_days,
                         expires_at=expires_at,

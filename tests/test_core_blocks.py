@@ -176,6 +176,70 @@ class CoreBlocksTest(unittest.TestCase):
         names1 = [str(x.get("name") or "") for x in (out1.get("items") or [])]
         self.assertIn("b", names1)
 
+    def test_retrieve_core_conflict_merge_by_topic(self) -> None:
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="style-a",
+            topic="style",
+            content="Use short bullets.",
+            project_id="OM",
+            session_id="s1",
+            priority=60,
+        )
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="style-b",
+            topic="style",
+            content="Use numbered lists with technical detail.",
+            project_id="OM",
+            session_id="s1",
+            priority=90,
+        )
+        out_merge = retrieve_thread(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            query="anything",
+            project_id="OM",
+            session_id="s1",
+            max_items=6,
+            include_core_blocks=True,
+            core_block_limit=6,
+            core_merge_by_topic=True,
+        )
+        self.assertTrue(out_merge.get("ok"))
+        items_m = list(out_merge.get("items") or [])
+        style_hits = [
+            it
+            for it in items_m
+            if any(str(w) == "core-topic:style" for w in (it.get("why_recalled") or []))
+        ]
+        self.assertEqual(len(style_hits), 1)
+        self.assertTrue(
+            any(str(w) == "core-block:style-b" for w in (style_hits[0].get("why_recalled") or []))
+        )
+
+        out_no_merge = retrieve_thread(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            query="anything",
+            project_id="OM",
+            session_id="s1",
+            max_items=6,
+            include_core_blocks=True,
+            core_block_limit=6,
+            core_merge_by_topic=False,
+        )
+        self.assertTrue(out_no_merge.get("ok"))
+        items_nm = list(out_no_merge.get("items") or [])
+        style_hits_nm = [
+            it
+            for it in items_nm
+            if any(str(w) == "core-topic:style" for w in (it.get("why_recalled") or []))
+        ]
+        self.assertGreaterEqual(len(style_hits_nm), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
