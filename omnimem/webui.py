@@ -2156,7 +2156,10 @@ HTML_PAGE = """<!doctype html>
 	          const rm = ex.ranking_mode || ranking_mode;
             const dv = (ex.diversify === false) ? 'off' : 'on';
             const lbd = Number(ex.mmr_lambda || 0.72).toFixed(2);
-	          rh.textContent = `smart: ranking=${rm}, route=${d.route || route_mode}, seeds=${seedsN}, path_hits=${pathsN}, mmr=${dv}(λ=${lbd})`;
+            const sc = ex.self_check || {};
+            const cov = Number(sc.coverage || 0).toFixed(2);
+            const conf = Number(sc.confidence || 0).toFixed(2);
+	          rh.textContent = `smart: ranking=${rm}, route=${d.route || route_mode}, seeds=${seedsN}, path_hits=${pathsN}, mmr=${dv}(λ=${lbd}), selfcheck(cov=${cov}, conf=${conf})`;
 	        } else if (mode !== 'smart') {
 	          rh.textContent = `basic: route=${d.route || route_mode}`;
 	        }
@@ -5652,6 +5655,9 @@ def run_webui(
                             diversify=bool(diversify),
                             mmr_lambda=float(mmr_lambda),
                             max_items=limit_i,
+                            self_check=True,
+                            adaptive_feedback=True,
+                            feedback_reuse_step=1,
                         )
                         with smart_retrieve_lock:
                             smart_retrieve_cache[cache_key] = (time.time(), out)

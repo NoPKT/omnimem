@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.20
+
+- Retrieval frontier: `retrieve_thread` now exposes deterministic self-check (`coverage`, `missing_tokens`, `confidence`) and end-to-end pipeline timing metrics (`seed/graph/materialize/total`), with optional adaptive feedback to increment reuse on retrieved memories.
+- New memory operations: add `omnimem raptor` (RAPTOR-style hierarchical digest builder) and `omnimem enhance` (heuristic summary enhancement) with preview-by-default and `--apply` write mode.
+- WebUI smart retrieval: enable self-check + adaptive feedback in advanced retrieval path and surface self-check coverage/confidence in the retrieval hint for faster quality inspection.
+- Evaluation tooling: add `scripts/eval_locomo_style.py` plus sample dataset `eval/locomo_style.sample.jsonl` for offline long-conversation retrieval scoring.
+- Tests: add frontier regression coverage for self-check/timing metrics, adaptive feedback behavior, CLI parser wiring, and digest/enhance preview flow.
+- Versioning: align Python runtime version and npm package version to `0.2.20`.
+
 ## 0.2.19
 
 - Release guard: add `omnimem preflight` and block clean-worktree releases by default; update publish docs and README pre-check flow.

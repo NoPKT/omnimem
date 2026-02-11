@@ -30,10 +30,12 @@ from .core import (
     KIND_SET,
     LAYER_SET,
     apply_decay,
+    build_raptor_digest,
     build_brief,
     compress_session_context,
     consolidate_memories,
     distill_session_memory,
+    enhance_memory_summaries,
     find_memories,
     retrieve_thread,
     load_config,
@@ -385,6 +387,43 @@ def cmd_distill(args: argparse.Namespace) -> int:
         dry_run=not bool(args.apply),
         semantic_layer=str(args.semantic_layer or "long").strip(),
         procedural_layer=str(args.procedural_layer or "short").strip(),
+        tool="cli",
+        actor_session_id=str(args.actor_session_id or "system"),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_raptor(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = build_raptor_digest(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        days=int(args.days),
+        limit=int(args.limit),
+        target_layer=str(args.layer or "long").strip(),
+        dry_run=not bool(args.apply),
+        tool="cli",
+        actor_session_id=str(args.actor_session_id or "system"),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_enhance(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = enhance_memory_summaries(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        limit=int(args.limit),
+        min_short_len=int(args.min_short_len),
+        dry_run=not bool(args.apply),
         tool="cli",
         actor_session_id=str(args.actor_session_id or "system"),
     )
@@ -1886,6 +1925,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_distill.add_argument("--apply", action="store_true", help="write distilled memories (default preview)")
     p_distill.add_argument("--actor-session-id", default="session-local")
     p_distill.set_defaults(func=cmd_distill)
+
+    p_raptor = sub.add_parser("raptor", help="build hierarchical digest (RAPTOR-style)")
+    p_raptor.add_argument("--config", help="path to omnimem config json")
+    p_raptor.add_argument("--project-id", default="", help="optional project filter")
+    p_raptor.add_argument("--session-id", default="", help="optional session filter")
+    p_raptor.add_argument("--days", type=int, default=30)
+    p_raptor.add_argument("--limit", type=int, default=180)
+    p_raptor.add_argument("--layer", choices=sorted(LAYER_SET), default="long")
+    p_raptor.add_argument("--apply", action="store_true", help="write digest memory (default preview)")
+    p_raptor.add_argument("--actor-session-id", default="system")
+    p_raptor.set_defaults(func=cmd_raptor)
+
+    p_enhance = sub.add_parser("enhance", help="heuristically enhance weak memory summaries")
+    p_enhance.add_argument("--config", help="path to omnimem config json")
+    p_enhance.add_argument("--project-id", default="", help="optional project filter")
+    p_enhance.add_argument("--session-id", default="", help="optional session filter")
+    p_enhance.add_argument("--limit", type=int, default=80)
+    p_enhance.add_argument("--min-short-len", type=int, default=24)
+    p_enhance.add_argument("--apply", action="store_true", help="apply summary updates (default preview)")
+    p_enhance.add_argument("--actor-session-id", default="system")
+    p_enhance.set_defaults(func=cmd_enhance)
 
     p_webui = sub.add_parser("webui", help="start local web ui")
     p_webui.add_argument("--config", help="path to omnimem config json")

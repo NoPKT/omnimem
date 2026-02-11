@@ -120,6 +120,19 @@ Run one-shot diagnostics (webui/daemon/sync + suggested commands):
 omnimem doctor
 ```
 
+Frontier memory ops (preview by default):
+
+```bash
+omnimem raptor --project-id OM
+omnimem enhance --project-id OM
+```
+
+Offline LoCoMo-style retrieval eval:
+
+```bash
+python3 scripts/eval_locomo_style.py --dataset eval/locomo_style.sample.jsonl
+```
+
 Single turn:
 
 ```bash

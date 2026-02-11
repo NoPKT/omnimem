@@ -1963,6 +1963,213 @@ def distill_session_memory(
     }
 
 
+def _strip_markdown_title(body_text: str) -> str:
+    s = str(body_text or "").strip()
+    if not s:
+        return ""
+    lines = s.splitlines()
+    if lines and lines[0].lstrip().startswith("#"):
+        lines = lines[1:]
+        while lines and not lines[0].strip():
+            lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _propose_summary_from_body(summary: str, body_text: str) -> str:
+    cur = re.sub(r"\s+", " ", str(summary or "").strip())
+    if len(cur) >= 24:
+        return cur
+    body = _strip_markdown_title(body_text)
+    if not body:
+        return cur
+    lines = [re.sub(r"\s+", " ", x).strip() for x in body.splitlines() if str(x).strip()]
+    for ln in lines[:8]:
+        if len(ln) >= 16:
+            return ln[:96]
+    return cur
+
+
+def enhance_memory_summaries(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    limit: int = 80,
+    min_short_len: int = 24,
+    dry_run: bool = True,
+    tool: str = "cli",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Heuristic summary enhancement (MemInsight-style, deterministic/no model call)."""
+    ensure_storage(paths, schema_sql_path)
+    limit = max(1, min(300, int(limit)))
+    min_short_len = max(6, min(120, int(min_short_len)))
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, kind, summary, body_text, tags_json
+            FROM memories
+            WHERE kind IN ('note','decision','task','summary')
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, session_id, session_id, limit),
+        ).fetchall()
+
+    candidates: list[dict[str, Any]] = []
+    for r in rows:
+        old = re.sub(r"\s+", " ", str(r["summary"] or "").strip())
+        if len(old) >= min_short_len:
+            continue
+        new = _propose_summary_from_body(old, str(r["body_text"] or ""))
+        if not new or new == old:
+            continue
+        tags = []
+        try:
+            tags = [str(t).strip() for t in (json.loads(r["tags_json"] or "[]") or []) if str(t).strip()]
+        except Exception:
+            tags = []
+        candidates.append({"id": str(r["id"]), "old_summary": old, "new_summary": new, "tags": tags, "body_text": str(r["body_text"] or "")})
+
+    applied = 0
+    errors: list[str] = []
+    if not dry_run:
+        for c in candidates:
+            try:
+                update_memory_content(
+                    paths=paths,
+                    schema_sql_path=schema_sql_path,
+                    memory_id=str(c["id"]),
+                    summary=str(c["new_summary"]),
+                    body=_strip_markdown_title(str(c["body_text"])),
+                    tags=list(c.get("tags") or []),
+                    tool=tool,
+                    session_id=actor_session_id,
+                    event_type="memory.update",
+                )
+                applied += 1
+            except Exception as exc:
+                errors.append(f"{c['id']}: {exc}")
+    return {
+        "ok": len(errors) == 0,
+        "dry_run": bool(dry_run),
+        "project_id": project_id,
+        "session_id": session_id,
+        "limit": limit,
+        "candidates": [{"id": c["id"], "old_summary": c["old_summary"], "new_summary": c["new_summary"]} for c in candidates],
+        "applied": int(applied),
+        "errors": errors,
+    }
+
+
+def build_raptor_digest(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    days: int = 30,
+    limit: int = 180,
+    target_layer: str = "long",
+    dry_run: bool = True,
+    tool: str = "cli",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Build a lightweight hierarchical digest (RAPTOR-style: leaf summaries -> root summary)."""
+    ensure_storage(paths, schema_sql_path)
+    days = max(1, min(365, int(days)))
+    limit = max(20, min(600, int(limit)))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, kind, summary, updated_at
+            FROM memories
+            WHERE kind IN ('note','decision','task','checkpoint','summary')
+              AND kind NOT IN ('retrieve')
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, session_id, session_id, limit),
+        ).fetchall()
+
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        dt = _parse_iso_dt(str(r["updated_at"] or ""))
+        if dt < cutoff:
+            continue
+        day = dt.date().isoformat()
+        by_day.setdefault(day, []).append(
+            {"id": str(r["id"]), "kind": str(r["kind"]), "summary": str(r["summary"] or "").strip(), "updated_at": str(r["updated_at"] or "")}
+        )
+    if not by_day:
+        return {"ok": True, "dry_run": bool(dry_run), "digest_built": False, "reason": "no recent memories in range"}
+
+    days_sorted = sorted(by_day.keys(), reverse=True)
+    leaf_blocks: list[str] = []
+    source_ids: list[str] = []
+    for day in days_sorted:
+        items = by_day[day][:8]
+        source_ids.extend([str(x["id"]) for x in items])
+        line = "; ".join([f"[{x['kind']}] {x['summary'][:80]}" for x in items if x.get("summary")])
+        leaf_blocks.append(f"- {day}: {line}")
+
+    root_summary = f"RAPTOR digest: {project_id or 'global'} ({days_sorted[-1]}..{days_sorted[0]})"
+    body = "## Hierarchical Digest (RAPTOR-style)\n\n"
+    body += "- Level-0 (leaf): recent memories grouped by day.\n"
+    body += "- Level-1 (root): this compact cross-day digest for retrieval routing.\n\n"
+    body += "### Level-0\n"
+    body += "\n".join(leaf_blocks[:24]) + "\n"
+    body += "\n### Level-1\n"
+    body += f"- days={len(days_sorted)} items={len(source_ids)} session_id={session_id or '(all)'} project_id={project_id or '(all)'}\n"
+
+    out = {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "digest_built": True,
+        "summary": root_summary,
+        "days": len(days_sorted),
+        "source_items": len(source_ids),
+    }
+    if dry_run:
+        out["preview"] = {"summary": root_summary, "body": body[:2000]}
+        return out
+
+    refs = [{"type": "memory", "target": mid, "note": "raptor-source"} for mid in source_ids[:120]]
+    wr = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        layer=str(target_layer or "long"),
+        kind="summary",
+        summary=root_summary,
+        body=body,
+        tags=["auto:raptor", "mem:semantic", *(["project:" + project_id] if project_id else [])],
+        refs=refs,
+        cred_refs=[],
+        tool=tool,
+        account="default",
+        device="local",
+        session_id=actor_session_id,
+        project_id=project_id or "global",
+        workspace=str(paths.root),
+        importance=0.82,
+        confidence=0.72,
+        stability=0.80,
+        reuse_count=0,
+        volatility=0.22,
+        event_type="memory.write",
+    )
+    out["memory_id"] = str((wr.get("memory") or {}).get("id") or "")
+    return out
+
+
 def insert_event(conn: sqlite3.Connection, evt: dict[str, Any]) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO memory_events(event_id, event_type, event_time, memory_id, payload_json) VALUES (?, ?, ?, ?, ?)",
@@ -2824,6 +3031,7 @@ def find_memories_ex(
     project_id: str = "",
     session_id: str = "",
 ) -> dict[str, Any]:
+    t0 = time.perf_counter()
     ensure_storage(paths, schema_sql_path)
     query = str(query or "").strip()
     limit = max(1, min(200, int(limit)))
@@ -2864,7 +3072,18 @@ def find_memories_ex(
                     (project_id, project_id, session_id, session_id, limit),
                 ).fetchall()
             items = [_signals_from_row(dict(r)) for r in rows]
-            return {"ok": True, "strategy": "recent", "query_used": "", "tried": tried, "items": items}
+            return {
+                "ok": True,
+                "strategy": "recent",
+                "query_used": "",
+                "tried": tried,
+                "items": items,
+                "metrics": {
+                    "pipeline_ms": {
+                        "total": int((time.perf_counter() - t0) * 1000),
+                    }
+                },
+            }
 
         tokens = _query_tokens(query)
         normalized = _normalize_fts_query(query)
@@ -2889,7 +3108,18 @@ def find_memories_ex(
             if rows:
                 items = [_signals_from_row(dict(r)) for r in rows]
                 reranked = _attach_cognitive_retrieval(items, strategy=strat, query_tokens=tokens)
-                return {"ok": True, "strategy": strat, "query_used": qq, "tried": tried, "items": reranked}
+                return {
+                    "ok": True,
+                    "strategy": strat,
+                    "query_used": qq,
+                    "tried": tried,
+                    "items": reranked,
+                    "metrics": {
+                        "pipeline_ms": {
+                            "total": int((time.perf_counter() - t0) * 1000),
+                        }
+                    },
+                }
 
         # Resilient fallback.
         ltoks = tokens or _query_tokens(normalized)
@@ -2897,7 +3127,18 @@ def find_memories_ex(
         rows2 = _like_rows(conn, tokens=ltoks, layer=layer, limit=limit, project_id=project_id, session_id=session_id)
         items2 = [_signals_from_row(dict(r)) for r in rows2]
         reranked2 = _attach_cognitive_retrieval(items2, strategy="like_fallback", query_tokens=ltoks)
-        return {"ok": True, "strategy": "like_fallback", "query_used": " OR ".join(ltoks), "tried": tried, "items": reranked2}
+        return {
+            "ok": True,
+            "strategy": "like_fallback",
+            "query_used": " OR ".join(ltoks),
+            "tried": tried,
+            "items": reranked2,
+            "metrics": {
+                "pipeline_ms": {
+                    "total": int((time.perf_counter() - t0) * 1000),
+                }
+            },
+        }
 
 
 def _mem_text_tokens(text: str) -> set[str]:
@@ -2976,6 +3217,40 @@ def _mmr_diversify(
                 best_i = i
         picked.append(remain.pop(best_i))
     return [z["item"] for z in picked]
+
+
+def _summary_tokens_for_self_check(items: list[dict[str, Any]], *, top_n: int = 5) -> set[str]:
+    blob = " ".join([str((x or {}).get("summary", "") or "") for x in (items or [])[: max(1, int(top_n))]])
+    return _mem_text_tokens(blob)
+
+
+def _self_rag_check(query: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    toks = [t.lower() for t in _query_tokens(query, max_tokens=16) if str(t).strip()]
+    if not toks:
+        return {"enabled": True, "coverage": 1.0, "missing_tokens": [], "confidence": 0.0, "recommendation": "query is empty"}
+    qset = set(toks)
+    sset = _summary_tokens_for_self_check(items, top_n=6)
+    hit = sorted([t for t in qset if t in sset])
+    miss = sorted([t for t in qset if t not in sset])
+    coverage = (len(hit) / max(1, len(qset)))
+    avg_score = 0.0
+    if items:
+        vals = [float((x.get("score") if x.get("score") is not None else ((x.get("retrieval") or {}).get("score", 0.0)) or 0.0)) for x in items[:5]]
+        avg_score = (sum(vals) / max(1, len(vals)))
+    confidence = max(0.0, min(1.0, (0.55 * coverage) + (0.45 * avg_score)))
+    if coverage < 0.45:
+        reco = "low lexical coverage; rewrite query with concrete entities and add route/mode constraints"
+    elif confidence < 0.55:
+        reco = "medium confidence; increase depth/per_hop or switch ranking_mode to hybrid/ppr"
+    else:
+        reco = "coverage/confidence acceptable"
+    return {
+        "enabled": True,
+        "coverage": round(float(coverage), 4),
+        "missing_tokens": miss[:10],
+        "confidence": round(float(confidence), 4),
+        "recommendation": reco,
+    }
 
 
 def weave_links(
@@ -3155,12 +3430,16 @@ def retrieve_thread(
     diversify: bool = True,
     mmr_lambda: float = 0.72,
     max_items: int = 12,
+    self_check: bool = True,
+    adaptive_feedback: bool = False,
+    feedback_reuse_step: int = 1,
 ) -> dict[str, Any]:
     """Progressive, graph-aware retrieval.
 
     1) Seed from shallow layers (instant/short) with fuzzy matching.
     2) Expand outward along memory_links (both directions), preferring deeper layers.
     """
+    t0 = time.perf_counter()
     ensure_storage(paths, schema_sql_path)
     seed_limit = max(1, min(30, int(seed_limit)))
     depth = max(0, min(4, int(depth)))
@@ -3204,6 +3483,7 @@ def retrieve_thread(
             except Exception:
                 pass
 
+    t_seed0 = time.perf_counter()
     seeds: list[dict[str, Any]] = []
     for l in ["instant", "short", "long", "archive"]:
         if len(seeds) >= seed_limit:
@@ -3224,6 +3504,7 @@ def retrieve_thread(
                 it2 = dict(it)
                 it2["_seed_layer"] = l
                 seeds.append(it2)
+    t_seed_ms = int((time.perf_counter() - t_seed0) * 1000)
 
     layer_bonus = {"instant": 0.95, "short": 1.0, "long": 1.12, "archive": 1.08}
 
@@ -3242,6 +3523,7 @@ def retrieve_thread(
         paths_explain[mid] = [{"hop": 0, "via": "seed", "id": mid}]
         frontier.append(mid)
 
+    t_graph0 = time.perf_counter()
     with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 6000")
@@ -3348,13 +3630,34 @@ def retrieve_thread(
                     scored[mid] = ppr
                 elif ranking_mode == "hybrid":
                     scored[mid] = (0.62 * base) + (0.38 * ppr)
+        t_graph_ms = int((time.perf_counter() - t_graph0) * 1000)
 
         # Materialize items.
+        t_mat0 = time.perf_counter()
         final_limit = max(1, int(max_items))
         pool_limit = max(final_limit * 3, seed_limit * 2, 18)
         ids = sorted(scored.keys(), key=lambda k: scored[k], reverse=True)[:pool_limit]
         if not ids:
-            return {"ok": True, "query": query, "items": [], "explain": {"seeds": seeds, "paths": {}}}
+            total_ms = int((time.perf_counter() - t0) * 1000)
+            return {
+                "ok": True,
+                "query": query,
+                "items": [],
+                "explain": {
+                    "ranking_mode": ranking_mode,
+                    "seeds": seeds,
+                    "paths": {},
+                    "why_recalled": {},
+                    "self_check": _self_rag_check(query, []) if self_check else {"enabled": False},
+                    "adaptive_feedback": {"enabled": bool(adaptive_feedback), "updated": 0},
+                    "pipeline_ms": {
+                        "seed": t_seed_ms,
+                        "graph": t_graph_ms,
+                        "materialize": int((time.perf_counter() - t_mat0) * 1000),
+                        "total": total_ms,
+                    },
+                },
+            }
         placeholders = ",".join(["?"] * len(ids))
         rows2 = conn.execute(
             f"""
@@ -3409,6 +3712,28 @@ def retrieve_thread(
             out_items = out_items[:final_limit]
         out_ids_set = {str(x.get("id") or "") for x in out_items if str(x.get("id") or "")}
         why_map = {str(x.get("id") or ""): list(x.get("why_recalled") or []) for x in out_items if str(x.get("id") or "")}
+        t_mat_ms = int((time.perf_counter() - t_mat0) * 1000)
+
+    feedback = {"enabled": bool(adaptive_feedback), "updated": 0}
+    if adaptive_feedback and out_items:
+        top_ids = [str(x.get("id") or "") for x in out_items[: min(6, len(out_items))] if str(x.get("id") or "")]
+        if top_ids:
+            try:
+                bump_reuse_counts(
+                    paths=paths,
+                    schema_sql_path=schema_sql_path,
+                    ids=top_ids,
+                    delta=max(1, int(feedback_reuse_step)),
+                    tool="retrieve",
+                    session_id=session_id or "system",
+                    project_id=project_id or "",
+                )
+                feedback["updated"] = len(top_ids)
+            except Exception:
+                feedback["updated"] = 0
+
+    self_eval = _self_rag_check(query, out_items) if self_check else {"enabled": False}
+    total_ms = int((time.perf_counter() - t0) * 1000)
 
     return {
         "ok": True,
@@ -3423,6 +3748,14 @@ def retrieve_thread(
             "seeds": seeds,
             "paths": {k: v for k, v in paths_explain.items() if k in out_ids_set},
             "why_recalled": why_map,
+            "self_check": self_eval,
+            "adaptive_feedback": feedback,
+            "pipeline_ms": {
+                "seed": t_seed_ms,
+                "graph": t_graph_ms,
+                "materialize": t_mat_ms,
+                "total": total_ms,
+            },
         },
     }
 
