@@ -21,6 +21,7 @@ from . import __version__ as OMNIMEM_VERSION
 from .core import (
     LAYER_SET,
     apply_decay,
+    apply_memory_feedback,
     build_user_profile,
     compress_hot_sessions,
     compress_session_context,
@@ -7566,6 +7567,37 @@ def run_webui(
                         summary=summary,
                         body=body,
                         tags=tags,
+                        tool="webui",
+                        account="default",
+                        device="local",
+                        session_id="webui-session",
+                    )
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/memory/feedback":
+                try:
+                    mem_id = str(data.get("id", "")).strip()
+                    fb = str(data.get("feedback", "")).strip().lower()
+                    note = str(data.get("note", "") or "")
+                    correction = str(data.get("correction", "") or "")
+                    delta = _parse_int_param(data.get("delta", 1), default=1, lo=1, hi=10)
+                    if not mem_id:
+                        self._send_json({"ok": False, "error": "id is required"}, 400)
+                        return
+                    if fb not in {"positive", "negative", "forget", "correct"}:
+                        self._send_json({"ok": False, "error": "feedback must be positive|negative|forget|correct"}, 400)
+                        return
+                    out = apply_memory_feedback(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        memory_id=mem_id,
+                        feedback=fb,
+                        note=note,
+                        correction=correction,
+                        delta=delta,
                         tool="webui",
                         account="default",
                         device="local",

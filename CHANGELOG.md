@@ -4,6 +4,7 @@
 
 - Profile modeling: add deterministic user profile builder (`omnimem profile`) and WebUI API endpoint (`GET /api/profile`) to summarize preferences/goals/focus tags from memory traces.
 - Ingestion: add `omnimem ingest` for URL/file/text sources with safe URL query redaction and structured source refs, improving external knowledge onboarding workflow.
+- Feedback loop: add explicit memory feedback operation (`omnimem feedback` / `POST /api/memory/feedback`) supporting positive/negative/forget/correct signals with deterministic score updates.
 
 ## 0.2.21 - 2026-02-11
 

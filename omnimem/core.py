@@ -39,6 +39,7 @@ EVENT_SET = {
     "memory.retrieve",
     "memory.reuse",
     "memory.decay",
+    "memory.feedback",
 }
 
 
@@ -2751,6 +2752,194 @@ def update_memory_content(
             conn.commit()
 
         return {"ok": True, "memory_id": memory_id, "updated_at": when_iso, "body_md_path": rel}
+
+
+def apply_memory_feedback(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    memory_id: str,
+    feedback: str,
+    note: str = "",
+    correction: str = "",
+    delta: int = 1,
+    tool: str = "cli",
+    account: str = "default",
+    device: str = "local",
+    session_id: str = "session-local",
+) -> dict[str, Any]:
+    """Apply explicit user feedback to a memory (reinforce/deprioritize/correct)."""
+    fb = str(feedback or "").strip().lower()
+    if fb not in {"positive", "negative", "forget", "correct"}:
+        raise ValueError("feedback must be one of: positive|negative|forget|correct")
+    delta = max(1, min(10, int(delta)))
+
+    with repo_lock(paths.root, timeout_s=30.0):
+        ensure_storage(paths, schema_sql_path)
+        when_dt = datetime.now(timezone.utc)
+        when_iso = when_dt.replace(microsecond=0).isoformat()
+
+        with _sqlite_connect(paths.sqlite_path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            row = conn.execute(
+                """
+                SELECT id, schema_version, created_at, updated_at, layer, kind, summary, body_md_path, body_text,
+                       tags_json, importance_score, confidence_score, stability_score, reuse_count, volatility_score,
+                       cred_refs_json, source_json, scope_json, integrity_json
+                FROM memories
+                WHERE id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"memory not found: {memory_id}")
+
+            summary = str(row["summary"] or "").strip()
+            body_md = str(row["body_text"] or "")
+            m = re.match(r"^# .*\n\n([\s\S]*)$", body_md)
+            body_plain = (m.group(1) if m else body_md).strip()
+            tags = []
+            try:
+                tags = [str(x).strip() for x in (json.loads(row["tags_json"] or "[]") or []) if str(x).strip()]
+            except Exception:
+                tags = []
+
+            imp = float(row["importance_score"] or 0.0)
+            conf = float(row["confidence_score"] or 0.0)
+            stab = float(row["stability_score"] or 0.0)
+            reuse = int(row["reuse_count"] or 0)
+            vol = float(row["volatility_score"] or 0.0)
+
+            if fb == "positive":
+                reuse = reuse + delta
+                conf = min(1.0, conf + (0.02 * delta))
+                stab = min(1.0, stab + (0.03 * delta))
+                vol = max(0.0, vol - (0.03 * delta))
+                tags = list(dict.fromkeys([*tags, "feedback:positive"]))
+            elif fb == "negative":
+                reuse = max(0, reuse - delta)
+                conf = max(0.0, conf - (0.05 * delta))
+                stab = max(0.0, stab - (0.04 * delta))
+                vol = min(1.0, vol + (0.05 * delta))
+                tags = list(dict.fromkeys([*tags, "feedback:negative"]))
+            elif fb == "forget":
+                reuse = max(0, reuse - (2 * delta))
+                conf = max(0.0, conf - (0.10 * delta))
+                stab = max(0.0, stab - (0.10 * delta))
+                vol = min(1.0, vol + (0.12 * delta))
+                tags = list(dict.fromkeys([*tags, "feedback:forget"]))
+            else:
+                conf = min(1.0, conf + 0.01)
+                stab = min(1.0, stab + 0.01)
+                tags = list(dict.fromkeys([*tags, "feedback:correct"]))
+                corr = re.sub(r"\s+", " ", str(correction or "").strip())
+                if corr:
+                    body_plain = (
+                        body_plain
+                        + "\n\n## Feedback Correction\n"
+                        + f"- at: {when_iso}\n"
+                        + f"- note: {corr}\n"
+                    ).strip()
+
+            body_new_md = f"# {summary}\n\n{body_plain}\n"
+            rel = str(row["body_md_path"])
+            md_path = paths.markdown_root / rel
+            if md_path.exists():
+                md_path.write_text(body_new_md, encoding="utf-8")
+
+            integrity = json.loads(row["integrity_json"] or "{}")
+            integrity["content_sha256"] = sha256_text(body_new_md)
+            integrity["last_feedback_at"] = when_iso
+            integrity["last_feedback"] = fb
+
+            conn.execute(
+                """
+                UPDATE memories
+                SET updated_at = ?,
+                    body_text = ?,
+                    tags_json = ?,
+                    confidence_score = ?,
+                    stability_score = ?,
+                    reuse_count = ?,
+                    volatility_score = ?,
+                    integrity_json = ?
+                WHERE id = ?
+                """,
+                (
+                    when_iso,
+                    body_new_md,
+                    json.dumps(tags, ensure_ascii=False),
+                    conf,
+                    stab,
+                    reuse,
+                    vol,
+                    json.dumps(integrity, ensure_ascii=False),
+                    memory_id,
+                ),
+            )
+
+            refs = conn.execute(
+                "SELECT ref_type, target, note FROM memory_refs WHERE memory_id = ? ORDER BY id",
+                (memory_id,),
+            ).fetchall()
+            cred_refs = json.loads(row["cred_refs_json"] or "[]")
+            scope = json.loads(row["scope_json"] or "{}")
+            source = json.loads(row["source_json"] or "{}")
+            env = {
+                "id": memory_id,
+                "schema_version": str(row["schema_version"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": when_iso,
+                "layer": str(row["layer"]),
+                "kind": str(row["kind"]),
+                "summary": summary,
+                "body_md_path": rel,
+                "tags": tags,
+                "refs": [{"type": r["ref_type"], "target": r["target"], "note": r["note"]} for r in refs],
+                "signals": {
+                    "importance_score": imp,
+                    "confidence_score": conf,
+                    "stability_score": stab,
+                    "reuse_count": reuse,
+                    "volatility_score": vol,
+                },
+                "cred_refs": cred_refs,
+                "source": source,
+                "scope": scope,
+                "integrity": integrity,
+            }
+            evt = {
+                "event_id": make_id(),
+                "event_type": "memory.feedback",
+                "event_time": when_iso,
+                "memory_id": memory_id,
+                "payload": {
+                    "feedback": fb,
+                    "delta": delta,
+                    "note": str(note or "").strip(),
+                    "correction": str(correction or "").strip(),
+                    "actor": {"tool": tool, "account": account, "device": device, "session_id": session_id},
+                    "envelope": env,
+                },
+            }
+            append_jsonl(event_file_path(paths, when_dt), evt)
+            insert_event(conn, evt)
+            conn.commit()
+
+    return {
+        "ok": True,
+        "memory_id": memory_id,
+        "feedback": fb,
+        "delta": delta,
+        "updated_at": when_iso,
+        "signals": {
+            "confidence_score": conf,
+            "stability_score": stab,
+            "reuse_count": reuse,
+            "volatility_score": vol,
+        },
+    }
 
 
 def find_memories(

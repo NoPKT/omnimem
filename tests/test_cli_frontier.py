@@ -26,6 +26,11 @@ class CLIFrontierCommandTest(unittest.TestCase):
         args = p.parse_args(["ingest", "--type", "text", "--text", "hello"])
         self.assertEqual(args.cmd, "ingest")
 
+    def test_feedback_command_registered(self) -> None:
+        p = build_parser()
+        args = p.parse_args(["feedback", "--id", "m1", "--feedback", "positive"])
+        self.assertEqual(args.cmd, "feedback")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,6 +39,7 @@ from .core import (
     enhance_memory_summaries,
     find_memories,
     ingest_source,
+    apply_memory_feedback,
     retrieve_thread,
     load_config,
     load_config_with_path,
@@ -323,6 +324,26 @@ def cmd_profile(args: argparse.Namespace) -> int:
         project_id=str(args.project_id or "").strip(),
         session_id=str(args.session_id or "").strip(),
         limit=int(args.limit),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_feedback(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = apply_memory_feedback(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        memory_id=str(args.id or "").strip(),
+        feedback=str(args.feedback or "").strip().lower(),
+        note=str(args.note or ""),
+        correction=str(args.correction or ""),
+        delta=int(args.delta),
+        tool="cli",
+        account="default",
+        device="local",
+        session_id=str(args.session_id or "session-local"),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -1930,6 +1951,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_profile.add_argument("--session-id", default="", help="optional session filter")
     p_profile.add_argument("--limit", type=int, default=240)
     p_profile.set_defaults(func=cmd_profile)
+
+    p_feedback = sub.add_parser("feedback", help="apply explicit feedback to one memory")
+    p_feedback.add_argument("--config", help="path to omnimem config json")
+    p_feedback.add_argument("--id", required=True, help="memory id")
+    p_feedback.add_argument("--feedback", required=True, choices=["positive", "negative", "forget", "correct"])
+    p_feedback.add_argument("--delta", type=int, default=1)
+    p_feedback.add_argument("--note", default="")
+    p_feedback.add_argument("--correction", default="")
+    p_feedback.add_argument("--session-id", default="session-local")
+    p_feedback.set_defaults(func=cmd_feedback)
 
     p_verify = sub.add_parser("verify", help="consistency verification")
     p_verify.add_argument("--config", help="path to omnimem config json")

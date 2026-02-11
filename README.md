@@ -140,6 +140,7 @@ omnimem enhance --project-id OM
 omnimem profile --project-id OM
 omnimem ingest --type url "https://example.com/doc?token=***"
 omnimem ingest --type file ./docs/notes.md
+omnimem feedback --id <memory_id> --feedback positive --note "high value"
 ```
 
 Offline LoCoMo-style retrieval eval:
