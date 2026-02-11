@@ -3199,6 +3199,143 @@ def _merge_core_block_conflicts(rows: list[dict[str, Any]], *, merge_by_topic: b
     return kept
 
 
+def suggest_core_block_merges(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    limit: int = 120,
+    min_conflicts: int = 2,
+    apply: bool = False,
+    session_actor: str = "system",
+    tool: str = "cli",
+) -> dict[str, Any]:
+    """Suggest or apply merged core blocks for topics with multiple active entries."""
+    ensure_storage(paths, schema_sql_path)
+    limit = max(10, min(500, int(limit)))
+    min_conflicts = max(2, min(12, int(min_conflicts)))
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, layer, kind, summary, updated_at, body_text, tags_json,
+                   COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                   COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id
+            FROM memories
+            WHERE EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = 'core:block')
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, session_id, session_id, limit),
+        ).fetchall()
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        try:
+            tags = [str(t).strip() for t in (json.loads(r["tags_json"] or "[]") or []) if str(t).strip()]
+        except Exception:
+            tags = []
+        topic = _core_block_topic_from_tags(tags)
+        if not topic:
+            continue
+        expires_at = _core_block_expires_from_tags(tags)
+        if _is_core_block_expired(expires_at):
+            continue
+        name = _core_block_name_from_tags(tags) or "core"
+        pr = _core_block_priority_from_tags(tags)
+        body_md = str(r["body_text"] or "")
+        body = body_md
+        m = re.match(r"^\s*#\s+.+?\n\n(.*)$", body_md, flags=re.DOTALL)
+        if m:
+            body = str(m.group(1) or "").strip()
+        grouped.setdefault(topic, []).append(
+            {
+                "id": str(r["id"] or ""),
+                "name": name,
+                "topic": topic,
+                "priority": int(pr),
+                "updated_at": str(r["updated_at"] or ""),
+                "summary": str(r["summary"] or ""),
+                "content": body,
+            }
+        )
+
+    candidates: list[dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
+    for topic, items in grouped.items():
+        if len(items) < min_conflicts:
+            continue
+        items_sorted = sorted(items, key=lambda x: (int(x.get("priority", 0)), str(x.get("updated_at", ""))), reverse=True)
+        winner = dict(items_sorted[0])
+        loser_names = [str(x.get("name") or "") for x in items_sorted[1:]]
+        merged_name = f"{topic}-merged"
+        merged_content_parts = [
+            f"- topic: {topic}",
+            f"- winner: {str(winner.get('name') or '')}",
+            f"- merged_from: {', '.join([str(x.get('name') or '') for x in items_sorted])}",
+            "",
+            "## Merged Guidance",
+            str(winner.get("content") or "").strip(),
+        ]
+        for x in items_sorted[1:]:
+            c = str(x.get("content") or "").strip()
+            if not c:
+                continue
+            merged_content_parts.extend(["", f"### variant: {str(x.get('name') or '')}", c])
+        merged_content = "\n".join(merged_content_parts).strip()
+        out = {
+            "topic": topic,
+            "count": len(items_sorted),
+            "winner": {"id": str(winner.get("id") or ""), "name": str(winner.get("name") or ""), "priority": int(winner.get("priority", 0) or 0)},
+            "losers": loser_names,
+            "suggested_merged_name": merged_name,
+            "suggested_priority": int(winner.get("priority", 0) or 0),
+            "suggested_preview": merged_content[:260],
+        }
+        candidates.append(out)
+
+        if apply:
+            up = upsert_core_block(
+                paths=paths,
+                schema_sql_path=schema_sql_path,
+                name=merged_name,
+                content=merged_content,
+                project_id=project_id or str(winner.get("project_id") or ""),
+                session_id=session_id or session_actor,
+                layer="short",
+                tags=["core:auto-merged"],
+                topic=topic,
+                priority=int(winner.get("priority", 0) or 0),
+                ttl_days=0,
+                expires_at="",
+                tool=tool,
+                account="default",
+                device="local",
+            )
+            applied.append(
+                {
+                    "topic": topic,
+                    "name": merged_name,
+                    "memory_id": str(up.get("memory_id") or ""),
+                    "action": str(up.get("action") or ""),
+                }
+            )
+
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "session_id": session_id,
+        "apply": bool(apply),
+        "candidates": candidates,
+        "applied": applied,
+        "count": len(candidates),
+    }
+
+
 def apply_memory_feedback(
     *,
     paths: MemoryPaths,

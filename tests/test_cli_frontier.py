@@ -54,6 +54,8 @@ class CLIFrontierCommandTest(unittest.TestCase):
         self.assertEqual(a3.cmd, "core-list")
         a4 = p.parse_args(["retrieve", "hello", "--include-core-blocks", "--core-merge-by-topic"])
         self.assertEqual(a4.cmd, "retrieve")
+        a5 = p.parse_args(["core-merge-suggest", "--project-id", "OM", "--min-conflicts", "2"])
+        self.assertEqual(a5.cmd, "core-merge-suggest")
 
 
 if __name__ == "__main__":

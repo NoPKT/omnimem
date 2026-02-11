@@ -54,6 +54,7 @@ from .core import (
     sync_error_hint,
     sync_git,
     upsert_core_block,
+    suggest_core_block_merges,
     verify_storage,
     write_memory,
 )
@@ -411,6 +412,24 @@ def cmd_core_list(args: argparse.Namespace) -> int:
         session_id=str(args.session_id or "").strip(),
         limit=int(getattr(args, "limit", 64)),
         include_expired=bool(getattr(args, "include_expired", False)),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_core_merge_suggest(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = suggest_core_block_merges(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        limit=int(getattr(args, "limit", 120)),
+        min_conflicts=int(getattr(args, "min_conflicts", 2)),
+        apply=bool(getattr(args, "apply", False)),
+        session_actor=str(getattr(args, "session_actor", "system") or "system"),
+        tool="cli",
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -2115,6 +2134,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="include expired core blocks",
     )
     p_core_list.set_defaults(func=cmd_core_list)
+
+    p_core_merge = sub.add_parser("core-merge-suggest", help="suggest/apply merged core blocks for topic conflicts")
+    p_core_merge.add_argument("--config", help="path to omnimem config json")
+    p_core_merge.add_argument("--project-id", default="")
+    p_core_merge.add_argument("--session-id", default="")
+    p_core_merge.add_argument("--session-actor", default="system")
+    p_core_merge.add_argument("--limit", type=int, default=120)
+    p_core_merge.add_argument("--min-conflicts", type=int, default=2)
+    p_core_merge.add_argument("--apply", action="store_true", help="write suggested merged core blocks")
+    p_core_merge.set_defaults(func=cmd_core_merge_suggest)
 
     p_feedback = sub.add_parser("feedback", help="apply explicit feedback to one memory")
     p_feedback.add_argument("--config", help="path to omnimem config json")

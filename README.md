@@ -143,6 +143,8 @@ omnimem core-set --project-id OM --name persona --body "Be concise, explicit, an
 omnimem core-set --project-id OM --name style-a --topic style --body "Use short bullets." --priority 60
 omnimem core-set --project-id OM --name style-b --topic style --body "Use numbered technical lists." --priority 90
 omnimem core-set --project-id OM --name temporary-guardrail --body "Prefer safe default ops." --ttl-days 7
+omnimem core-merge-suggest --project-id OM --min-conflicts 2
+omnimem core-merge-suggest --project-id OM --min-conflicts 2 --apply
 omnimem core-list --project-id OM
 omnimem core-list --project-id OM --include-expired
 omnimem core-get --project-id OM --name persona

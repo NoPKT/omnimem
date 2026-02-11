@@ -4,7 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from omnimem.core import MemoryPaths, get_core_block, list_core_blocks, retrieve_thread, upsert_core_block
+from omnimem.core import (
+    MemoryPaths,
+    get_core_block,
+    list_core_blocks,
+    retrieve_thread,
+    suggest_core_block_merges,
+    upsert_core_block,
+)
 
 
 def _schema_sql_path() -> Path:
@@ -239,6 +246,59 @@ class CoreBlocksTest(unittest.TestCase):
             if any(str(w) == "core-topic:style" for w in (it.get("why_recalled") or []))
         ]
         self.assertGreaterEqual(len(style_hits_nm), 2)
+
+    def test_core_merge_suggest_preview_and_apply(self) -> None:
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="policy-1",
+            topic="policy",
+            content="Prefer concise bullet output.",
+            project_id="OM",
+            session_id="s1",
+            priority=70,
+        )
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="policy-2",
+            topic="policy",
+            content="Always include test and rollback sections.",
+            project_id="OM",
+            session_id="s1",
+            priority=90,
+        )
+
+        p = suggest_core_block_merges(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            apply=False,
+        )
+        self.assertTrue(p.get("ok"))
+        cands = list(p.get("candidates") or [])
+        self.assertGreaterEqual(len(cands), 1)
+        self.assertTrue(any(str(x.get("topic") or "") == "policy" for x in cands))
+
+        a = suggest_core_block_merges(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            apply=True,
+        )
+        self.assertTrue(a.get("ok"))
+        applied = list(a.get("applied") or [])
+        self.assertTrue(any(str(x.get("name") or "") == "policy-merged" for x in applied))
+        got = get_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="policy-merged",
+            project_id="OM",
+            session_id="s1",
+        )
+        self.assertTrue(got.get("ok"))
 
 
 if __name__ == "__main__":
