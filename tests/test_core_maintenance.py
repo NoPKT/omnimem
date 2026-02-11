@@ -9,6 +9,7 @@ from omnimem.core import (
     MemoryPaths,
     compress_session_context,
     consolidate_memories,
+    infer_adaptive_governance_thresholds,
     retrieve_thread,
     weave_links,
     write_memory,
@@ -182,6 +183,30 @@ class CoreMaintenanceTest(unittest.TestCase):
         self.assertTrue(out.get("ok"))
         self.assertEqual(out.get("explain", {}).get("ranking_mode"), "ppr")
         self.assertTrue(len(out.get("items") or []) >= 1)
+
+    def test_adaptive_threshold_inference(self) -> None:
+        for i in range(12):
+            self._write(
+                layer="short" if i % 2 == 0 else "long",
+                summary=f"adaptive sample {i}",
+                session_id="s-adapt",
+                importance=min(1.0, 0.3 + (i * 0.05)),
+                confidence=min(1.0, 0.35 + (i * 0.04)),
+                stability=min(1.0, 0.25 + (i * 0.05)),
+                reuse_count=i % 4,
+                volatility=max(0.0, 0.9 - (i * 0.05)),
+            )
+        out = infer_adaptive_governance_thresholds(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-adapt",
+            days=30,
+        )
+        self.assertTrue(out.get("ok"))
+        th = dict(out.get("thresholds") or {})
+        for k in ["p_imp", "p_conf", "p_stab", "p_vol", "d_vol", "d_stab", "d_reuse"]:
+            self.assertIn(k, th)
 
 
 if __name__ == "__main__":

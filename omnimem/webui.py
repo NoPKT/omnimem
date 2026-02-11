@@ -611,6 +611,9 @@ HTML_PAGE = """<!doctype html>
 	          <div class=\"row-btn\">
 	            <button id=\"btnAutoMaintPreview\" class=\"secondary\" style=\"margin-top:0\">Auto Maintain Preview</button>
 	            <button id=\"btnAutoMaintApply\" class=\"danger\" style=\"margin-top:0\">Apply Auto Maintain</button>
+	            <label style=\"margin-top:0\">Ack
+	              <input id=\"autoMaintAck\" placeholder=\"type APPLY if required\" style=\"max-width:220px\" />
+	            </label>
 	            <span id=\"autoMaintHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
 	        </div>
@@ -703,6 +706,7 @@ HTML_PAGE = """<!doctype html>
             <label><span>Maintenance Consolidate Limit</span><input name=\"daemon_maintenance_consolidate_limit\" type=\"number\" min=\"1\" max=\"1000\" /></label>
             <label><span>Maintenance Compress Sessions</span><input name=\"daemon_maintenance_compress_sessions\" type=\"number\" min=\"1\" max=\"20\" /></label>
             <label><span>Maintenance Compress Min Items</span><input name=\"daemon_maintenance_compress_min_items\" type=\"number\" min=\"2\" max=\"200\" /></label>
+            <label><span>Approval Required For Apply</span><select name=\"webui_approval_required\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
             <button type=\"submit\" data-i18n=\"btn_save\">Save Configuration</button>
           </form>
         </div>
@@ -1531,7 +1535,8 @@ HTML_PAGE = """<!doctype html>
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
         'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
-        'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items'
+        'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
+        'webui_approval_required'
       ]) {
         const v = d[k];
         f.elements[k].value = (typeof v === 'boolean') ? String(v) : (v ?? '');
@@ -1625,6 +1630,18 @@ HTML_PAGE = """<!doctype html>
 	        + '&per_hop=' + encodeURIComponent(String(Number.isFinite(per_hop) ? per_hop : 6))
 	        + '&ranking_mode=' + encodeURIComponent(ranking_mode)
 	      );
+	      const rh = document.getElementById('memRetrieveHint');
+	      if (rh) {
+	        if (d && d.mode === 'smart' && d.explain) {
+	          const ex = d.explain || {};
+	          const seedsN = Array.isArray(ex.seeds) ? ex.seeds.length : 0;
+	          const pathsN = ex.paths ? Object.keys(ex.paths).length : 0;
+	          const rm = ex.ranking_mode || ranking_mode;
+	          rh.textContent = `smart: ranking=${rm}, seeds=${seedsN}, path_hits=${pathsN}`;
+	        } else if (mode !== 'smart') {
+	          rh.textContent = '';
+	        }
+	      }
 	      const b = document.getElementById('memBody');
 	      b.innerHTML = '';
 	      (d.items || []).forEach(x => {
@@ -1782,7 +1799,8 @@ HTML_PAGE = """<!doctype html>
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
         'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
-        'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items'
+        'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
+        'webui_approval_required'
       ]) payload[k] = f.elements[k].value;
       const d = await jpost('/api/config', payload);
       document.getElementById('status').innerHTML = d.ok ? `<span class="pill"><b class="ok">${t('cfg_saved')}</b></span>` : `<span class="pill"><b class="err">${t('cfg_failed')}</b></span>`;
@@ -2402,10 +2420,11 @@ HTML_PAGE = """<!doctype html>
 	    async function runAutoMaintenance(dry_run) {
 	      const pid = (document.getElementById('insProjectId')?.value || '').trim();
 	      const sid = (document.getElementById('insSessionId')?.value || '').trim();
+	      const ack = (document.getElementById('autoMaintAck')?.value || '').trim();
 	      if (!dry_run) {
 	        if (!confirm(`Apply auto maintenance? project=${pid || '(all)'} session=${sid || '(auto hot sessions)'}`)) return;
 	      }
-	      const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: !!dry_run });
+	      const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: !!dry_run, ack_token: ack });
 	      const hint = document.getElementById('autoMaintHint');
 	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
 	      renderMaintOut('Auto Maintenance', d);
@@ -3523,6 +3542,7 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
     storage = cfg.get("storage", {})
     gh = cfg.get("sync", {}).get("github", {})
     dm = cfg.get("daemon", {})
+    wu = cfg.get("webui", {})
     return {
         "ok": True,
         "initialized": cfg_path.exists(),
@@ -3546,6 +3566,7 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "daemon_maintenance_consolidate_limit": dm.get("maintenance_consolidate_limit", 80),
         "daemon_maintenance_compress_sessions": dm.get("maintenance_compress_sessions", 2),
         "daemon_maintenance_compress_min_items": dm.get("maintenance_compress_min_items", 8),
+        "webui_approval_required": bool(wu.get("approval_required", False)),
     }
 
 
@@ -3989,6 +4010,8 @@ def run_webui(
     event_stats_lock = threading.Lock()
     events_cache: dict[tuple[str, str, str, int], tuple[float, dict[str, Any]]] = {}
     events_cache_lock = threading.Lock()
+    smart_retrieve_cache: dict[tuple[str, str, str, int, int, str, int], tuple[float, dict[str, Any]]] = {}
+    smart_retrieve_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: object) -> None:  # noqa: A002
@@ -4112,17 +4135,29 @@ def run_webui(
                 per_hop = int(q.get("per_hop", ["6"])[0])
                 ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
                 if mode == "smart" and query:
-                    out = retrieve_thread(
-                        paths=paths,
-                        schema_sql_path=schema_sql_path,
-                        query=query,
-                        project_id=project_id,
-                        session_id=session_id,
-                        seed_limit=max(8, min(30, int(limit))),
-                        depth=max(1, min(4, int(depth))),
-                        per_hop=max(1, min(30, int(per_hop))),
-                        ranking_mode=ranking_mode if ranking_mode in {"path", "ppr", "hybrid"} else "hybrid",
-                    )
+                    depth_i = max(1, min(4, int(depth)))
+                    hop_i = max(1, min(30, int(per_hop)))
+                    rank_i = ranking_mode if ranking_mode in {"path", "ppr", "hybrid"} else "hybrid"
+                    cache_key = (project_id, session_id, query, depth_i, hop_i, rank_i, max(8, min(30, int(limit))))
+                    out: dict[str, Any] | None = None
+                    with smart_retrieve_lock:
+                        hit = smart_retrieve_cache.get(cache_key)
+                        if hit and (time.time() - hit[0]) <= 12.0:
+                            out = hit[1]
+                    if out is None:
+                        out = retrieve_thread(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            query=query,
+                            project_id=project_id,
+                            session_id=session_id,
+                            seed_limit=max(8, min(30, int(limit))),
+                            depth=depth_i,
+                            per_hop=hop_i,
+                            ranking_mode=rank_i,
+                        )
+                        with smart_retrieve_lock:
+                            smart_retrieve_cache[cache_key] = (time.time(), out)
                     items = list(out.get("items") or [])
                     if layer:
                         items = [x for x in items if str(x.get("layer") or "") == layer]
@@ -4850,6 +4885,8 @@ def run_webui(
                 dm["maintenance_consolidate_limit"] = _to_int("daemon_maintenance_consolidate_limit", int(daemon_state.get("maintenance_consolidate_limit", 80)), 1, 1000)
                 dm["maintenance_compress_sessions"] = _to_int("daemon_maintenance_compress_sessions", int(daemon_state.get("maintenance_compress_sessions", 2)), 1, 20)
                 dm["maintenance_compress_min_items"] = _to_int("daemon_maintenance_compress_min_items", int(daemon_state.get("maintenance_compress_min_items", 8)), 2, 200)
+                cfg.setdefault("webui", {})
+                cfg["webui"]["approval_required"] = _to_bool("webui_approval_required", bool(cfg.get("webui", {}).get("approval_required", False)))
                 try:
                     save_config(cfg_path, cfg)
                     nonlocal paths
@@ -4949,6 +4986,7 @@ def run_webui(
                     session_id = str(data.get("session_id", "")).strip()
                     limit = int(data.get("limit", 80))
                     dry_run = bool(data.get("dry_run", True))
+                    adaptive = bool(data.get("adaptive", True))
                     out = consolidate_memories(
                         paths=paths,
                         schema_sql_path=schema_sql_path,
@@ -4956,6 +4994,8 @@ def run_webui(
                         session_id=session_id,
                         limit=limit,
                         dry_run=dry_run,
+                        adaptive=adaptive,
+                        adaptive_days=14,
                         tool="webui",
                         actor_session_id="webui-session",
                     )
@@ -4992,6 +5032,11 @@ def run_webui(
                     project_id = str(data.get("project_id", "")).strip()
                     session_id = str(data.get("session_id", "")).strip()
                     dry_run = bool(data.get("dry_run", True))
+                    ack_token = str(data.get("ack_token", "")).strip()
+                    approval_required = bool(cfg.get("webui", {}).get("approval_required", False))
+                    if not dry_run and approval_required and ack_token != "APPLY":
+                        self._send_json({"ok": False, "error": "approval required: set ack_token=APPLY"}, 403)
+                        return
                     decay_out = apply_decay(
                         paths=paths,
                         schema_sql_path=schema_sql_path,
@@ -5010,6 +5055,8 @@ def run_webui(
                         session_id=session_id,
                         limit=80,
                         dry_run=dry_run,
+                        adaptive=True,
+                        adaptive_days=14,
                         tool="webui",
                         actor_session_id="webui-session",
                     )
@@ -5043,6 +5090,7 @@ def run_webui(
                         "dry_run": dry_run,
                         "project_id": project_id,
                         "session_id": session_id,
+                        "approval_required": approval_required,
                         "decay": {
                             "ok": decay_out.get("ok"),
                             "count": decay_out.get("count", 0),
@@ -5053,9 +5101,45 @@ def run_webui(
                             "demote_candidates": len(cons_out.get("demote") or []),
                             "promoted": len(cons_out.get("promoted") or []),
                             "demoted": len(cons_out.get("demoted") or []),
+                            "thresholds": cons_out.get("thresholds", {}),
                         },
                         "compress": comp_out,
                     }
+                    if not dry_run and out.get("ok"):
+                        try:
+                            write_memory(
+                                paths=paths,
+                                schema_sql_path=schema_sql_path,
+                                layer="short",
+                                kind="summary",
+                                summary=f"Auto maintenance applied ({project_id or 'all'})",
+                                body=(
+                                    "WebUI auto-maintenance run.\n\n"
+                                    f"- project_id: {project_id or '(all)'}\n"
+                                    f"- session_id: {session_id or '(auto hot sessions)'}\n"
+                                    f"- decay_count: {out['decay'].get('count', 0)}\n"
+                                    f"- promoted: {out['consolidate'].get('promoted', 0)}\n"
+                                    f"- demoted: {out['consolidate'].get('demoted', 0)}\n"
+                                    f"- approval_required: {approval_required}\n"
+                                ),
+                                tags=["governance:auto-maintenance", "audit:webui"],
+                                refs=[],
+                                cred_refs=[],
+                                tool="webui",
+                                account="default",
+                                device="local",
+                                session_id="webui-session",
+                                project_id=project_id or "global",
+                                workspace="",
+                                importance=0.65,
+                                confidence=0.9,
+                                stability=0.8,
+                                reuse_count=0,
+                                volatility=0.2,
+                                event_type="memory.write",
+                            )
+                        except Exception:
+                            pass
                     self._send_json(out, 200 if out.get("ok") else 400)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)

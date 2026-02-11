@@ -843,6 +843,81 @@ def apply_decay(
     }
 
 
+def _quantile(sorted_vals: list[float], q: float, default: float) -> float:
+    if not sorted_vals:
+        return float(default)
+    qq = max(0.0, min(1.0, float(q)))
+    idx = int(round((len(sorted_vals) - 1) * qq))
+    idx = max(0, min(len(sorted_vals) - 1, idx))
+    return float(sorted_vals[idx])
+
+
+def infer_adaptive_governance_thresholds(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    days: int = 14,
+) -> dict[str, Any]:
+    """Infer consolidation thresholds from recent signal distributions."""
+    ensure_storage(paths, schema_sql_path)
+    days = max(1, min(180, int(days)))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat()
+    sid_where = ""
+    sid_args: list[Any] = []
+    if session_id:
+        sid_where = "AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?"
+        sid_args.append(session_id)
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""
+            SELECT layer, importance_score, confidence_score, stability_score, reuse_count, volatility_score
+            FROM memories
+            WHERE (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              {sid_where}
+              AND updated_at >= ?
+              AND kind NOT IN ('retrieve')
+            ORDER BY updated_at DESC
+            LIMIT 3000
+            """,
+            (project_id, project_id, *sid_args, cutoff),
+        ).fetchall()
+
+    all_imp = sorted(float(r["importance_score"] or 0.0) for r in rows)
+    all_conf = sorted(float(r["confidence_score"] or 0.0) for r in rows)
+    all_stab = sorted(float(r["stability_score"] or 0.0) for r in rows)
+    all_vol = sorted(float(r["volatility_score"] or 0.0) for r in rows)
+    all_reuse = sorted(int(r["reuse_count"] or 0) for r in rows)
+
+    p_imp = max(0.55, min(0.92, _quantile(all_imp, 0.68, 0.75)))
+    p_conf = max(0.50, min(0.90, _quantile(all_conf, 0.60, 0.65)))
+    p_stab = max(0.50, min(0.95, _quantile(all_stab, 0.62, 0.65)))
+    p_vol = max(0.25, min(0.80, _quantile(all_vol, 0.42, 0.65)))
+    d_vol = max(0.55, min(0.98, _quantile(all_vol, 0.78, 0.75)))
+    d_stab = max(0.10, min(0.70, _quantile(all_stab, 0.28, 0.45)))
+    d_reuse = max(0, min(8, int(_quantile([float(x) for x in all_reuse], 0.30, 1.0))))
+
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "session_id": session_id,
+        "days": days,
+        "sample_size": len(rows),
+        "thresholds": {
+            "p_imp": float(round(p_imp, 3)),
+            "p_conf": float(round(p_conf, 3)),
+            "p_stab": float(round(p_stab, 3)),
+            "p_vol": float(round(p_vol, 3)),
+            "d_vol": float(round(d_vol, 3)),
+            "d_stab": float(round(d_stab, 3)),
+            "d_reuse": int(d_reuse),
+        },
+    }
+
+
 def consolidate_memories(
     *,
     paths: MemoryPaths,
@@ -858,6 +933,8 @@ def consolidate_memories(
     d_vol: float = 0.75,
     d_stab: float = 0.45,
     d_reuse: int = 1,
+    adaptive: bool = False,
+    adaptive_days: int = 14,
     tool: str = "omnimem",
     actor_session_id: str = "system",
 ) -> dict[str, Any]:
@@ -869,6 +946,23 @@ def consolidate_memories(
     if session_id:
         sid_where = "AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?"
         sid_args.append(session_id)
+    learned: dict[str, Any] = {}
+    if adaptive:
+        learned = infer_adaptive_governance_thresholds(
+            paths=paths,
+            schema_sql_path=schema_sql_path,
+            project_id=project_id,
+            session_id=session_id,
+            days=adaptive_days,
+        )
+        th = dict(learned.get("thresholds") or {})
+        p_imp = float(th.get("p_imp", p_imp))
+        p_conf = float(th.get("p_conf", p_conf))
+        p_stab = float(th.get("p_stab", p_stab))
+        p_vol = float(th.get("p_vol", p_vol))
+        d_vol = float(th.get("d_vol", d_vol))
+        d_stab = float(th.get("d_stab", d_stab))
+        d_reuse = int(th.get("d_reuse", d_reuse))
 
     with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
         conn.row_factory = sqlite3.Row
@@ -962,6 +1056,16 @@ def consolidate_memories(
                 "demote_candidates": len(de_items),
                 "promoted": len(applied_promote),
                 "demoted": len(applied_demote),
+                "adaptive": bool(adaptive),
+                "thresholds": {
+                    "p_imp": p_imp,
+                    "p_conf": p_conf,
+                    "p_stab": p_stab,
+                    "p_vol": p_vol,
+                    "d_vol": d_vol,
+                    "d_stab": d_stab,
+                    "d_reuse": int(d_reuse),
+                },
                 "errors": errors[:30],
             },
             portable=False,
@@ -977,6 +1081,17 @@ def consolidate_memories(
         "promoted": applied_promote,
         "demoted": applied_demote,
         "errors": errors,
+        "adaptive": bool(adaptive),
+        "adaptive_info": learned,
+        "thresholds": {
+            "p_imp": p_imp,
+            "p_conf": p_conf,
+            "p_stab": p_stab,
+            "p_vol": p_vol,
+            "d_vol": d_vol,
+            "d_stab": d_stab,
+            "d_reuse": int(d_reuse),
+        },
     }
 
 
@@ -3244,6 +3359,8 @@ def run_sync_daemon(
                     session_id="",
                     limit=int(maintenance_consolidate_limit),
                     dry_run=False,
+                    adaptive=True,
+                    adaptive_days=14,
                     tool="daemon",
                     actor_session_id="system",
                 )
