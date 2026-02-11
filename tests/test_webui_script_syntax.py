@@ -27,6 +27,11 @@ class WebUiScriptSyntaxTest(unittest.TestCase):
                 cp = subprocess.run([node, "--check", str(fp)], capture_output=True, text=True)
                 self.assertEqual(0, cp.returncode, msg=(cp.stderr or cp.stdout or f"node --check failed for script #{i}"))
 
+    def test_script_contains_forecast_and_disclosure_hooks(self) -> None:
+        self.assertIn('id="maintForecast"', HTML_PAGE)
+        self.assertIn("function renderMaintenanceForecast", HTML_PAGE)
+        self.assertIn('details class="disclosure"', HTML_PAGE)
+
 
 if __name__ == "__main__":
     unittest.main()

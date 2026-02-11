@@ -10,6 +10,7 @@ from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
     _evaluate_governance_action,
     _infer_memory_route,
+    _maintenance_impact_forecast,
     _normalize_memory_route,
     _normalize_route_templates,
     _quality_alerts,
@@ -48,6 +49,34 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         )
         self.assertTrue(any("conflicts increased" in x for x in alerts))
         self.assertTrue(any("avg stability is low" in x for x in alerts))
+
+    def test_maintenance_impact_forecast_warn(self) -> None:
+        out = _maintenance_impact_forecast(
+            decay_count=120,
+            promote_count=12,
+            demote_count=9,
+            compress_count=2,
+            dry_run=True,
+            approval_required=True,
+            session_id="",
+        )
+        self.assertEqual(out.get("risk_level"), "warn")
+        exp = out.get("expected") or {}
+        self.assertEqual(int(exp.get("total_touches", 0)), 143)
+        self.assertIn("preview forecast", str(out.get("summary", "")))
+
+    def test_maintenance_impact_forecast_high(self) -> None:
+        out = _maintenance_impact_forecast(
+            decay_count=220,
+            promote_count=30,
+            demote_count=35,
+            compress_count=9,
+            dry_run=False,
+            approval_required=False,
+            session_id="s-1",
+        )
+        self.assertEqual(out.get("risk_level"), "high")
+        self.assertEqual((out.get("expected") or {}).get("compress"), 9)
 
     def test_normalize_route_templates(self) -> None:
         out = _normalize_route_templates(

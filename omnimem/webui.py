@@ -281,6 +281,13 @@ HTML_PAGE = """<!doctype html>
     .kv .v { font-size: 12px; color: var(--ink); }
 	    .divider { height: 1px; background: var(--line); margin: 14px 0; }
 		    .muted-box { padding: 10px; border: 1px solid var(--line); border-radius: var(--r14); background: rgba(255,255,255,.72); }
+        details.disclosure { margin-top: 8px; }
+        details.disclosure summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+        details.disclosure[open] summary { color: var(--ink); }
+        .forecast-grid { display:grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; margin-top: 8px; }
+        .forecast-risk-ok { color: var(--good); }
+        .forecast-risk-warn { color: var(--warn); }
+        .forecast-risk-high { color: var(--bad); }
 
 	    .modal-overlay {
 	      position: fixed;
@@ -663,6 +670,7 @@ HTML_PAGE = """<!doctype html>
 	            </label>
 	            <span id=\"autoMaintHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
+            <div id=\"maintForecast\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	          <div id=\"maintStats\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	        </div>
 	        <div class=\"card wide\">
@@ -1780,14 +1788,16 @@ HTML_PAGE = """<!doctype html>
       const pid = (document.getElementById('insProjectId')?.value || '').trim();
       const sid = (document.getElementById('insSessionId')?.value || '').trim();
       const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: true, ack_token: '' });
+      renderMaintenanceForecast(d);
       if (!out) return;
       if (!d.ok) {
         out.textContent = `1) health check done\n2) maintenance preview failed: ${d.error || 'unknown'}\n3) adjust config and retry`;
         return;
       }
+      const fx = (d.forecast && d.forecast.expected) ? d.forecast.expected : {};
       out.textContent = [
         '1) health check done',
-        `2) preview: decay=${d.decay?.count || 0} promote=${d.consolidate?.promote?.length || 0} demote=${d.consolidate?.demote?.length || 0} compressed=${d.compress?.compressed ? 1 : 0}`,
+        `2) preview: decay=${fx.decay || 0} promote=${fx.promote || 0} demote=${fx.demote || 0} compressed=${fx.compress || 0}`,
         '3) open Insights tab and review Governance/Events before apply',
       ].join('\\n');
       setActiveTab('insightsTab');
@@ -1941,7 +1951,7 @@ HTML_PAGE = """<!doctype html>
 	    function retrievalHintHtml(x) {
 	      const r = x && x.retrieval ? x.retrieval : null;
         const why = Array.isArray(x?.why_recalled) ? x.why_recalled.filter(Boolean).slice(0, 2) : [];
-        const whyHtml = why.length ? `<div class=\"small\">why: ${escHtml(why.join(' | '))}</div>` : '';
+        const whyHtml = why.length ? `<div class=\"small\">why: ${escHtml(why.join(' | '))}</div>` : '<div class=\"small\">why: (none)</div>';
         const sig = (x && x.signals && typeof x.signals === 'object') ? x.signals : {};
         const conf = Math.max(0, Math.min(1, Number(sig.confidence_score || 0)));
         const stab = Math.max(0, Math.min(1, Number(sig.stability_score || 0)));
@@ -1955,16 +1965,20 @@ HTML_PAGE = """<!doctype html>
           + `<span class=\"mono\">S</span>${spark(stab, 'warn')}`
           + `</div>`;
 	      if ((!r || typeof r !== 'object') && typeof x.score === 'number') {
-	        return `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>${heat}${whyHtml}`;
+          const quick = `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>${heat}${whyHtml}`;
+	        return `<details class="disclosure"><summary>retrieval explain</summary>${quick}</details>`;
 	      }
-	      if (!r || typeof r !== 'object') return heat + whyHtml;
+	      if (!r || typeof r !== 'object') return `<details class="disclosure"><summary>retrieval explain</summary>${heat}${whyHtml}</details>`;
 	      const c = (r.components && typeof r.components === 'object') ? r.components : {};
 	      const score = Number(r.score || 0);
 	      const rel = Number(c.relevance || 0);
 	      const rec = Number(c.recency || 0);
 	      const impRel = Number(c.importance || 0);
 	      const strat = String(r.strategy || '');
-	      return `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(impRel.toFixed(2))} ${escHtml(strat)}</div>${heat}${whyHtml}`;
+        const comp = Object.entries(c).slice(0, 8).map(([k, v]) => `${k}=${Number(v || 0).toFixed(3)}`).join(' ');
+        const quick = `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(impRel.toFixed(2))} ${escHtml(strat)}</div>${heat}${whyHtml}`;
+        const detail = `<div class="small mono" style="margin-top:6px">components: ${escHtml(comp || '(none)')}</div>`;
+	      return `<details class="disclosure"><summary>retrieval explain</summary>${quick}${detail}</details>`;
 	    }
 
 	    function smartTuneRetrieveParams() {
@@ -2947,6 +2961,30 @@ HTML_PAGE = """<!doctype html>
 	      out.innerHTML = `<div class="small"><b>${escHtml(title)}</b></div><pre class="mono" style="white-space:pre-wrap">${escHtml(JSON.stringify(d, null, 2))}</pre>`;
 	    }
 
+      function renderMaintenanceForecast(d) {
+        const el = document.getElementById('maintForecast');
+        if (!el) return;
+        if (!d || !d.ok) {
+          el.innerHTML = `<span class="small">impact forecast unavailable</span>`;
+          return;
+        }
+        const f = (d.forecast && typeof d.forecast === 'object') ? d.forecast : {};
+        const ex = (f.expected && typeof f.expected === 'object') ? f.expected : {};
+        const risk = String(f.risk_level || 'low').toLowerCase();
+        const riskCls = risk === 'high' ? 'forecast-risk-high' : (risk === 'warn' ? 'forecast-risk-warn' : 'forecast-risk-ok');
+        const summary = String(f.summary || '');
+        el.innerHTML =
+          `<div class="small"><b>Impact Forecast</b> · <span class="${escHtml(riskCls)}">${escHtml(risk)}</span></div>` +
+          `<div class="small" style="margin-top:4px">${escHtml(summary || 'No summary')}</div>` +
+          `<div class="forecast-grid">` +
+          `<span class="pill"><b>decay</b><span class="mono">${escHtml(String(ex.decay || 0))}</span></span>` +
+          `<span class="pill"><b>promote</b><span class="mono">${escHtml(String(ex.promote || 0))}</span></span>` +
+          `<span class="pill"><b>demote</b><span class="mono">${escHtml(String(ex.demote || 0))}</span></span>` +
+          `<span class="pill"><b>compress</b><span class="mono">${escHtml(String(ex.compress || 0))}</span></span>` +
+          `</div>` +
+          `<details class="disclosure"><summary>details</summary><pre class="mono" style="white-space:pre-wrap; margin-top:6px">${escHtml(JSON.stringify(f, null, 2))}</pre></details>`;
+      }
+
 	    async function runConsolidate(dry_run) {
 	      const opts = readConsolidateOpts();
 	      if (!dry_run) {
@@ -3013,6 +3051,7 @@ HTML_PAGE = """<!doctype html>
 	      const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: !!dry_run, ack_token: ack });
 	      const hint = document.getElementById('autoMaintHint');
 	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
+        renderMaintenanceForecast(d);
 	      renderMaintOut('Auto Maintenance', d);
 	      if (!d.ok) {
 	        toast('Maintenance', d.error || 'auto maintenance failed', false);
@@ -3040,8 +3079,17 @@ HTML_PAGE = """<!doctype html>
 	      }
 	      const ac = d.auto_maintenance || {};
 	      const ec = d.event_counts || {};
+        const runs = Number(ac.runs || 0);
+        const promoted = Number(ac.promoted_total || 0);
+        const demoted = Number(ac.demoted_total || 0);
+        const decay = Number(ac.decay_total || 0);
+        let feedback = 'stable: maintenance load is light';
+        if (runs === 0) feedback = 'idle: no auto maintenance in last 7 days';
+        if (decay > 120 || promoted + demoted > 40) feedback = 'active: review thresholds before next apply';
+        if (decay > 260 || promoted + demoted > 90) feedback = 'high-pressure: keep preview mode and inspect governance log';
 	      el.innerHTML =
 	        `<div class="small"><b>Maintenance 7d</b></div>` +
+          `<div class="small" style="margin-top:4px">${escHtml(feedback)}</div>` +
 	        `<div class="row-btn">` +
 	        `<span class="pill"><b>runs</b><span class="mono">${escHtml(String(ac.runs || 0))}</span></span>` +
 	        `<span class="pill"><b>decay</b><span class="mono">${escHtml(String(ac.decay_total || 0))}</span></span>` +
@@ -4848,6 +4896,61 @@ def _quality_alerts(cur: dict[str, Any], prev: dict[str, Any]) -> list[str]:
     if int(cur.get("reuse_events", 0) or 0) < int(prev.get("reuse_events", 0) or 0):
         alerts.append("reuse decreased week-over-week; tune retrieval route/ranking and refresh links")
     return alerts
+
+
+def _maintenance_impact_forecast(
+    *,
+    decay_count: int,
+    promote_count: int,
+    demote_count: int,
+    compress_count: int,
+    dry_run: bool,
+    approval_required: bool,
+    session_id: str,
+) -> dict[str, Any]:
+    decay_n = max(0, int(decay_count))
+    promote_n = max(0, int(promote_count))
+    demote_n = max(0, int(demote_count))
+    compress_n = max(0, int(compress_count))
+    layer_moves = promote_n + demote_n
+    total_touches = decay_n + layer_moves + compress_n
+
+    risk_level = "low"
+    if decay_n >= 80 or layer_moves >= 24 or compress_n >= 3:
+        risk_level = "warn"
+    if decay_n >= 180 or layer_moves >= 60 or compress_n >= 8:
+        risk_level = "high"
+
+    if not dry_run and approval_required and total_touches > 0 and risk_level == "low":
+        risk_level = "warn"
+
+    scope = "single session" if session_id else "project/hot sessions"
+    summary = (
+        f"{'preview' if dry_run else 'apply'} forecast ({scope}): "
+        f"decay={decay_n}, promote={promote_n}, demote={demote_n}, compress={compress_n}, "
+        f"total_touches={total_touches}"
+    )
+    next_actions = [
+        "keep preview mode if risk is high",
+        "review governance thresholds before apply",
+        "apply with ack token when approval is required",
+    ]
+    if dry_run:
+        next_actions[2] = "apply after checking forecast details and recommendations"
+
+    return {
+        "risk_level": risk_level,
+        "summary": summary,
+        "expected": {
+            "decay": decay_n,
+            "promote": promote_n,
+            "demote": demote_n,
+            "compress": compress_n,
+            "total_touches": total_touches,
+        },
+        "scope": scope,
+        "next_actions": next_actions,
+    }
 
 
 def _rollback_preview_items(conn: sqlite3.Connection, *, memory_id: str, cutoff_iso: str, limit: int = 200) -> tuple[list[dict[str, Any]], str]:
@@ -6694,12 +6797,31 @@ def run_webui(
                             tool="webui",
                             actor_session_id="webui-session",
                         )
+                    promote_n = len(cons_out.get("promote") or []) if dry_run else len(cons_out.get("promoted") or [])
+                    demote_n = len(cons_out.get("demote") or []) if dry_run else len(cons_out.get("demoted") or [])
+                    compress_n = 0
+                    if session_id:
+                        compress_n = 1 if bool(comp_out.get("compressed")) or bool(comp_out.get("summary_preview")) else 0
+                    else:
+                        for it in (comp_out.get("items") or []):
+                            if bool((it or {}).get("compressed")) or bool((it or {}).get("summary_preview")):
+                                compress_n += 1
+                    forecast = _maintenance_impact_forecast(
+                        decay_count=int(decay_out.get("count", 0) or 0),
+                        promote_count=int(promote_n),
+                        demote_count=int(demote_n),
+                        compress_count=int(compress_n),
+                        dry_run=bool(dry_run),
+                        approval_required=bool(approval_required),
+                        session_id=session_id,
+                    )
                     out = {
                         "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
                         "dry_run": dry_run,
                         "project_id": project_id,
                         "session_id": session_id,
                         "approval_required": approval_required,
+                        "forecast": forecast,
                         "decay": {
                             "ok": decay_out.get("ok"),
                             "count": decay_out.get("count", 0),
@@ -6710,6 +6832,8 @@ def run_webui(
                             "demote_candidates": len(cons_out.get("demote") or []),
                             "promoted": len(cons_out.get("promoted") or []),
                             "demoted": len(cons_out.get("demoted") or []),
+                            "promote_forecast": int(promote_n),
+                            "demote_forecast": int(demote_n),
                             "thresholds": cons_out.get("thresholds", {}),
                         },
                         "compress": comp_out,
