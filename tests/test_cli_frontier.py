@@ -21,6 +21,11 @@ class CLIFrontierCommandTest(unittest.TestCase):
         args = p.parse_args(["profile", "--project-id", "OM"])
         self.assertEqual(args.cmd, "profile")
 
+    def test_ingest_command_registered(self) -> None:
+        p = build_parser()
+        args = p.parse_args(["ingest", "--type", "text", "--text", "hello"])
+        self.assertEqual(args.cmd, "ingest")
+
 
 if __name__ == "__main__":
     unittest.main()

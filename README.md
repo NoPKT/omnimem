@@ -138,6 +138,8 @@ Frontier memory ops (preview by default):
 omnimem raptor --project-id OM
 omnimem enhance --project-id OM
 omnimem profile --project-id OM
+omnimem ingest --type url "https://example.com/doc?token=***"
+omnimem ingest --type file ./docs/notes.md
 ```
 
 Offline LoCoMo-style retrieval eval:

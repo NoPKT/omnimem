@@ -4,6 +4,7 @@ from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import math
+import mimetypes
 import os
 import re
 import sqlite3
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlparse, urlunparse
 
 try:  # pragma: no cover
     import fcntl  # type: ignore[attr-defined]
@@ -3433,6 +3435,167 @@ def build_user_profile(
             "goals": goals[:8],
             "active_hours_utc": active_hours,
         },
+    }
+
+
+def _sanitize_url(raw: str) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    try:
+        p = urlparse(s)
+    except Exception:
+        return s
+    if not p.scheme or not p.netloc:
+        return s
+    safe_q: list[tuple[str, str]] = []
+    for k, v in parse_qsl(p.query, keep_blank_values=True):
+        kk = str(k or "").strip().lower()
+        if kk in {"token", "access_token", "api_key", "apikey", "key", "auth", "authorization", "password", "passwd", "secret"}:
+            safe_q.append((k, "***"))
+        else:
+            safe_q.append((k, v))
+    query = "&".join([f"{k}={v}" if k else v for k, v in safe_q])
+    return urlunparse((p.scheme, p.netloc, p.path, p.params, query, p.fragment))
+
+
+def _first_nonempty_line(text: str) -> str:
+    for ln in str(text or "").splitlines():
+        s = re.sub(r"\s+", " ", ln).strip()
+        if s:
+            return s
+    return ""
+
+
+def ingest_source(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    source: str,
+    source_type: str = "auto",
+    text_body: str = "",
+    summary: str = "",
+    project_id: str = "",
+    session_id: str = "session-local",
+    workspace: str = "",
+    layer: str = "short",
+    kind: str = "note",
+    tags: list[str] | None = None,
+    tool: str = "cli",
+    account: str = "default",
+    device: str = "local",
+    max_chars: int = 12000,
+) -> dict[str, Any]:
+    st = str(source_type or "auto").strip().lower()
+    if st not in {"auto", "file", "url", "text"}:
+        raise ValueError(f"invalid source_type: {source_type}")
+    max_chars = max(300, min(200000, int(max_chars)))
+    src = str(source or "").strip()
+    text_body = str(text_body or "")
+
+    inferred = st
+    if st == "auto":
+        if text_body and not src:
+            inferred = "text"
+        elif src.startswith("http://") or src.startswith("https://"):
+            inferred = "url"
+        else:
+            inferred = "file"
+
+    body = ""
+    final_summary = re.sub(r"\s+", " ", str(summary or "").strip())
+    out_tags = [str(t).strip() for t in (tags or []) if str(t).strip()]
+    refs: list[dict[str, str]] = []
+    meta: dict[str, Any] = {"source_type": inferred}
+
+    if inferred == "text":
+        body = text_body[:max_chars].strip()
+        if not final_summary:
+            final_summary = _first_nonempty_line(body)[:96] or "ingested text"
+        out_tags = list(dict.fromkeys([*out_tags, "ingest:text"]))
+    elif inferred == "url":
+        safe = _sanitize_url(src)
+        p = urlparse(safe)
+        title = f"{p.netloc}{p.path}" if p.netloc else safe
+        title = title or safe or "url"
+        if not final_summary:
+            final_summary = f"Ingest URL: {title[:80]}"
+        body_lines = [
+            "## Ingested URL",
+            "",
+            f"- url: {safe}",
+            f"- host: {p.netloc}",
+            f"- path: {p.path or '/'}",
+        ]
+        if p.query:
+            body_lines.append(f"- query: {p.query}")
+        body = "\n".join(body_lines)
+        refs = [{"type": "url", "target": safe, "note": "ingested-source"}]
+        out_tags = list(dict.fromkeys([*out_tags, "ingest:url"]))
+        meta["sanitized_url"] = safe
+    else:
+        fp = Path(src).expanduser()
+        if not fp.exists() or not fp.is_file():
+            raise FileNotFoundError(f"source file not found: {fp}")
+        txt = fp.read_text(encoding="utf-8", errors="ignore")
+        txt = txt[:max_chars]
+        body = txt.strip()
+        mime, _ = mimetypes.guess_type(str(fp))
+        if not final_summary:
+            head = _first_nonempty_line(body)
+            if head:
+                final_summary = f"Ingest file: {fp.name} | {head[:64]}"
+            else:
+                final_summary = f"Ingest file: {fp.name}"
+        refs = [{"type": "file", "target": str(fp.resolve()), "note": "ingested-source"}]
+        out_tags = list(dict.fromkeys([*out_tags, "ingest:file"]))
+        meta.update(
+            {
+                "file_name": fp.name,
+                "file_path": str(fp.resolve()),
+                "mime_type": str(mime or ""),
+                "char_count": len(txt),
+            }
+        )
+
+    if not body:
+        body = "(empty)"
+    if not final_summary:
+        final_summary = "ingested memory"
+
+    payload = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        layer=layer,
+        kind=kind,
+        summary=final_summary[:160],
+        body=body,
+        tags=out_tags,
+        refs=refs,
+        cred_refs=[],
+        tool=tool,
+        account=account,
+        device=device,
+        session_id=session_id,
+        project_id=project_id,
+        workspace=workspace,
+        importance=0.58,
+        confidence=0.66,
+        stability=0.56,
+        reuse_count=0,
+        volatility=0.35,
+        event_type="memory.write",
+    )
+    mem = payload.get("memory") or {}
+    return {
+        "ok": True,
+        "source_type": inferred,
+        "summary": str(mem.get("summary") or ""),
+        "memory_id": str(mem.get("id") or ""),
+        "layer": str(mem.get("layer") or ""),
+        "kind": str(mem.get("kind") or ""),
+        "tags": list(mem.get("tags") or []),
+        "meta": meta,
     }
 
 

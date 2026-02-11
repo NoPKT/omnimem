@@ -38,6 +38,7 @@ from .core import (
     distill_session_memory,
     enhance_memory_summaries,
     find_memories,
+    ingest_source,
     retrieve_thread,
     load_config,
     load_config_with_path,
@@ -197,6 +198,36 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
         "body_md_path": result["memory"]["body_md_path"],
     })
     return 0
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    source = str(getattr(args, "source", "") or "").strip()
+    text_body = str(getattr(args, "text", "") or "")
+    if not source and not text_body:
+        print_json({"ok": False, "error": "source or --text is required"})
+        return 1
+    out = ingest_source(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        source=source,
+        source_type=str(getattr(args, "type", "auto") or "auto"),
+        text_body=text_body,
+        summary=str(getattr(args, "summary", "") or ""),
+        project_id=str(getattr(args, "project_id", "") or ""),
+        session_id=str(getattr(args, "session_id", "session-local") or "session-local"),
+        workspace=str(getattr(args, "workspace", "") or ""),
+        layer=str(getattr(args, "layer", "short") or "short"),
+        kind=str(getattr(args, "kind", "note") or "note"),
+        tags=parse_list_csv(getattr(args, "tags", "")),
+        tool=str(getattr(args, "tool", "cli") or "cli"),
+        account=str(getattr(args, "account", "default") or "default"),
+        device=str(getattr(args, "device", "local") or "local"),
+        max_chars=int(getattr(args, "max_chars", 12000) or 12000),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
 
 
 def cmd_find(args: argparse.Namespace) -> int:
@@ -1799,6 +1830,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_write = sub.add_parser("write", help="write a memory")
     add_common_write_args(p_write)
     p_write.set_defaults(func=cmd_write)
+
+    p_ingest = sub.add_parser("ingest", help="ingest url/file/text into memory")
+    p_ingest.add_argument("--config", help="path to omnimem config json")
+    p_ingest.add_argument("--type", choices=["auto", "file", "url", "text"], default="auto")
+    p_ingest.add_argument("source", nargs="?", default="")
+    p_ingest.add_argument("--text", default="", help="inline text body (used by --type text)")
+    p_ingest.add_argument("--summary", default="", help="optional summary override")
+    p_ingest.add_argument("--layer", choices=sorted(LAYER_SET), default="short")
+    p_ingest.add_argument("--kind", choices=sorted(KIND_SET), default="note")
+    p_ingest.add_argument("--tags", default="", help="comma-separated tags")
+    p_ingest.add_argument("--project-id", default="")
+    p_ingest.add_argument("--session-id", default="session-local")
+    p_ingest.add_argument("--workspace", default="")
+    p_ingest.add_argument("--tool", default="cli")
+    p_ingest.add_argument("--account", default="default")
+    p_ingest.add_argument("--device", default="local")
+    p_ingest.add_argument("--max-chars", type=int, default=12000)
+    p_ingest.set_defaults(func=cmd_ingest)
 
     p_find = sub.add_parser("find", help="find memories")
     p_find.add_argument("--config", help="path to omnimem config json")
