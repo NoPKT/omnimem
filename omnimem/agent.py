@@ -21,6 +21,7 @@ from .core import (
     resolve_paths,
     write_memory,
 )
+from .memory_context import build_budgeted_memory_context
 
 
 WORD_RE = re.compile(r"[A-Za-z0-9_]{2,}")
@@ -179,6 +180,8 @@ def run_turn(
     drift_threshold: float = 0.62,
     cwd: str | None = None,
     limit: int = 8,
+    context_budget_tokens: int = 420,
+    delta_enabled: bool = True,
 ) -> dict[str, Any]:
     cfg = load_config(None)
     paths = resolve_paths(cfg)
@@ -247,7 +250,23 @@ def run_turn(
         volatility=0.8,
         event_type="memory.retrieve",
     )
-    injected = _build_injected_prompt(project_id=project_id, user_prompt=user_prompt, brief=brief, mems=rel)
+    workspace_name = Path(cwd).name if cwd else (Path.cwd().name or "workspace")
+    ctx = build_budgeted_memory_context(
+        paths_root=paths.root,
+        state_key=f"agent-{tool}-{project_id}",
+        project_id=project_id,
+        workspace_name=workspace_name,
+        user_prompt=user_prompt,
+        brief=brief,
+        candidates=rel,
+        budget_tokens=int(context_budget_tokens),
+        include_protocol=True,
+        include_user_request=True,
+        delta_enabled=bool(delta_enabled),
+        max_checkpoints=3,
+        max_memories=min(10, max(3, int(limit))),
+    )
+    injected = str(ctx.get("text") or _build_injected_prompt(project_id=project_id, user_prompt=user_prompt, brief=brief, mems=rel))
 
     cmd = _tool_command(tool, injected)
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
@@ -342,6 +361,8 @@ def interactive_chat(
     project_id: str,
     drift_threshold: float = 0.62,
     cwd: str | None = None,
+    context_budget_tokens: int = 420,
+    delta_enabled: bool = True,
 ) -> int:
     print(f"[omnimem-agent] tool={tool} project={project_id} drift_threshold={drift_threshold}")
     print("[omnimem-agent] type /exit to quit")
@@ -360,6 +381,8 @@ def interactive_chat(
             user_prompt=user_prompt,
             drift_threshold=drift_threshold,
             cwd=cwd,
+            context_budget_tokens=context_budget_tokens,
+            delta_enabled=delta_enabled,
         )
         marker = " [session-switched]" if out.get("switched") else ""
         print(f"assistant>{marker}\n{out['answer']}\n")

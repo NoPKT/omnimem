@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .agent import interactive_chat, run_turn
 from .codex_watch import WatchOptions
+from .memory_context import build_budgeted_memory_context
 from .adapters import (
     notion_query_database,
     notion_write_page,
@@ -32,6 +33,7 @@ from .core import (
     compress_session_context,
     consolidate_memories,
     find_memories,
+    retrieve_thread,
     load_config,
     load_config_with_path,
     parse_list_csv,
@@ -611,6 +613,8 @@ def cmd_agent_run(args: argparse.Namespace) -> int:
         drift_threshold=args.drift_threshold,
         cwd=args.cwd,
         limit=args.retrieve_limit,
+        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+        delta_enabled=not bool(getattr(args, "no_delta_context", False)),
     )
     print_json(out)
     return 0
@@ -622,6 +626,8 @@ def cmd_agent_chat(args: argparse.Namespace) -> int:
         project_id=args.project_id,
         drift_threshold=args.drift_threshold,
         cwd=args.cwd,
+        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+        delta_enabled=not bool(getattr(args, "no_delta_context", False)),
     )
 
 
@@ -832,29 +838,39 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         paths = resolve_paths(cfg)
         schema = schema_sql_path()
         brief = build_brief(paths, schema, project_id, limit=6)
-        mems = find_memories(paths, schema, query="", layer=None, limit=args.retrieve_limit, project_id=project_id)
-
-        # Codex uses the first prompt content as the session title in its resume list.
-        # Make the first line short + uniquely identifying to avoid every session looking identical.
-        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        if prompt:
+            rel_out = retrieve_thread(
+                paths=paths,
+                schema_sql_path=schema,
+                query=prompt,
+                project_id=project_id,
+                session_id="",
+                seed_limit=min(12, max(4, int(args.retrieve_limit))),
+                depth=2,
+                per_hop=6,
+                min_weight=0.18,
+                ranking_mode="hybrid",
+            )
+            mems = list(rel_out.get("items") or [])
+        else:
+            mems = find_memories(paths, schema, query="", layer=None, limit=max(10, int(args.retrieve_limit)), project_id=project_id)
         place = run_cwd_path.name or "workspace"
-        lines = [
-            f"OmniMem: {project_id} ({place}) {now}",
-            "",
-            "Memory protocol (auto):",
-            "- stable decisions/facts -> `omnimem write`",
-            "- topic drift/phase switch -> `omnimem checkpoint`",
-            "- do not store raw secrets; use credential refs",
-        ]
-        if brief.get("checkpoints"):
-            lines.append("Recent checkpoints:")
-            for x in brief["checkpoints"][:3]:
-                lines.append(f"- {x.get('updated_at','')}: {x.get('summary','')}")
-        if mems:
-            lines.append("Recent memories:")
-            for x in mems[:6]:
-                lines.append(f"- [{x.get('project_id','')}/{x.get('layer','')}/{x.get('kind','')}] {x.get('summary','')}")
-        memory_context = "\n".join(lines)
+        ctx = build_budgeted_memory_context(
+            paths_root=paths.root,
+            state_key=f"shortcut-{tool}-{project_id}",
+            project_id=project_id,
+            workspace_name=place,
+            user_prompt=prompt,
+            brief=brief,
+            candidates=mems,
+            budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+            include_protocol=True,
+            include_user_request=(tool == "codex" and bool(prompt)),
+            delta_enabled=(not bool(getattr(args, "no_delta_context", False))) and bool(prompt),
+            max_checkpoints=3,
+            max_memories=min(10, max(3, int(args.retrieve_limit))),
+        )
+        memory_context = str(ctx.get("text", "") or "")
 
     # Native mode: launch the underlying tool with as little interference as possible.
     if tool == "codex":
@@ -863,7 +879,7 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
                 # Start an interactive session with an initial prompt (Codex CLI supports `codex [OPTIONS] [PROMPT]`).
                 native_cmd = ["codex", *tool_args, memory_context]
             else:
-                native_cmd = ["codex", "exec", *tool_args, f"{memory_context}\n\nUser request: {prompt}"]
+                native_cmd = ["codex", "exec", *tool_args, memory_context]
         else:
             native_cmd = ["codex", *tool_args] if not prompt else ["codex", "exec", *tool_args, prompt]
     else:
@@ -1402,6 +1418,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_run.add_argument("--drift-threshold", type=float, default=0.62)
     p_agent_run.add_argument("--cwd", help="optional working directory for underlying tool")
     p_agent_run.add_argument("--retrieve-limit", type=int, default=8)
+    p_agent_run.add_argument("--context-budget-tokens", type=int, default=420)
+    p_agent_run.add_argument("--no-delta-context", action="store_true")
     p_agent_run.set_defaults(func=cmd_agent_run)
 
     p_agent_chat = agent_sub.add_parser("chat", help="interactive auto-memory chat loop")
@@ -1409,6 +1427,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_chat.add_argument("--project-id", required=True)
     p_agent_chat.add_argument("--drift-threshold", type=float, default=0.62)
     p_agent_chat.add_argument("--cwd", help="optional working directory for underlying tool")
+    p_agent_chat.add_argument("--context-budget-tokens", type=int, default=420)
+    p_agent_chat.add_argument("--no-delta-context", action="store_true")
     p_agent_chat.set_defaults(func=cmd_agent_chat)
 
     for tool_name in ["codex", "claude"]:
@@ -1418,6 +1438,8 @@ def build_parser() -> argparse.ArgumentParser:
         p_short.add_argument("--drift-threshold", type=float, default=0.62)
         p_short.add_argument("--cwd", help="optional working directory for underlying tool")
         p_short.add_argument("--retrieve-limit", type=int, default=8)
+        p_short.add_argument("--context-budget-tokens", type=int, default=420, help="max tokens for injected memory context")
+        p_short.add_argument("--no-delta-context", action="store_true", help="disable delta-only memory injection")
         p_short.add_argument("--oneshot", action="store_true", help="use internal one-shot orchestrator path")
         p_short.add_argument("--native", action="store_true", help="launch native tool directly (no per-turn memory orchestration)")
         p_short.add_argument("--agent", action="store_true", help="run the OmniMem agent for auto memory context and checkpoints")
