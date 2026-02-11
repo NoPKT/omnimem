@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import json
 import os
 import re
+import resource
 import signal
 import sqlite3
 import sys
@@ -25,6 +26,7 @@ from .core import (
     consolidate_memories,
     ensure_storage,
     find_memories,
+    infer_adaptive_governance_thresholds,
     move_memory_layer,
     retrieve_thread,
     update_memory_content,
@@ -435,6 +437,14 @@ HTML_PAGE = """<!doctype html>
             <button id=\"btnConflictRecovery\" style=\"display:none\">Conflict Recovery (status -> pull -> push)</button>
           </div>
           <pre id=\"syncOut\" class=\"small\"></pre>
+        </div>
+        <div class=\"card\">
+          <h3>Health Check</h3>
+          <div class=\"small\">Quick runtime diagnostics for storage, daemon and file-descriptor pressure.</div>
+          <div class=\"row-btn\">
+            <button id=\"btnHealthCheck\">Run Health Check</button>
+          </div>
+          <pre id=\"healthOut\" class=\"small\"></pre>
         </div>
       </div>
     </div>
@@ -881,6 +891,7 @@ HTML_PAGE = """<!doctype html>
           <div class=\"drawer-title\" id=\"dTitle\">Memory</div>
           <div class=\"drawer-sub\" id=\"dPills\"></div>
           <div class=\"small\" id=\"dReco\" style=\"margin-top:8px\"></div>
+          <div class=\"small mono\" id=\"dRecoExplain\" style=\"margin-top:6px; white-space:pre-wrap\"></div>
         </div>
         <button id=\"btnDrawerClose\" class=\"secondary\" style=\"margin-top:0\">Close</button>
 	      </div>
@@ -891,6 +902,7 @@ HTML_PAGE = """<!doctype html>
 	        <button id=\"btnPromote\" style=\"margin-top:0\">Promote → long</button>
 	        <button id=\"btnDemote\" class=\"secondary\" style=\"margin-top:0\">Demote → short</button>
 	        <button id=\"btnArchive\" class=\"secondary\" style=\"margin-top:0\">Archive</button>
+          <button id=\"btnExplainReco\" class=\"secondary\" style=\"margin-top:0\">Explain</button>
 	      </div>
 	    </div>
 	    <div class=\"drawer-body\">
@@ -1429,9 +1441,10 @@ HTML_PAGE = """<!doctype html>
 
 	      // Wire action buttons based on current layer.
 	      const btnPromote = document.getElementById('btnPromote');
-	      const btnDemote = document.getElementById('btnDemote');
+      const btnDemote = document.getElementById('btnDemote');
       const btnArchive = document.getElementById('btnArchive');
       const reco = document.getElementById('dReco');
+      const recoExplain = document.getElementById('dRecoExplain');
       const layer = m.layer || '';
       btnPromote.style.display = (layer === 'instant' || layer === 'short') ? 'inline-block' : 'none';
       btnDemote.style.display = (layer === 'long') ? 'inline-block' : 'none';
@@ -1439,24 +1452,65 @@ HTML_PAGE = """<!doctype html>
       btnPromote.onclick = () => moveLayer(m.id, 'long');
       btnDemote.onclick = () => moveLayer(m.id, 'short');
       btnArchive.onclick = () => moveLayer(m.id, 'archive');
-
-      // Lightweight recommendation based on current signals.
-      const imp = Number(sig.importance_score || 0);
-      const conf = Number(sig.confidence_score || 0);
-      const stab = Number(sig.stability_score || 0);
-      const vol = Number(sig.volatility_score || 0);
-      const reuse = Number(sig.reuse_count || 0);
-      let recoText = '';
-      if ((layer === 'instant' || layer === 'short') && imp >= 0.75 && conf >= 0.70 && stab >= 0.70 && vol <= 0.55) {
-        recoText = `Recommendation: promote to long (imp≥0.75, conf≥0.70, stab≥0.70, vol≤0.55).`;
-      } else if (layer === 'long' && reuse <= 1 && (vol >= 0.75 || stab <= 0.45)) {
-        recoText = `Recommendation: demote to short (reuse≤1 and (vol≥0.75 or stab≤0.45)).`;
-      } else if (layer !== 'archive' && stab >= 0.90 && reuse >= 3 && vol <= 0.30) {
-        recoText = `Recommendation: consider archiving a stable reference snapshot.`;
-      }
-      reco.textContent = recoText;
+      if (reco) reco.textContent = 'Recommendation: analyzing...';
+      if (recoExplain) recoExplain.textContent = '';
+      await loadGovernanceExplain(m.id);
 
       showDrawer(true);
+    }
+
+    async function loadGovernanceExplain(memoryId) {
+      const reco = document.getElementById('dReco');
+      const recoExplain = document.getElementById('dRecoExplain');
+      const d = await jget('/api/governance/explain?id=' + encodeURIComponent(memoryId) + '&adaptive=1&days=14');
+      if (!d.ok) {
+        if (reco) reco.textContent = 'Recommendation: unavailable';
+        if (recoExplain) recoExplain.textContent = String(d.error || 'governance explain failed');
+        return;
+      }
+      const ex = d.explain || {};
+      const action = String(ex.action || 'keep');
+      const reason = String(ex.reason || '');
+      let title = 'Recommendation: keep';
+      if (action === 'promote') title = 'Recommendation: promote to long';
+      if (action === 'demote') title = 'Recommendation: demote to short';
+      if (action === 'archive_hint') title = 'Recommendation: consider archive snapshot';
+      if (reco) reco.textContent = title + (reason ? (' — ' + reason) : '');
+      const th = ex.thresholds || {};
+      const ck = ex.checks || {};
+      const p = ck.promote || {};
+      const dm = ck.demote || {};
+      const lines = [
+        `thresholds: p_imp=${Number(th.p_imp || 0).toFixed(2)} p_conf=${Number(th.p_conf || 0).toFixed(2)} p_stab=${Number(th.p_stab || 0).toFixed(2)} p_vol=${Number(th.p_vol || 0).toFixed(2)} d_vol=${Number(th.d_vol || 0).toFixed(2)} d_stab=${Number(th.d_stab || 0).toFixed(2)} d_reuse=${th.d_reuse ?? 1}`,
+        `promote checks: layer=${!!p.layer_ok} imp=${!!p.importance_ok} conf=${!!p.confidence_ok} stab=${!!p.stability_ok} vol=${!!p.volatility_ok}`,
+        `demote checks: layer=${!!dm.layer_ok} vol_or_stab=${!!dm.volatility_or_stability_ok} reuse=${!!dm.reuse_ok}`,
+        `adaptive: ${d.adaptive ? 'on' : 'off'} (${d.days || 14}d window)`,
+      ];
+      if (recoExplain) recoExplain.textContent = lines.join('\n');
+    }
+
+    async function runHealthCheck() {
+      const out = document.getElementById('healthOut');
+      if (out) out.textContent = 'running...';
+      const d = await jget('/api/health/check');
+      if (!out) return;
+      if (!d.ok) {
+        out.textContent = String(d.error || 'health check failed');
+        return;
+      }
+      const lvl = String(d.health_level || 'ok').toUpperCase();
+      const storage = d.storage || {};
+      const proc = d.process || {};
+      const daemon = d.daemon || {};
+      const diag = d.diagnosis || {};
+      out.textContent = [
+        `level=${lvl} checked_at=${d.checked_at || ''}`,
+        `sqlite_ok=${!!storage.sqlite_ok} sqlite_path=${storage.sqlite_path || ''}`,
+        `fds_open=${proc.fds_open ?? '-'} soft=${proc.fd_soft_limit ?? '-'} hard=${proc.fd_hard_limit ?? '-'} ratio=${proc.fd_ratio == null ? '-' : Number(proc.fd_ratio).toFixed(2)}`,
+        `daemon running=${!!daemon.running} enabled=${!!daemon.enabled} success=${daemon.success_count || 0} failure=${daemon.failure_count || 0} error_kind=${daemon.last_error_kind || 'none'}`,
+        `issues: ${(diag.issues || []).join(' | ') || '(none)'}`,
+        `actions: ${(diag.actions || []).join(' | ') || '(none)'}`,
+      ].join('\n');
     }
 
     function authHeaders(base) {
@@ -3057,6 +3111,8 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnDaemonOn').onclick = () => toggleDaemon(true);
       document.getElementById('btnDaemonOff').onclick = () => toggleDaemon(false);
       document.getElementById('btnConflictRecovery').onclick = () => runConflictRecovery();
+      const bHealth = document.getElementById('btnHealthCheck');
+      if (bHealth) bHealth.onclick = () => runHealthCheck();
 	          document.getElementById('btnProjectAttach').onclick = () => attachProject();
 	          document.getElementById('btnProjectDetach').onclick = () => detachProject();
 	          document.getElementById('btnMemReload').onclick = () => loadMem();
@@ -3132,9 +3188,11 @@ HTML_PAGE = """<!doctype html>
 		      const bEdit = document.getElementById('btnEdit');
 		      const bSave = document.getElementById('btnSave');
 		      const bCancel = document.getElementById('btnCancel');
+          const bExplain = document.getElementById('btnExplainReco');
 		      if (bEdit) bEdit.onclick = () => setDrawerEditMode(true);
 		      if (bCancel) bCancel.onclick = () => setDrawerEditMode(false);
 		      if (bSave) bSave.onclick = () => saveDrawerEdit();
+          if (bExplain) bExplain.onclick = async () => { if (drawerMem && drawerMem.id) await loadGovernanceExplain(drawerMem.id); };
 		      const mo = document.getElementById('modalOverlay');
 	      if (mo) mo.onclick = () => { showWsModal(false); clearWsHash(); };
 	      const mclose = document.getElementById('btnWsModalClose');
@@ -3558,6 +3616,7 @@ HTML_PAGE = """<!doctype html>
         loadCfg();
         loadMem();
         loadDaemon();
+        runHealthCheck();
         loadLayerStats();
         loadInsights();
         loadProjects();
@@ -3781,6 +3840,170 @@ def _detach_project_in_webui(project_path: str) -> dict[str, Any]:
                 fp.unlink()
                 removed.append(str(fp))
     return {"ok": True, "project_path": str(project), "removed": removed}
+
+
+def _safe_open_fd_count() -> int | None:
+    # /dev/fd is available on macOS/Linux and gives a cheap FD usage snapshot.
+    try:
+        return max(0, len(os.listdir("/dev/fd")) - 1)
+    except Exception:
+        return None
+
+
+def _safe_fd_limits() -> tuple[int | None, int | None]:
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        return int(soft), int(hard)
+    except Exception:
+        return None, None
+
+
+def _evaluate_governance_action(
+    *,
+    layer: str,
+    signals: dict[str, Any],
+    thresholds: dict[str, Any],
+) -> dict[str, Any]:
+    imp = float(signals.get("importance_score", 0.0) or 0.0)
+    conf = float(signals.get("confidence_score", 0.0) or 0.0)
+    stab = float(signals.get("stability_score", 0.0) or 0.0)
+    vol = float(signals.get("volatility_score", 0.0) or 0.0)
+    reuse = int(signals.get("reuse_count", 0) or 0)
+
+    p_imp = float(thresholds.get("p_imp", 0.75))
+    p_conf = float(thresholds.get("p_conf", 0.65))
+    p_stab = float(thresholds.get("p_stab", 0.65))
+    p_vol = float(thresholds.get("p_vol", 0.65))
+    d_vol = float(thresholds.get("d_vol", 0.75))
+    d_stab = float(thresholds.get("d_stab", 0.45))
+    d_reuse = int(thresholds.get("d_reuse", 1))
+
+    checks = {
+        "promote": {
+            "layer_ok": layer in {"instant", "short"},
+            "importance_ok": imp >= p_imp,
+            "confidence_ok": conf >= p_conf,
+            "stability_ok": stab >= p_stab,
+            "volatility_ok": vol <= p_vol,
+        },
+        "demote": {
+            "layer_ok": layer == "long",
+            "volatility_or_stability_ok": (vol >= d_vol) or (stab <= d_stab),
+            "reuse_ok": reuse <= d_reuse,
+        },
+    }
+    promote_ok = all(bool(v) for v in checks["promote"].values())
+    demote_ok = all(bool(v) for v in checks["demote"].values())
+
+    action = "keep"
+    reason = "Signals do not cross promote/demote thresholds."
+    if promote_ok:
+        action = "promote"
+        reason = "Meets all promote thresholds."
+    elif demote_ok:
+        action = "demote"
+        reason = "Meets demote thresholds (high volatility/low stability + low reuse)."
+    elif layer != "archive" and stab >= 0.90 and reuse >= 3 and vol <= 0.30:
+        action = "archive_hint"
+        reason = "Highly stable and reused with low volatility; archive snapshot may help curation."
+
+    return {
+        "action": action,
+        "reason": reason,
+        "checks": checks,
+        "thresholds": {
+            "p_imp": p_imp,
+            "p_conf": p_conf,
+            "p_stab": p_stab,
+            "p_vol": p_vol,
+            "d_vol": d_vol,
+            "d_stab": d_stab,
+            "d_reuse": d_reuse,
+        },
+        "signals": {
+            "importance_score": imp,
+            "confidence_score": conf,
+            "stability_score": stab,
+            "volatility_score": vol,
+            "reuse_count": reuse,
+        },
+    }
+
+
+def _run_health_check(paths, daemon_state: dict[str, Any]) -> dict[str, Any]:
+    checked_at = utc_now()
+    db_ok = False
+    db_error = ""
+    db_exists = bool(paths.sqlite_path.exists())
+    try:
+        with sqlite3.connect(paths.sqlite_path, timeout=2.0) as conn:
+            conn.execute("SELECT 1").fetchone()
+        db_ok = True
+    except Exception as exc:
+        db_ok = False
+        db_error = str(exc)
+
+    fds_open = _safe_open_fd_count()
+    fd_soft, fd_hard = _safe_fd_limits()
+    fd_ratio = None
+    if fds_open is not None and fd_soft and fd_soft > 0:
+        fd_ratio = float(fds_open) / float(fd_soft)
+
+    issues: list[str] = []
+    actions: list[str] = []
+    level = "ok"
+    if not db_ok:
+        level = "error"
+        issues.append(f"sqlite unavailable: {db_error or 'open failed'}")
+        actions.append("check sqlite path permissions and file locks")
+    if fds_open is not None and fd_soft and fds_open >= int(fd_soft * 0.80):
+        if level != "error":
+            level = "warn"
+        issues.append(f"file descriptors high: {fds_open}/{fd_soft}")
+        actions.append("inspect daemon logs for fd leak and reduce maintenance load temporarily")
+    if str(daemon_state.get("last_error_kind", "none")) not in {"none", ""}:
+        if level == "ok":
+            level = "warn"
+        issues.append(
+            f"daemon last_error_kind={daemon_state.get('last_error_kind')} last_error={daemon_state.get('last_error','')}"
+        )
+        actions.append(str(daemon_state.get("remediation_hint") or "check daemon failure details"))
+
+    return {
+        "ok": True,
+        "checked_at": checked_at,
+        "health_level": level,
+        "storage": {
+            "sqlite_path": str(paths.sqlite_path),
+            "sqlite_exists": db_exists,
+            "sqlite_ok": db_ok,
+            "sqlite_error": db_error,
+            "markdown_root_exists": bool(paths.markdown_root.exists()),
+            "jsonl_root_exists": bool(paths.jsonl_root.exists()),
+        },
+        "process": {
+            "threads": int(threading.active_count()),
+            "fds_open": fds_open,
+            "fd_soft_limit": fd_soft,
+            "fd_hard_limit": fd_hard,
+            "fd_ratio": fd_ratio,
+        },
+        "daemon": {
+            "running": bool(daemon_state.get("running", False)),
+            "enabled": bool(daemon_state.get("enabled", False)),
+            "cycles": int(daemon_state.get("cycles", 0)),
+            "success_count": int(daemon_state.get("success_count", 0)),
+            "failure_count": int(daemon_state.get("failure_count", 0)),
+            "last_success_at": str(daemon_state.get("last_success_at", "")),
+            "last_failure_at": str(daemon_state.get("last_failure_at", "")),
+            "last_error_kind": str(daemon_state.get("last_error_kind", "")),
+            "last_error": str(daemon_state.get("last_error", "")),
+        },
+        "diagnosis": {
+            "issues": issues,
+            "actions": actions,
+        },
+    }
 
 
 def _is_local_bind_host(host: str) -> bool:
@@ -4099,6 +4322,13 @@ def run_webui(
                 self._send_json({"ok": True})
                 return
 
+            if parsed.path == "/api/health/check":
+                try:
+                    self._send_json(_run_health_check(paths, daemon_state))
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
             if parsed.path == "/api/version":
                 self._send_json(
                     {
@@ -4345,6 +4575,91 @@ def run_webui(
                             },
                             "promote": pack(promote),
                             "demote": pack(demote),
+                        }
+                    )
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/governance/explain":
+                q = parse_qs(parsed.query)
+                mem_id = q.get("id", [""])[0].strip()
+                adaptive = str(q.get("adaptive", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
+                days = max(1, min(60, int(float(q.get("days", ["14"])[0]))))
+                if not mem_id:
+                    self._send_json({"ok": False, "error": "missing id"}, 400)
+                    return
+                try:
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        row = conn.execute(
+                            """
+                            SELECT id, layer,
+                                   importance_score, confidence_score, stability_score, reuse_count, volatility_score,
+                                   source_json, scope_json
+                            FROM memories
+                            WHERE id = ?
+                            """,
+                            (mem_id,),
+                        ).fetchone()
+                    if not row:
+                        self._send_json({"ok": False, "error": "not found"}, 404)
+                        return
+
+                    source = json.loads(row["source_json"] or "{}")
+                    scope = json.loads(row["scope_json"] or "{}")
+                    project_id = str(scope.get("project_id", "") or "")
+                    session_id = str(source.get("session_id", "") or "")
+                    thresholds: dict[str, Any] = {
+                        "p_imp": 0.75,
+                        "p_conf": 0.65,
+                        "p_stab": 0.65,
+                        "p_vol": 0.65,
+                        "d_vol": 0.75,
+                        "d_stab": 0.45,
+                        "d_reuse": 1,
+                    }
+                    quantiles: dict[str, Any] = {}
+                    if adaptive:
+                        inf = infer_adaptive_governance_thresholds(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            project_id=project_id,
+                            session_id=session_id,
+                            days=days,
+                            q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
+                            q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
+                            q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
+                            q_promote_vol=float(cfg.get("daemon", {}).get("adaptive_q_promote_vol", 0.42)),
+                            q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
+                            q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
+                            q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
+                        )
+                        if inf.get("ok"):
+                            thresholds = dict(inf.get("thresholds") or thresholds)
+                            quantiles = dict(inf.get("quantiles") or {})
+
+                    explain = _evaluate_governance_action(
+                        layer=str(row["layer"] or ""),
+                        signals={
+                            "importance_score": float(row["importance_score"] or 0.0),
+                            "confidence_score": float(row["confidence_score"] or 0.0),
+                            "stability_score": float(row["stability_score"] or 0.0),
+                            "reuse_count": int(row["reuse_count"] or 0),
+                            "volatility_score": float(row["volatility_score"] or 0.0),
+                        },
+                        thresholds=thresholds,
+                    )
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "memory_id": mem_id,
+                            "project_id": project_id,
+                            "session_id": session_id,
+                            "adaptive": adaptive,
+                            "days": days,
+                            "quantiles": quantiles,
+                            "explain": explain,
                         }
                     )
                 except Exception as exc:  # pragma: no cover

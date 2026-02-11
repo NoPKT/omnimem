@@ -46,6 +46,8 @@ WebUI provides:
 - Remediation guidance is returned as `remediation_hint` in `/api/daemon`
 - When `last_error_kind=conflict`, WebUI shows a one-click recovery flow (`status -> pull -> push`)
 - Maintenance dashboard summary via `/api/maintenance/summary` (recent runs/decay/promote/demote and event counts)
+- Runtime health diagnosis via `/api/health/check` (sqlite reachability, daemon status, fd pressure)
+- Memory-level governance explainability via `/api/governance/explain?id=<memory_id>&adaptive=1&days=14`
 - Optional approval gate for apply actions: `webui.approval_required=true`
 - Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
 
