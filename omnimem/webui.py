@@ -1039,6 +1039,20 @@ HTML_PAGE = """<!doctype html>
 	  </div>
 
   <script>
+    window.__OM_UI_BOOTSTRAPPED = false;
+    setTimeout(() => {
+      if (window.__OM_UI_BOOTSTRAPPED) return;
+      const id = 'om-ui-script-failed';
+      if (document.getElementById(id)) return;
+      const box = document.createElement('div');
+      box.id = id;
+      box.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;padding:10px 12px;border:1px solid #ef4444;background:#fff5f5;color:#991b1b;border-radius:10px;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;';
+      box.textContent = 'WebUI script failed to initialize. Please hard refresh (Cmd+Shift+R) and ensure you are running the latest local build.';
+      document.body.appendChild(box);
+    }, 1200);
+  </script>
+
+  <script>
     const I18N = {
       en: {
         title: 'OmniMem WebUI', subtitle_simple: 'Simple mode: Status & Actions / Insights / Memory', subtitle_adv: 'Advanced mode: full console', language: 'Language',
@@ -4257,6 +4271,7 @@ HTML_PAGE = """<!doctype html>
         loadLayerStats();
         loadInsights();
         loadProjects();
+        window.__OM_UI_BOOTSTRAPPED = true;
   </script>
 </body>
 </html>
