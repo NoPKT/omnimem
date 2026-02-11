@@ -179,6 +179,13 @@ Core merge mode eval (concat vs synthesize vs semantic):
 python3 scripts/eval_core_merge.py --project-id OM --modes concat,synthesize,semantic --max-merged-lines 6
 ```
 
+Tune `core-merge-suggest` defaults from the merge eval report:
+
+```bash
+python3 scripts/tune_core_merge_from_eval.py --report eval/core_merge_report_om.json
+python3 scripts/tune_core_merge_from_eval.py --report eval/core_merge_report_om.json --dry-run
+```
+
 Single turn:
 
 ```bash
@@ -240,6 +247,21 @@ Tune daemon adaptive governance quantiles from the eval report:
 
 ```bash
 PYTHONPATH=. python3 scripts/tune_governance_from_eval.py --report eval/retrieval_report_om.json
+```
+
+`core-merge-suggest` also supports config-driven defaults (overridden by CLI flags):
+
+```json
+{
+  "core_merge": {
+    "default_limit": 120,
+    "default_min_conflicts": 2,
+    "default_merge_mode": "semantic",
+    "default_max_merged_lines": 6,
+    "default_min_apply_quality": 0.3,
+    "default_loser_action": "deprioritize"
+  }
+}
 ```
 
 Enable a temporary preview-only governance window:

@@ -112,6 +112,41 @@ def cfg_path_arg(args: argparse.Namespace) -> Path | None:
     return Path(raw) if raw else None
 
 
+def _core_merge_defaults(cfg: dict[str, object]) -> dict[str, object]:
+    raw = cfg.get("core_merge", {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _int(name: str, default: int, lo: int, hi: int) -> int:
+        try:
+            v = int(float(raw.get(name, default)))
+        except Exception:
+            v = int(default)
+        return max(lo, min(hi, v))
+
+    def _float(name: str, default: float, lo: float, hi: float) -> float:
+        try:
+            v = float(raw.get(name, default))
+        except Exception:
+            v = float(default)
+        return max(lo, min(hi, v))
+
+    mode = str(raw.get("default_merge_mode", "synthesize") or "synthesize").strip().lower()
+    if mode not in {"synthesize", "semantic", "concat"}:
+        mode = "synthesize"
+    loser_action = str(raw.get("default_loser_action", "none") or "none").strip().lower()
+    if loser_action not in {"none", "deprioritize", "expire"}:
+        loser_action = "none"
+    return {
+        "limit": _int("default_limit", 120, 1, 500),
+        "min_conflicts": _int("default_min_conflicts", 2, 2, 12),
+        "loser_action": loser_action,
+        "min_apply_quality": _float("default_min_apply_quality", 0.0, 0.0, 1.0),
+        "merge_mode": mode,
+        "max_merged_lines": _int("default_max_merged_lines", 8, 3, 20),
+    }
+
+
 def cli_error_hint(msg: str) -> str:
     m = (msg or "").lower()
     if "readonly database" in m or "attempt to write a readonly database" in m or "unable to open database file" in m:
@@ -420,18 +455,39 @@ def cmd_core_list(args: argparse.Namespace) -> int:
 def cmd_core_merge_suggest(args: argparse.Namespace) -> int:
     cfg = load_config(cfg_path_arg(args))
     paths = resolve_paths(cfg)
+    cm = _core_merge_defaults(cfg)
     out = suggest_core_block_merges(
         paths=paths,
         schema_sql_path=schema_sql_path(),
         project_id=str(args.project_id or "").strip(),
         session_id=str(args.session_id or "").strip(),
-        limit=int(getattr(args, "limit", 120)),
-        min_conflicts=int(getattr(args, "min_conflicts", 2)),
+        limit=int(getattr(args, "limit", None) if getattr(args, "limit", None) is not None else cm["limit"]),
+        min_conflicts=int(
+            getattr(args, "min_conflicts", None)
+            if getattr(args, "min_conflicts", None) is not None
+            else cm["min_conflicts"]
+        ),
         apply=bool(getattr(args, "apply", False)),
-        loser_action=str(getattr(args, "loser_action", "none") or "none"),
-        min_apply_quality=float(getattr(args, "min_apply_quality", 0.0)),
-        merge_mode=str(getattr(args, "merge_mode", "synthesize") or "synthesize"),
-        max_merged_lines=int(getattr(args, "max_merged_lines", 8)),
+        loser_action=str(
+            getattr(args, "loser_action", None)
+            if getattr(args, "loser_action", None) is not None
+            else cm["loser_action"]
+        ),
+        min_apply_quality=float(
+            getattr(args, "min_apply_quality", None)
+            if getattr(args, "min_apply_quality", None) is not None
+            else cm["min_apply_quality"]
+        ),
+        merge_mode=str(
+            getattr(args, "merge_mode", None)
+            if getattr(args, "merge_mode", None) is not None
+            else cm["merge_mode"]
+        ),
+        max_merged_lines=int(
+            getattr(args, "max_merged_lines", None)
+            if getattr(args, "max_merged_lines", None) is not None
+            else cm["max_merged_lines"]
+        ),
         session_actor=str(getattr(args, "session_actor", "system") or "system"),
         tool="cli",
     )
@@ -2144,12 +2200,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_core_merge.add_argument("--project-id", default="")
     p_core_merge.add_argument("--session-id", default="")
     p_core_merge.add_argument("--session-actor", default="system")
-    p_core_merge.add_argument("--limit", type=int, default=120)
-    p_core_merge.add_argument("--min-conflicts", type=int, default=2)
-    p_core_merge.add_argument("--loser-action", choices=["none", "deprioritize", "expire"], default="none")
-    p_core_merge.add_argument("--min-apply-quality", type=float, default=0.0)
-    p_core_merge.add_argument("--merge-mode", choices=["synthesize", "semantic", "concat"], default="synthesize")
-    p_core_merge.add_argument("--max-merged-lines", type=int, default=8)
+    p_core_merge.add_argument("--limit", type=int, default=None)
+    p_core_merge.add_argument("--min-conflicts", type=int, default=None)
+    p_core_merge.add_argument("--loser-action", choices=["none", "deprioritize", "expire"], default=None)
+    p_core_merge.add_argument("--min-apply-quality", type=float, default=None)
+    p_core_merge.add_argument("--merge-mode", choices=["synthesize", "semantic", "concat"], default=None)
+    p_core_merge.add_argument("--max-merged-lines", type=int, default=None)
     p_core_merge.add_argument("--apply", action="store_true", help="write suggested merged core blocks")
     p_core_merge.set_defaults(func=cmd_core_merge_suggest)
 
