@@ -108,6 +108,12 @@ omnimem stop
 omnimem stop --all
 ```
 
+Run one-shot diagnostics (webui/daemon/sync + suggested commands):
+
+```bash
+omnimem doctor
+```
+
 Single turn:
 
 ```bash

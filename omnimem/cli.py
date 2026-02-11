@@ -41,6 +41,7 @@ from .core import (
     parse_ref,
     resolve_paths,
     run_sync_daemon,
+    sync_error_hint,
     sync_git,
     verify_storage,
     write_memory,
@@ -1385,6 +1386,150 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def _doctor_actions(facts: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    webui = facts.get("webui") if isinstance(facts.get("webui"), dict) else {}
+    daemon = facts.get("daemon") if isinstance(facts.get("daemon"), dict) else {}
+    sync = facts.get("sync") if isinstance(facts.get("sync"), dict) else {}
+    host = str(webui.get("host", "127.0.0.1"))
+    port = int(webui.get("port", 8765) or 8765)
+
+    if bool(webui.get("pid_alive", False)) and not bool(webui.get("reachable", False)):
+        actions.append(f"omnimem stop --host {host} --port {port}")
+        actions.append(f"omnimem start --host {host} --port {port}")
+    elif not bool(webui.get("reachable", False)):
+        actions.append(f"omnimem start --host {host} --port {port}")
+
+    if bool(daemon) and not bool(daemon.get("enabled", True)):
+        actions.append(f"omnimem start --host {host} --port {port}")
+    err_kind = str(daemon.get("last_error_kind", "none") or "none")
+    if err_kind not in {"none", ""}:
+        actions.append("omnimem sync --mode github-status")
+        if err_kind in {"network", "unknown"}:
+            actions.append("omnimem sync --mode github-pull")
+        if err_kind == "conflict":
+            actions.append("omnimem sync --mode github-pull  # then resolve conflicts and push")
+
+    if not bool(sync.get("remote_url_configured", False)):
+        actions.append("omnimem sync --mode github-bootstrap --remote-url <git-url>")
+    if bool(sync.get("dirty", False)):
+        actions.append("omnimem sync --mode github-status")
+
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for a in actions:
+        k = a.strip()
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        dedup.append(k)
+    return dedup
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    host = str(getattr(args, "host", "127.0.0.1"))
+    port = int(getattr(args, "port", 8765))
+    runtime_dir = _resolve_shared_runtime_dir(fallback_home=paths.root)
+
+    verify = verify_storage(paths, schema_sql_path())
+    pid = _read_webui_pid(runtime_dir, host=host, port=port)
+    pid_alive = _pid_alive(pid) if pid > 0 else False
+    reachable = webui_alive(host, port)
+
+    lease_alive = 0
+    lease_total = 0
+    lease_dir = _webui_leases_dir(runtime_dir, host=host, port=port)
+    if lease_dir.exists():
+        for fp in lease_dir.glob("lease-*.json"):
+            lease_total += 1
+            try:
+                obj = json.loads(fp.read_text(encoding="utf-8"))
+                if _pid_alive(int(obj.get("parent_pid") or 0)):
+                    lease_alive += 1
+            except Exception:
+                continue
+
+    daemon_info: dict[str, Any] = {}
+    if reachable:
+        try:
+            daemon_url = f"http://{host}:{port}/api/daemon"
+            with urllib.request.urlopen(daemon_url, timeout=1.2) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            d = json.loads(raw) if raw else {}
+            if isinstance(d, dict):
+                daemon_info = {
+                    "enabled": bool(d.get("enabled", False)),
+                    "running": bool(d.get("running", False)),
+                    "last_error_kind": str(d.get("last_error_kind", "none")),
+                    "remediation_hint": str(d.get("remediation_hint", "")),
+                }
+        except Exception as exc:
+            daemon_info = {"error": str(exc), "last_error_kind": "unknown", "enabled": False, "running": False}
+
+    sync_cfg = cfg.get("sync", {}).get("github", {})
+    remote_name = str(sync_cfg.get("remote_name", "origin"))
+    branch = str(sync_cfg.get("branch", "main"))
+    remote_url = str(sync_cfg.get("remote_url", "") or "")
+    dirty = False
+    try:
+        cp = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=str(paths.root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        dirty = bool((cp.stdout or "").strip())
+    except Exception:
+        dirty = False
+
+    facts = {
+        "webui": {
+            "host": host,
+            "port": port,
+            "reachable": reachable,
+            "pid": pid,
+            "pid_alive": pid_alive,
+            "managed": _webui_managed_marker(runtime_dir, host=host, port=port).exists(),
+            "leases_alive": lease_alive,
+            "leases_total": lease_total,
+            "runtime_dir": str(runtime_dir),
+        },
+        "daemon": daemon_info,
+        "sync": {
+            "remote_name": remote_name,
+            "branch": branch,
+            "remote_url_configured": bool(remote_url.strip()),
+            "dirty": dirty,
+        },
+    }
+    actions = _doctor_actions(facts)
+    issues: list[str] = []
+    if not verify.get("ok", False):
+        issues.append("storage verification failed")
+    if pid_alive and not reachable:
+        issues.append("webui pid alive but endpoint unreachable")
+    if daemon_info and str(daemon_info.get("last_error_kind", "none")) not in {"none", ""}:
+        ek = str(daemon_info.get("last_error_kind", "unknown"))
+        issues.append(f"daemon last_error_kind={ek}: {sync_error_hint(ek)}")
+    if not bool(facts["sync"]["remote_url_configured"]):
+        issues.append("sync remote_url not configured")
+    if bool(dirty):
+        issues.append("git worktree has uncommitted changes")
+
+    out = {
+        "ok": len(issues) == 0,
+        "facts": facts,
+        "verify": verify,
+        "issues": issues,
+        "actions": actions,
+    }
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omnimem")
     p.add_argument("--config", dest="global_config", help="path to omnimem config json")
@@ -1661,6 +1806,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_stop.add_argument("--port", type=int, default=8765)
     p_stop.add_argument("--all", action="store_true", help="stop all known sidecar endpoints and cleanup runtime leases")
     p_stop.set_defaults(func=cmd_stop)
+
+    p_doctor = sub.add_parser("doctor", help="diagnose webui/daemon/sync health and suggest fixes")
+    p_doctor.add_argument("--config", help="path to omnimem config json")
+    p_doctor.add_argument("--host", default="127.0.0.1")
+    p_doctor.add_argument("--port", type=int, default=8765)
+    p_doctor.set_defaults(func=cmd_doctor)
 
     p_cfg_path = sub.add_parser("config-path", help="print active config path")
     p_cfg_path.add_argument("--config", help="path to omnimem config json")
