@@ -512,6 +512,11 @@ HTML_PAGE = """<!doctype html>
         <div class=\"card\">
           <h3>Memory Quality (Week)</h3>
           <div class=\"small\">Conflict/reuse/decay and freshness metrics with week-over-week delta.</div>
+          <div class=\"row-btn\" style=\"margin-top:8px\">
+            <button id=\"btnQualityRefresh\" class=\"secondary\" style=\"margin-top:0\">Refresh Quality</button>
+            <button id=\"btnQualityConsPreview\" class=\"secondary\" style=\"margin-top:0\">Consolidate Preview</button>
+            <button id=\"btnQualityAutoPreview\" class=\"secondary\" style=\"margin-top:0\">Auto Maintain Preview</button>
+          </div>
           <div id=\"insQuality\" class=\"small\"></div>
         </div>
         <div class=\"card\">
@@ -963,8 +968,10 @@ HTML_PAGE = """<!doctype html>
       <div id=\"dMoveHistory\" class=\"small\"></div>
       <div class=\"row-btn\" style=\"margin-top:8px\">
         <input id=\"dRollbackTime\" placeholder=\"2026-02-11T12:00:00+00:00\" />
+        <button id=\"btnRollbackPreview\" class=\"secondary\" style=\"margin-top:0\">Preview Rollback</button>
         <button id=\"btnRollbackToTime\" class=\"danger\" style=\"margin-top:0\">Rollback To Time</button>
       </div>
+      <pre id=\"dRollbackPreview\" class=\"small mono\" style=\"white-space:pre-wrap; margin-top:8px\"></pre>
 	      <div class=\"divider\"></div>
 	      <div class=\"small\"><b>Body</b></div>
 	      <div id=\"dEditBox\" style=\"margin-top:8px; display:none\">
@@ -1205,6 +1212,7 @@ HTML_PAGE = """<!doctype html>
           localStorage.setItem('omnimem.route_templates', JSON.stringify(items || []));
         } catch (_) {}
       }
+      let remoteRouteTemplates = [];
       function refreshRouteTemplateSelect() {
         const sel = document.getElementById('boardTemplateSelect');
         if (!sel) return;
@@ -1214,8 +1222,15 @@ HTML_PAGE = """<!doctype html>
           { name: 'runbook-op', route: 'procedural' },
         ];
         const custom = safeLoadRouteTemplates();
-        const all = base.concat(custom);
+        const all = base.concat(remoteRouteTemplates || []).concat(custom);
         sel.innerHTML = all.map(x => `<option value="${escHtml(x.name)}|${escHtml(x.route)}">${escHtml(x.name)} → ${escHtml(x.route)}</option>`).join('');
+      }
+
+      async function loadRouteTemplatesRemote() {
+        const d = await jget('/api/route-templates');
+        if (!d.ok) return;
+        remoteRouteTemplates = Array.isArray(d.items) ? d.items : [];
+        refreshRouteTemplateSelect();
       }
 	    function safeGetWorkset() {
 	      try {
@@ -1597,10 +1612,43 @@ HTML_PAGE = """<!doctype html>
         return;
       }
       toast('Memory', `rolled back ${d.rolled_back || 0} move(s)`, true);
+      const pv = document.getElementById('dRollbackPreview');
+      if (pv) {
+        const before = d.before_layer || '';
+        const after = d.after_layer || '';
+        const snap = d.snapshot_memory_id ? `snapshot=${d.snapshot_memory_id}` : 'snapshot=none';
+        pv.textContent = `before=${before}\nafter=${after}\nrolled_back=${d.rolled_back || 0}\n${snap}`;
+      }
       await loadInsights();
       await loadMem();
       await loadLayerStats();
       await openMemory(drawerMem.id);
+    }
+
+    async function previewRollbackDrawerMemory() {
+      if (!drawerMem || !drawerMem.id) return;
+      const t = String(document.getElementById('dRollbackTime')?.value || '').trim();
+      const pv = document.getElementById('dRollbackPreview');
+      if (pv) pv.textContent = 'previewing...';
+      if (!t) {
+        if (pv) pv.textContent = 'rollback time is required';
+        return;
+      }
+      const d = await jget('/api/memory/rollback-preview?id=' + encodeURIComponent(drawerMem.id) + '&to_event_time=' + encodeURIComponent(t));
+      if (!d.ok) {
+        if (pv) pv.textContent = d.error || 'rollback preview failed';
+        return;
+      }
+      const lines = [
+        `before=${d.before_layer || ''}`,
+        `after(predicted)=${d.after_layer || ''}`,
+        `moves_to_undo=${(d.items || []).length}`,
+      ];
+      for (const x of (d.items || []).slice(0, 12)) {
+        lines.push(`- ${x.event_time || ''} ${x.to_layer || '?'} -> ${x.from_layer || '?'}`);
+      }
+      if ((d.items || []).length > 12) lines.push(`... and ${(d.items || []).length - 12} more`);
+      if (pv) pv.textContent = lines.join('\n');
     }
 
     async function loadGovernanceExplain(memoryId) {
@@ -2029,7 +2077,7 @@ HTML_PAGE = """<!doctype html>
       toast('Batch', `template applied: ${t.name} -> ${t.route}`, true);
     }
 
-    function saveRouteTemplate() {
+    async function saveRouteTemplate() {
       const name = String(document.getElementById('boardTemplateName')?.value || '').trim();
       const route = String(document.getElementById('boardTemplateRoute')?.value || '').trim();
       if (!name) {
@@ -2045,6 +2093,10 @@ HTML_PAGE = """<!doctype html>
       const next = { name, route };
       if (idx >= 0) items[idx] = next; else items.push(next);
       safeSaveRouteTemplates(items);
+      try {
+        const r = await jpost('/api/route-templates', { items: [{ name, route }], mode: 'upsert' });
+        if (r && r.ok && Array.isArray(r.items)) remoteRouteTemplates = r.items;
+      } catch (_) {}
       refreshRouteTemplateSelect();
       const sel = document.getElementById('boardTemplateSelect');
       if (sel) sel.value = `${name}|${route}`;
@@ -3426,8 +3478,17 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnConflictRecovery').onclick = () => runConflictRecovery();
       const bHealth = document.getElementById('btnHealthCheck');
       if (bHealth) bHealth.onclick = () => runHealthCheck();
-      const bGuide = document.getElementById('btnGuideRun');
-      if (bGuide) bGuide.onclick = () => runGuidedCheck();
+	      const bGuide = document.getElementById('btnGuideRun');
+	      if (bGuide) bGuide.onclick = () => runGuidedCheck();
+      const bQ = document.getElementById('btnQualityRefresh');
+      if (bQ) bQ.onclick = () => loadQualitySummary(
+        document.getElementById('insProjectId')?.value?.trim() || '',
+        document.getElementById('insSessionId')?.value?.trim() || ''
+      );
+      const bQC = document.getElementById('btnQualityConsPreview');
+      if (bQC) bQC.onclick = () => runConsolidate(true);
+      const bQA = document.getElementById('btnQualityAutoPreview');
+      if (bQA) bQA.onclick = () => runAutoMaintenance(true);
 	          document.getElementById('btnProjectAttach').onclick = () => attachProject();
 	          document.getElementById('btnProjectDetach').onclick = () => detachProject();
 	          document.getElementById('btnMemReload').onclick = () => loadMem();
@@ -3510,6 +3571,7 @@ HTML_PAGE = """<!doctype html>
           const bSem = document.getElementById('btnClassifySemantic');
           const bPro = document.getElementById('btnClassifyProcedural');
           const bRollback = document.getElementById('btnRollbackToTime');
+          const bRollbackPreview = document.getElementById('btnRollbackPreview');
 		      if (bEdit) bEdit.onclick = () => setDrawerEditMode(true);
 		      if (bCancel) bCancel.onclick = () => setDrawerEditMode(false);
 		      if (bSave) bSave.onclick = () => saveDrawerEdit();
@@ -3519,6 +3581,7 @@ HTML_PAGE = """<!doctype html>
           if (bSem) bSem.onclick = () => classifyDrawerMemory('semantic');
           if (bPro) bPro.onclick = () => classifyDrawerMemory('procedural');
           if (bRollback) bRollback.onclick = () => rollbackDrawerMemoryToTime();
+          if (bRollbackPreview) bRollbackPreview.onclick = () => previewRollbackDrawerMemory();
 		      const mo = document.getElementById('modalOverlay');
 	      if (mo) mo.onclick = () => { showWsModal(false); clearWsHash(); };
 	      const mclose = document.getElementById('btnWsModalClose');
@@ -3903,6 +3966,7 @@ HTML_PAGE = """<!doctype html>
         loadBuildInfo();
 	    loadRetrievePrefs();
         refreshRouteTemplateSelect();
+        loadRouteTemplatesRemote();
 		    loadThrFromStorage();
 	    loadLiveFromStorage();
 	    updateBoardToolbar();
@@ -4294,6 +4358,30 @@ def _route_tag(route: str) -> str:
     return f"mem:{route}"
 
 
+def _normalize_route_templates(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for x in raw:
+        if not isinstance(x, dict):
+            continue
+        name = str(x.get("name", "")).strip()
+        route = str(x.get("route", "")).strip().lower()
+        if not name or route not in {"episodic", "semantic", "procedural"}:
+            continue
+        out.append({"name": name, "route": route})
+    # de-dup by name, keep first
+    seen: set[str] = set()
+    uniq: list[dict[str, str]] = []
+    for x in out:
+        key = x["name"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(x)
+    return uniq[:80]
+
+
 def _filter_items_by_route(paths, items: list[dict[str, Any]], route: str) -> list[dict[str, Any]]:
     if route not in {"episodic", "semantic", "procedural"}:
         return items
@@ -4499,6 +4587,45 @@ def _quality_alerts(cur: dict[str, Any], prev: dict[str, Any]) -> list[str]:
     if int(cur.get("reuse_events", 0) or 0) < int(prev.get("reuse_events", 0) or 0):
         alerts.append("reuse decreased week-over-week; tune retrieval route/ranking and refresh links")
     return alerts
+
+
+def _rollback_preview_items(conn: sqlite3.Connection, *, memory_id: str, cutoff_iso: str, limit: int = 200) -> tuple[list[dict[str, Any]], str]:
+    conn.row_factory = sqlite3.Row
+    now_layer = conn.execute("SELECT layer FROM memories WHERE id = ?", (memory_id,)).fetchone()
+    current_layer = str(now_layer["layer"]) if now_layer else ""
+    rows = conn.execute(
+        """
+        SELECT event_id, event_time, payload_json
+        FROM memory_events
+        WHERE memory_id = ?
+          AND event_type = 'memory.promote'
+          AND event_time > ?
+        ORDER BY event_time DESC, event_id DESC
+        LIMIT ?
+        """,
+        (memory_id, cutoff_iso, max(1, min(200, int(limit)))),
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    predicted_layer = current_layer
+    for r in rows:
+        payload = {}
+        try:
+            payload = json.loads(r["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        from_layer = str(payload.get("from_layer", "")).strip()
+        to_layer = str(payload.get("to_layer", "")).strip()
+        if from_layer and to_layer and from_layer != to_layer:
+            predicted_layer = from_layer
+        items.append(
+            {
+                "event_id": str(r["event_id"]),
+                "event_time": str(r["event_time"]),
+                "from_layer": from_layer,
+                "to_layer": to_layer,
+            }
+        )
+    return items, predicted_layer
 
 
 def _is_local_bind_host(host: str) -> bool:
@@ -4836,6 +4963,14 @@ def run_webui(
 
             if parsed.path == "/api/config":
                 self._send_json(_cfg_to_ui(cfg, cfg_path))
+                return
+
+            if parsed.path == "/api/route-templates":
+                try:
+                    items = _normalize_route_templates(cfg.get("webui", {}).get("route_templates", []))
+                    self._send_json({"ok": True, "items": items})
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
 
             if parsed.path == "/api/daemon":
@@ -5318,6 +5453,41 @@ def run_webui(
                             }
                         )
                     self._send_json({"ok": True, "memory_id": mem_id, "items": items})
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/memory/rollback-preview":
+                q = parse_qs(parsed.query)
+                mem_id = q.get("id", [""])[0].strip()
+                to_event_time = q.get("to_event_time", [""])[0].strip()
+                if not mem_id or not to_event_time:
+                    self._send_json({"ok": False, "error": "id and to_event_time are required"}, 400)
+                    return
+                ttxt = to_event_time[:-1] + "+00:00" if to_event_time.endswith("Z") else to_event_time
+                try:
+                    tdt = datetime.fromisoformat(ttxt)
+                    if tdt.tzinfo is None:
+                        tdt = tdt.replace(tzinfo=timezone.utc)
+                    cutoff = tdt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+                except Exception:
+                    self._send_json({"ok": False, "error": "invalid to_event_time (ISO-8601 required)"}, 400)
+                    return
+                try:
+                    with _db_connect() as conn:
+                        rows, predicted = _rollback_preview_items(conn, memory_id=mem_id, cutoff_iso=cutoff)
+                        cur = conn.execute("SELECT layer FROM memories WHERE id = ?", (mem_id,)).fetchone()
+                        before = str(cur["layer"]) if cur else ""
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "memory_id": mem_id,
+                            "to_event_time": cutoff,
+                            "before_layer": before,
+                            "after_layer": predicted,
+                            "items": rows,
+                        }
+                    )
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
@@ -6376,19 +6546,9 @@ def run_webui(
                         self._send_json({"ok": False, "error": "invalid to_event_time (ISO-8601 required)"}, 400)
                         return
                     with _db_connect() as conn:
-                        conn.row_factory = sqlite3.Row
-                        rows = conn.execute(
-                            """
-                            SELECT event_id, event_time, payload_json
-                            FROM memory_events
-                            WHERE memory_id = ?
-                              AND event_type = 'memory.promote'
-                              AND event_time > ?
-                            ORDER BY event_time DESC, event_id DESC
-                            LIMIT 200
-                            """,
-                            (mem_id, cutoff),
-                        ).fetchall()
+                        rows, predicted = _rollback_preview_items(conn, memory_id=mem_id, cutoff_iso=cutoff, limit=200)
+                        cur = conn.execute("SELECT layer FROM memories WHERE id = ?", (mem_id,)).fetchone()
+                        before_layer = str(cur["layer"]) if cur else ""
                     if not rows:
                         self._send_json(
                             {
@@ -6396,25 +6556,57 @@ def run_webui(
                                 "memory_id": mem_id,
                                 "to_event_time": cutoff,
                                 "rolled_back": 0,
+                                "before_layer": before_layer,
+                                "after_layer": before_layer,
                                 "steps": [],
                             }
                         )
                         return
+                    snapshot_id = ""
+                    try:
+                        snap = write_memory(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            layer="short",
+                            kind="summary",
+                            summary=f"Rollback snapshot: {mem_id[:10]}...",
+                            body=(
+                                "Pre-rollback snapshot\n\n"
+                                f"- memory_id: {mem_id}\n"
+                                f"- rollback_to: {cutoff}\n"
+                                f"- before_layer: {before_layer}\n"
+                                f"- predicted_after: {predicted}\n"
+                                f"- moves_to_undo: {len(rows)}\n"
+                            ),
+                            tags=["rollback:snapshot", "audit:webui"],
+                            refs=[],
+                            cred_refs=[],
+                            tool="webui",
+                            account="default",
+                            device="local",
+                            session_id="webui-session",
+                            project_id="OM",
+                            workspace="",
+                            importance=0.6,
+                            confidence=0.85,
+                            stability=0.7,
+                            reuse_count=0,
+                            volatility=0.2,
+                            event_type="memory.write",
+                        )
+                        snapshot_id = str((snap.get("memory") or {}).get("id") or "")
+                    except Exception:
+                        snapshot_id = ""
                     steps: list[dict[str, Any]] = []
                     failed: list[dict[str, Any]] = []
                     for r in rows:
-                        payload = {}
-                        try:
-                            payload = json.loads(r["payload_json"] or "{}")
-                        except Exception:
-                            payload = {}
-                        from_layer = str(payload.get("from_layer", "")).strip()
-                        to_layer = str(payload.get("to_layer", "")).strip()
+                        from_layer = str(r.get("from_layer", "")).strip()
+                        to_layer = str(r.get("to_layer", "")).strip()
                         if not from_layer or not to_layer or from_layer == to_layer:
                             failed.append(
                                 {
-                                    "event_id": str(r["event_id"]),
-                                    "event_time": str(r["event_time"]),
+                                    "event_id": str(r.get("event_id", "")),
+                                    "event_time": str(r.get("event_time", "")),
                                     "error": "invalid payload",
                                 }
                             )
@@ -6432,8 +6624,8 @@ def run_webui(
                         if out.get("ok"):
                             steps.append(
                                 {
-                                    "event_id": str(r["event_id"]),
-                                    "event_time": str(r["event_time"]),
+                                    "event_id": str(r.get("event_id", "")),
+                                    "event_time": str(r.get("event_time", "")),
                                     "undo_to_layer": from_layer,
                                     "undo_from_layer": to_layer,
                                 }
@@ -6441,22 +6633,54 @@ def run_webui(
                         else:
                             failed.append(
                                 {
-                                    "event_id": str(r["event_id"]),
-                                    "event_time": str(r["event_time"]),
+                                    "event_id": str(r.get("event_id", "")),
+                                    "event_time": str(r.get("event_time", "")),
                                     "error": str(out.get("error", "move failed")),
                                 }
                             )
+                    after_layer = before_layer
+                    try:
+                        with _db_connect() as conn2:
+                            conn2.row_factory = sqlite3.Row
+                            rr = conn2.execute("SELECT layer FROM memories WHERE id = ?", (mem_id,)).fetchone()
+                            after_layer = str(rr["layer"]) if rr else before_layer
+                    except Exception:
+                        after_layer = before_layer
                     self._send_json(
                         {
                             "ok": len(failed) == 0,
                             "memory_id": mem_id,
                             "to_event_time": cutoff,
                             "rolled_back": len(steps),
+                            "before_layer": before_layer,
+                            "after_layer": after_layer,
+                            "predicted_after_layer": predicted,
+                            "snapshot_memory_id": snapshot_id,
                             "steps": steps,
                             "failed": failed,
                         },
                         200 if len(failed) == 0 else 400,
                     )
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/route-templates":
+                try:
+                    mode = str(data.get("mode", "upsert")).strip().lower()
+                    items = _normalize_route_templates(data.get("items", []))
+                    cfg.setdefault("webui", {})
+                    existing = _normalize_route_templates(cfg.get("webui", {}).get("route_templates", []))
+                    if mode == "replace":
+                        merged = items
+                    else:
+                        by_name = {str(x["name"]).lower(): dict(x) for x in existing}
+                        for x in items:
+                            by_name[str(x["name"]).lower()] = dict(x)
+                        merged = list(by_name.values())
+                    cfg["webui"]["route_templates"] = merged
+                    save_config(cfg_path, cfg)
+                    self._send_json({"ok": True, "items": merged})
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return

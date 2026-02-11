@@ -11,8 +11,10 @@ from omnimem.webui import (
     _evaluate_governance_action,
     _infer_memory_route,
     _normalize_memory_route,
+    _normalize_route_templates,
     _quality_alerts,
     _quality_window_summary,
+    _rollback_preview_items,
     _run_health_check,
 )
 
@@ -46,6 +48,20 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         )
         self.assertTrue(any("conflicts increased" in x for x in alerts))
         self.assertTrue(any("avg stability is low" in x for x in alerts))
+
+    def test_normalize_route_templates(self) -> None:
+        out = _normalize_route_templates(
+            [
+                {"name": "A", "route": "episodic"},
+                {"name": "a", "route": "semantic"},
+                {"name": "B", "route": "procedural"},
+                {"name": "", "route": "episodic"},
+            ]
+        )
+        self.assertEqual(len(out), 2)
+        names = {x["name"] for x in out}
+        self.assertIn("A", names)
+        self.assertIn("B", names)
 
     def test_evaluate_governance_action_promote(self) -> None:
         out = _evaluate_governance_action(
@@ -156,6 +172,62 @@ class WebUIDiagnosticsTest(unittest.TestCase):
                 )
             self.assertGreaterEqual(int(out.get("writes", 0)), 1)
             self.assertGreater(float(out.get("avg_importance", 0.0)), 0.0)
+
+    def test_rollback_preview_items(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="om-webui-rollback.") as d:
+            root = Path(d)
+            paths = MemoryPaths(
+                root=root,
+                markdown_root=root / "data" / "markdown",
+                jsonl_root=root / "data" / "jsonl",
+                sqlite_path=root / "data" / "omnimem.db",
+            )
+            ensure_storage(paths, _schema_sql_path())
+            out = write_memory(
+                paths=paths,
+                schema_sql_path=_schema_sql_path(),
+                layer="short",
+                kind="note",
+                summary="rb",
+                body="b",
+                tags=[],
+                refs=[],
+                cred_refs=[],
+                tool="test",
+                account="default",
+                device="local",
+                session_id="s-rb",
+                project_id="OM",
+                workspace=str(root),
+                importance=0.8,
+                confidence=0.7,
+                stability=0.6,
+                reuse_count=0,
+                volatility=0.2,
+                event_type="memory.write",
+            )
+            mid = str((out.get("memory") or {}).get("id") or "")
+            from omnimem.core import move_memory_layer
+
+            move_memory_layer(
+                paths=paths,
+                schema_sql_path=_schema_sql_path(),
+                memory_id=mid,
+                new_layer="long",
+                tool="test",
+                account="default",
+                device="local",
+                session_id="s-rb",
+            )
+            with sqlite3.connect(paths.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                items, predicted = _rollback_preview_items(
+                    conn,
+                    memory_id=mid,
+                    cutoff_iso="1970-01-01T00:00:00+00:00",
+                )
+            self.assertGreaterEqual(len(items), 1)
+            self.assertEqual(predicted, "short")
 
 
 if __name__ == "__main__":
