@@ -12,6 +12,7 @@ from omnimem.core import (
     consolidate_memories,
     distill_session_memory,
     infer_adaptive_governance_thresholds,
+    rehearse_memory_traces,
     retrieve_thread,
     weave_links,
     write_memory,
@@ -250,6 +251,65 @@ class CoreMaintenanceTest(unittest.TestCase):
             n_distill = int(conn.execute("SELECT COUNT(*) FROM memory_links WHERE link_type='distill_of'").fetchone()[0] or 0)
         self.assertGreaterEqual(n_temporal, 8)
         self.assertGreaterEqual(n_distill, 1)
+
+    def test_rehearsal_preview_and_apply(self) -> None:
+        ids: list[str] = []
+        for i in range(12):
+            ids.append(
+                self._write(
+                    layer="long" if i % 3 else "short",
+                    summary=f"rehearsal candidate {i}",
+                    session_id="s-rehearse",
+                    importance=min(1.0, 0.45 + (i * 0.04)),
+                    confidence=min(1.0, 0.35 + (i * 0.03)),
+                    stability=min(1.0, 0.30 + (i * 0.02)),
+                    reuse_count=0 if i < 6 else 2,
+                    volatility=max(0.0, 0.85 - (i * 0.03)),
+                )
+            )
+        pre = rehearse_memory_traces(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            days=90,
+            limit=6,
+            dry_run=True,
+        )
+        self.assertTrue(pre.get("ok"))
+        picks = [str(x.get("id") or "") for x in (pre.get("selected") or []) if str(x.get("id") or "")]
+        self.assertGreaterEqual(len(picks), 1)
+
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            before = {
+                str(r[0]): int(r[1])
+                for r in conn.execute(
+                    "SELECT id, reuse_count FROM memories WHERE id IN ({})".format(",".join(["?"] * len(picks))),
+                    tuple(picks),
+                ).fetchall()
+            }
+
+        ap = rehearse_memory_traces(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            days=90,
+            limit=6,
+            dry_run=False,
+            tool="test",
+            actor_session_id="s-rehearse",
+        )
+        self.assertTrue(ap.get("ok"))
+        self.assertGreaterEqual(int(ap.get("selected_count", 0)), 1)
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            after = {
+                str(r[0]): int(r[1])
+                for r in conn.execute(
+                    "SELECT id, reuse_count FROM memories WHERE id IN ({})".format(",".join(["?"] * len(picks))),
+                    tuple(picks),
+                ).fetchall()
+            }
+        bumped = [mid for mid in picks if int(after.get(mid, 0)) >= int(before.get(mid, 0)) + 1]
+        self.assertGreaterEqual(len(bumped), 1)
 
     def test_retrieve_thread_ppr_mode(self) -> None:
         self._write(

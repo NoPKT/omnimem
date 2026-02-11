@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -1315,6 +1316,133 @@ def compress_hot_sessions(
         except Exception as exc:
             items.append({"ok": False, "session_id": sid, "error": str(exc)})
     return {"ok": True, "project_id": project_id, "sessions": sessions, "items": items}
+
+
+def rehearse_memory_traces(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    days: int = 45,
+    limit: int = 16,
+    dry_run: bool = True,
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Schedule low-cost rehearsal for high-value but high-forgetting-risk memories."""
+    ensure_storage(paths, schema_sql_path)
+    days = max(7, min(365, int(days)))
+    limit = max(1, min(200, int(limit)))
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = cutoff_dt.replace(microsecond=0).isoformat()
+    now = datetime.now(timezone.utc)
+    selected: list[dict[str, Any]] = []
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, updated_at, layer, kind, summary, importance_score, confidence_score, stability_score, reuse_count, volatility_score
+            FROM memories
+            WHERE (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND kind NOT IN ('retrieve')
+              AND layer IN ('short','long','archive')
+              AND updated_at >= ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, cutoff, max(300, limit * 20)),
+        ).fetchall()
+
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for row in rows:
+            x = dict(row)
+            try:
+                ts = datetime.fromisoformat(str(x.get("updated_at") or "").replace("Z", "+00:00"))
+            except Exception:
+                continue
+            age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
+            imp = float(x.get("importance_score", 0.5) or 0.5)
+            conf = float(x.get("confidence_score", 0.5) or 0.5)
+            stab = float(x.get("stability_score", 0.5) or 0.5)
+            vol = float(x.get("volatility_score", 0.5) or 0.5)
+            reuse = max(0, int(x.get("reuse_count", 0) or 0))
+            strength = max(0.05, min(1.0, (0.45 * stab) + (0.35 * conf) + (0.20 * min(1.0, reuse / 8.0))))
+            scale_days = 3.0 + (22.0 * strength)
+            forgetting_risk = max(0.0, min(1.0, 1.0 - math.exp(-age_days / scale_days)))
+            novelty_bonus = max(0.0, min(1.0, 1.0 - min(1.0, reuse / 10.0)))
+            score = (0.58 * imp * forgetting_risk) + (0.22 * vol) + (0.20 * novelty_bonus)
+            scored.append(
+                (
+                    score,
+                    {
+                        "id": str(x.get("id") or ""),
+                        "summary": str(x.get("summary") or ""),
+                        "layer": str(x.get("layer") or ""),
+                        "age_days": round(age_days, 3),
+                        "forgetting_risk": round(forgetting_risk, 4),
+                        "score": round(float(score), 6),
+                    },
+                )
+            )
+        scored.sort(key=lambda t: t[0], reverse=True)
+        selected = [item for _, item in scored[:limit]]
+
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "project_id": project_id,
+                "days": days,
+                "limit": limit,
+                "selected": selected,
+            }
+
+        when = utc_now()
+        ids = [str(x.get("id") or "") for x in selected if str(x.get("id") or "").strip()]
+        for mid in ids:
+            conn.execute(
+                """
+                UPDATE memories
+                SET reuse_count = reuse_count + 1,
+                    stability_score = min(1.0, stability_score + 0.02),
+                    confidence_score = min(1.0, confidence_score + 0.01),
+                    volatility_score = max(0.0, volatility_score - 0.015),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (when, mid),
+            )
+        conn.commit()
+
+    try:
+        log_system_event(
+            paths,
+            schema_sql_path,
+            "memory.update",
+            {
+                "action": "rehearsal",
+                "project_id": project_id,
+                "days": days,
+                "limit": limit,
+                "selected": len(selected),
+                "tool": tool,
+                "actor_session_id": actor_session_id,
+            },
+            portable=False,
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "project_id": project_id,
+        "days": days,
+        "limit": limit,
+        "selected": selected,
+        "selected_count": len(selected),
+    }
 
 
 def build_temporal_memory_tree(
@@ -3594,6 +3722,9 @@ def run_sync_daemon(
     maintenance_distill_min_items: int = 12,
     maintenance_temporal_tree_enabled: bool = True,
     maintenance_temporal_tree_days: int = 30,
+    maintenance_rehearsal_enabled: bool = True,
+    maintenance_rehearsal_days: int = 45,
+    maintenance_rehearsal_limit: int = 16,
     maintenance_adaptive_q_promote_imp: float = 0.68,
     maintenance_adaptive_q_promote_conf: float = 0.60,
     maintenance_adaptive_q_promote_stab: float = 0.62,
@@ -3802,6 +3933,18 @@ def run_sync_daemon(
                         tool="daemon",
                         actor_session_id="system",
                     )
+                rehearsal_out = {"ok": True, "selected_count": 0}
+                if bool(maintenance_rehearsal_enabled):
+                    rehearsal_out = rehearse_memory_traces(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id="",
+                        days=int(maintenance_rehearsal_days),
+                        limit=int(maintenance_rehearsal_limit),
+                        dry_run=False,
+                        tool="daemon",
+                        actor_session_id="system",
+                    )
                 last_maintenance_result = {
                     "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
                     "decay": decay_out,
@@ -3827,6 +3970,13 @@ def run_sync_daemon(
                         "temporal_links": int(tree_out.get("temporal_links", 0) or 0),
                         "distill_links": int(tree_out.get("distill_links", 0) or 0),
                         "ok": bool(tree_out.get("ok", True)),
+                    },
+                    "rehearsal": {
+                        "enabled": bool(maintenance_rehearsal_enabled),
+                        "days": int(maintenance_rehearsal_days),
+                        "limit": int(maintenance_rehearsal_limit),
+                        "selected": int(rehearsal_out.get("selected_count", 0) or len(rehearsal_out.get("selected") or [])),
+                        "ok": bool(rehearsal_out.get("ok", True)),
                     },
                 }
                 maintenance_runs += 1
