@@ -19,11 +19,13 @@ from . import __version__ as OMNIMEM_VERSION
 from .core import (
     LAYER_SET,
     apply_decay,
+    compress_hot_sessions,
     compress_session_context,
     consolidate_memories,
     ensure_storage,
     find_memories,
     move_memory_layer,
+    retrieve_thread,
     update_memory_content,
     resolve_paths,
     save_config,
@@ -606,6 +608,11 @@ HTML_PAGE = """<!doctype html>
 	            <span id=\"compressHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
 	          <div id=\"maintOut\" class=\"muted-box\" style=\"margin-top:10px\"></div>
+	          <div class=\"row-btn\">
+	            <button id=\"btnAutoMaintPreview\" class=\"secondary\" style=\"margin-top:0\">Auto Maintain Preview</button>
+	            <button id=\"btnAutoMaintApply\" class=\"danger\" style=\"margin-top:0\">Apply Auto Maintain</button>
+	            <span id=\"autoMaintHint\" class=\"small\" style=\"align-self:center\"></span>
+	          </div>
 	        </div>
 	        <div class=\"card wide\">
 	          <h3>Governance Log</h3>
@@ -759,6 +766,27 @@ HTML_PAGE = """<!doctype html>
 	          <label>Query
 	            <input id=\"memQuery\" placeholder=\"(optional) FTS query\" />
 	          </label>
+	          <div class=\"row-btn\">
+	            <label style=\"margin-top:0\">Retrieve Mode
+	              <select id=\"memRetrieveMode\" class=\"lang\" style=\"max-width:180px;\">
+	                <option value=\"basic\" selected>basic</option>
+	                <option value=\"smart\">smart (graph)</option>
+	              </select>
+	            </label>
+	            <label style=\"margin-top:0\">Depth
+	              <input id=\"memRetrieveDepth\" type=\"number\" min=\"1\" max=\"4\" value=\"2\" style=\"max-width:90px\" />
+	            </label>
+	            <label style=\"margin-top:0\">Per Hop
+	              <input id=\"memRetrievePerHop\" type=\"number\" min=\"1\" max=\"30\" value=\"6\" style=\"max-width:90px\" />
+	            </label>
+	            <label style=\"margin-top:0\">Ranking
+	              <select id=\"memRankingMode\" class=\"lang\" style=\"max-width:160px;\">
+	                <option value=\"hybrid\" selected>hybrid</option>
+	                <option value=\"ppr\">ppr</option>
+	                <option value=\"path\">path</option>
+	              </select>
+	            </label>
+	          </div>
 	          <label>Layer Filter
 	            <select id=\"memLayer\" class=\"lang\" style=\"width:100%; max-width:260px;\">
 	              <option value=\"\">(all)</option>
@@ -1491,6 +1519,9 @@ HTML_PAGE = """<!doctype html>
 
 	    function retrievalHintHtml(x) {
 	      const r = x && x.retrieval ? x.retrieval : null;
+	      if ((!r || typeof r !== 'object') && typeof x.score === 'number') {
+	        return `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>`;
+	      }
 	      if (!r || typeof r !== 'object') return '';
 	      const c = (r.components && typeof r.components === 'object') ? r.components : {};
 	      const score = Number(r.score || 0);
@@ -1506,7 +1537,21 @@ HTML_PAGE = """<!doctype html>
 	      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
 	      const query = document.getElementById('memQuery')?.value?.trim() || '';
 	      const layer = document.getElementById('memLayer')?.value?.trim() || '';
-	      const d = await jget('/api/memories?limit=20&project_id=' + encodeURIComponent(project_id) + '&session_id=' + encodeURIComponent(session_id) + '&layer=' + encodeURIComponent(layer) + '&query=' + encodeURIComponent(query));
+	      const mode = document.getElementById('memRetrieveMode')?.value?.trim() || 'basic';
+	      const depth = Number(document.getElementById('memRetrieveDepth')?.value || 2);
+	      const per_hop = Number(document.getElementById('memRetrievePerHop')?.value || 6);
+	      const ranking_mode = document.getElementById('memRankingMode')?.value?.trim() || 'hybrid';
+	      const d = await jget(
+	        '/api/memories?limit=20'
+	        + '&project_id=' + encodeURIComponent(project_id)
+	        + '&session_id=' + encodeURIComponent(session_id)
+	        + '&layer=' + encodeURIComponent(layer)
+	        + '&query=' + encodeURIComponent(query)
+	        + '&mode=' + encodeURIComponent(mode)
+	        + '&depth=' + encodeURIComponent(String(Number.isFinite(depth) ? depth : 2))
+	        + '&per_hop=' + encodeURIComponent(String(Number.isFinite(per_hop) ? per_hop : 6))
+	        + '&ranking_mode=' + encodeURIComponent(ranking_mode)
+	      );
 	      const b = document.getElementById('memBody');
 	      b.innerHTML = '';
 	      (d.items || []).forEach(x => {
@@ -2281,6 +2326,29 @@ HTML_PAGE = """<!doctype html>
 	      }
 	    }
 
+	    async function runAutoMaintenance(dry_run) {
+	      const pid = (document.getElementById('insProjectId')?.value || '').trim();
+	      const sid = (document.getElementById('insSessionId')?.value || '').trim();
+	      if (!dry_run) {
+	        if (!confirm(`Apply auto maintenance? project=${pid || '(all)'} session=${sid || '(auto hot sessions)'}`)) return;
+	      }
+	      const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: !!dry_run });
+	      const hint = document.getElementById('autoMaintHint');
+	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
+	      renderMaintOut('Auto Maintenance', d);
+	      if (!d.ok) {
+	        toast('Maintenance', d.error || 'auto maintenance failed', false);
+	        return;
+	      }
+	      toast('Maintenance', dry_run ? 'auto maintenance previewed' : 'auto maintenance applied', true);
+	      if (!dry_run) {
+	        await loadInsights();
+	        await loadMem();
+	        await loadLayerStats();
+	        await loadEvents(pid, sid);
+	      }
+	    }
+
 	    async function renderEventsTable() {
 	      selectedEventIdx = -1;
 	      updateEventActions();
@@ -2873,6 +2941,10 @@ HTML_PAGE = """<!doctype html>
 	          document.getElementById('btnMemReload').onclick = () => loadMem();
 	          document.getElementById('btnMemOpenBoard').onclick = async () => { setActiveTab('insightsTab'); await loadInsights(); };
 	          document.getElementById('memLayer').onchange = () => loadMem();
+          document.getElementById('memRetrieveMode').onchange = () => loadMem();
+          document.getElementById('memRankingMode').onchange = () => loadMem();
+          document.getElementById('memRetrieveDepth').onchange = () => loadMem();
+          document.getElementById('memRetrievePerHop').onchange = () => loadMem();
           document.getElementById('memSessionId').onchange = () => { loadMem(); loadLayerStats(); };
           document.getElementById('memProjectId').onchange = () => { loadMem(); loadLayerStats(); };
           const mq = document.getElementById('memQuery');
@@ -3037,6 +3109,10 @@ HTML_PAGE = """<!doctype html>
 	      if (sp) sp.onclick = () => runCompress(true);
 	      const sa = document.getElementById('btnCompressApply');
 	      if (sa) sa.onclick = () => runCompress(false);
+	      const amp = document.getElementById('btnAutoMaintPreview');
+	      if (amp) amp.onclick = () => runAutoMaintenance(true);
+	      const ama = document.getElementById('btnAutoMaintApply');
+	      if (ama) ama.onclick = () => runAutoMaintenance(false);
 	      const evType = document.getElementById('evtType');
 	      if (evType) evType.onchange = () => loadEvents(
 	        document.getElementById('insProjectId')?.value?.trim() || '',
@@ -3956,16 +4032,44 @@ def run_webui(
                 session_id = q.get("session_id", [""])[0].strip()
                 layer = q.get("layer", [""])[0].strip() or None
                 query = q.get("query", [""])[0].strip()
-                items = find_memories(
-                    paths,
-                    schema_sql_path,
-                    query=query,
-                    layer=layer,
-                    limit=limit,
-                    project_id=project_id,
-                    session_id=session_id,
-                )
-                self._send_json({"ok": True, "items": items})
+                mode = q.get("mode", ["basic"])[0].strip().lower() or "basic"
+                depth = int(q.get("depth", ["2"])[0])
+                per_hop = int(q.get("per_hop", ["6"])[0])
+                ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
+                if mode == "smart" and query:
+                    out = retrieve_thread(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        query=query,
+                        project_id=project_id,
+                        session_id=session_id,
+                        seed_limit=max(8, min(30, int(limit))),
+                        depth=max(1, min(4, int(depth))),
+                        per_hop=max(1, min(30, int(per_hop))),
+                        ranking_mode=ranking_mode if ranking_mode in {"path", "ppr", "hybrid"} else "hybrid",
+                    )
+                    items = list(out.get("items") or [])
+                    if layer:
+                        items = [x for x in items if str(x.get("layer") or "") == layer]
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "items": items[: max(1, min(200, int(limit)))],
+                            "mode": "smart",
+                            "explain": out.get("explain", {}),
+                        }
+                    )
+                else:
+                    items = find_memories(
+                        paths,
+                        schema_sql_path,
+                        query=query,
+                        layer=layer,
+                        limit=limit,
+                        project_id=project_id,
+                        session_id=session_id,
+                    )
+                    self._send_json({"ok": True, "items": items, "mode": "basic"})
                 return
 
             if parsed.path == "/api/layer-stats":
@@ -4803,6 +4907,80 @@ def run_webui(
                         tool="webui",
                         actor_session_id="webui-session",
                     )
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/maintenance/auto":
+                try:
+                    project_id = str(data.get("project_id", "")).strip()
+                    session_id = str(data.get("session_id", "")).strip()
+                    dry_run = bool(data.get("dry_run", True))
+                    decay_out = apply_decay(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        days=14,
+                        limit=120,
+                        project_id=project_id,
+                        layers=["instant", "short", "long"],
+                        dry_run=dry_run,
+                        tool="webui",
+                        session_id="webui-session",
+                    )
+                    cons_out = consolidate_memories(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id=project_id,
+                        session_id=session_id,
+                        limit=80,
+                        dry_run=dry_run,
+                        tool="webui",
+                        actor_session_id="webui-session",
+                    )
+                    if session_id:
+                        comp_out = compress_session_context(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            project_id=project_id,
+                            session_id=session_id,
+                            limit=120,
+                            min_items=8,
+                            target_layer="short",
+                            dry_run=dry_run,
+                            tool="webui",
+                            actor_session_id="webui-session",
+                        )
+                    else:
+                        comp_out = compress_hot_sessions(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            project_id=project_id,
+                            max_sessions=2,
+                            per_session_limit=120,
+                            min_items=8,
+                            dry_run=dry_run,
+                            tool="webui",
+                            actor_session_id="webui-session",
+                        )
+                    out = {
+                        "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
+                        "dry_run": dry_run,
+                        "project_id": project_id,
+                        "session_id": session_id,
+                        "decay": {
+                            "ok": decay_out.get("ok"),
+                            "count": decay_out.get("count", 0),
+                        },
+                        "consolidate": {
+                            "ok": cons_out.get("ok"),
+                            "promote_candidates": len(cons_out.get("promote") or []),
+                            "demote_candidates": len(cons_out.get("demote") or []),
+                            "promoted": len(cons_out.get("promoted") or []),
+                            "demoted": len(cons_out.get("demoted") or []),
+                        },
+                        "compress": comp_out,
+                    }
                     self._send_json(out, 200 if out.get("ok") else 400)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
