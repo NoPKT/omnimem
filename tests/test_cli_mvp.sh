@@ -19,6 +19,15 @@ JSON
 
 OM="PYTHONPATH=$ROOT_DIR python3 -m omnimem.cli --config $TMP_HOME/omnimem.config.json"
 
+assert_pipe_contains() {
+  local needle="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -F -- "$needle" >/dev/null
+  else
+    grep -F -- "$needle" >/dev/null
+  fi
+}
+
 # write
 sh -c "$OM write --layer short --kind note --summary 'test summary' --body 'hello memory world' --project-id demo --tags a,b"
 
@@ -27,17 +36,17 @@ sh -c "$OM checkpoint --summary 'phase checkpoint' --goal 'ship mvp' --result 'd
 
 # find
 find_out="$(sh -c "$OM find memory --limit 5")"
-echo "$find_out" | rg '"ok": true' >/dev/null
+echo "$find_out" | assert_pipe_contains '"ok": true'
 
 # brief
 brief_out="$(sh -c "$OM brief --project-id demo --limit 5")"
-echo "$brief_out" | rg '"project_id": "demo"' >/dev/null
+echo "$brief_out" | assert_pipe_contains '"project_id": "demo"'
 
 # verify
-sh -c "$OM verify" | rg '"ok": true' >/dev/null
+sh -c "$OM verify" | assert_pipe_contains '"ok": true'
 
 # sync placeholder
-sh -c "$OM sync --mode noop" | rg '"ok": true' >/dev/null
+sh -c "$OM sync --mode noop" | assert_pipe_contains '"ok": true'
 
 # hard assertions
 mem_count="$(sqlite3 "$TMP_HOME/data/omnimem.db" "SELECT count(*) FROM memories;")"

@@ -25,6 +25,7 @@
 - Core merge auto-tuning: add `scripts/tune_core_merge_from_eval.py` to convert merge-eval reports into config defaults (`core_merge.default_*`) with dry-run support.
 - Core merge CLI config defaults: `omnimem core-merge-suggest` now reads `core_merge.default_*` from config when flags are omitted (flags still take precedence).
 - WebUI cleanup: refactor `/api/memories` core-block query parsing into shared `_parse_retrieve_core_options` helper.
+- CI shell-test portability: phase B/C/D smoke scripts now fall back to `grep -F` when `rg` is unavailable, fixing release-gate failures on minimal runners.
 
 ## 0.2.21 - 2026-02-11
 

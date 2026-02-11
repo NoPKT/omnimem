@@ -16,6 +16,26 @@ CFG="$TMP_HOME/omnimem.config.json"
 CLI="$TMP_HOME/bin/omnimem"
 DAEMON_SCHEMA="$ROOT_DIR/spec/daemon-state.schema.json"
 
+assert_contains_text() {
+  local text="$1"
+  local needle="$2"
+  if command -v rg >/dev/null 2>&1; then
+    printf '%s\n' "$text" | rg -F -- "$needle" >/dev/null
+  else
+    printf '%s\n' "$text" | grep -F -- "$needle" >/dev/null
+  fi
+}
+
+assert_file_contains() {
+  local file="$1"
+  local needle="$2"
+  if command -v rg >/dev/null 2>&1; then
+    rg -F -- "$needle" "$file" >/dev/null
+  else
+    grep -F -- "$needle" "$file" >/dev/null
+  fi
+}
+
 assert_daemon_contract() {
   local payload="$1"
   python3 - "$payload" "$DAEMON_SCHEMA" <<'PY'
@@ -53,7 +73,8 @@ PY
 }
 
 # config-path should be deterministic
-"$CLI" --config "$CFG" config-path | rg 'omnimem.config.json' >/dev/null
+cfg_path_out="$("$CLI" --config "$CFG" config-path)"
+assert_contains_text "$cfg_path_out" "omnimem.config.json"
 
 # start webui
 "$CLI" --config "$CFG" start --host 127.0.0.1 --port "$PORT" >"$TMP_BASE/webui.log" 2>&1 &
@@ -71,16 +92,16 @@ done
 
 if [[ "$server_ok" -eq 1 ]]; then
   cfg_json="$(curl -sS "http://127.0.0.1:$PORT/api/config")"
-  echo "$cfg_json" | rg '"remote_url": "git@github.com:demo/omnimem-private.git"' >/dev/null
+  assert_contains_text "$cfg_json" '"remote_url": "git@github.com:demo/omnimem-private.git"'
 
   # update config via webui api
-  curl -sS -X POST "http://127.0.0.1:$PORT/api/config" \
+  cfg_post_out="$(curl -sS -X POST "http://127.0.0.1:$PORT/api/config" \
     -H 'Content-Type: application/json' \
-    -d '{"home":"'$TMP_HOME'","markdown":"'$TMP_HOME'/data/markdown","jsonl":"'$TMP_HOME'/data/jsonl","sqlite":"'$TMP_HOME'/data/omnimem.db","remote_name":"origin","remote_url":"git@github.com:demo/changed.git","branch":"dev"}' \
-    | rg '"ok": true' >/dev/null
+    -d '{"home":"'$TMP_HOME'","markdown":"'$TMP_HOME'/data/markdown","jsonl":"'$TMP_HOME'/data/jsonl","sqlite":"'$TMP_HOME'/data/omnimem.db","remote_name":"origin","remote_url":"git@github.com:demo/changed.git","branch":"dev"}')"
+  assert_contains_text "$cfg_post_out" '"ok": true'
 
   cfg_json2="$(curl -sS "http://127.0.0.1:$PORT/api/config")"
-  echo "$cfg_json2" | rg '"branch": "dev"' >/dev/null
+  assert_contains_text "$cfg_json2" '"branch": "dev"'
   daemon_json="$(curl -sS "http://127.0.0.1:$PORT/api/daemon")"
   assert_daemon_contract "$daemon_json"
 
@@ -89,7 +110,7 @@ if [[ "$server_ok" -eq 1 ]]; then
   "$CLI" --config "$CFG" write --summary 'webui dedup sample' --body 'hello dedup one' >/dev/null
   "$CLI" --config "$CFG" write --summary 'webui dedup sample' --body 'hello dedup two' >/dev/null
   mem_json="$(curl -sS "http://127.0.0.1:$PORT/api/memories?limit=5")"
-  echo "$mem_json" | rg '"items"' >/dev/null
+  assert_contains_text "$mem_json" '"items"'
   dedup_json="$(curl -sS "http://127.0.0.1:$PORT/api/memories?limit=20&query=webui&dedup=summary_kind")"
   python3 - "$dedup_json" <<'PY'
 import json
@@ -125,7 +146,7 @@ PY
   assert_daemon_contract "$daemon_auth_json"
 else
   # Some sandbox environments forbid binding local ports; keep validating non-web path.
-  rg 'Operation not permitted' "$TMP_BASE/webui.log" >/dev/null || true
+  assert_file_contains "$TMP_BASE/webui.log" "Operation not permitted" >/dev/null 2>&1 || true
   echo "[WARN] WebUI server bind skipped in restricted sandbox"
 fi
 
