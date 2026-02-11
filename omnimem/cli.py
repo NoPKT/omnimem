@@ -2148,7 +2148,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_core_merge.add_argument("--min-conflicts", type=int, default=2)
     p_core_merge.add_argument("--loser-action", choices=["none", "deprioritize", "expire"], default="none")
     p_core_merge.add_argument("--min-apply-quality", type=float, default=0.0)
-    p_core_merge.add_argument("--merge-mode", choices=["synthesize", "concat"], default="synthesize")
+    p_core_merge.add_argument("--merge-mode", choices=["synthesize", "semantic", "concat"], default="synthesize")
     p_core_merge.add_argument("--max-merged-lines", type=int, default=8)
     p_core_merge.add_argument("--apply", action="store_true", help="write suggested merged core blocks")
     p_core_merge.set_defaults(func=cmd_core_merge_suggest)

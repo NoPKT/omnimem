@@ -3252,19 +3252,27 @@ def _split_guidance_units(text: str) -> list[str]:
 def _synthesize_merged_guidance(
     *,
     items_sorted: list[dict[str, Any]],
+    mode: str = "synthesize",
     max_lines: int = 8,
 ) -> dict[str, Any]:
+    mode = str(mode or "synthesize").strip().lower()
+    if mode not in {"synthesize", "semantic"}:
+        mode = "synthesize"
     max_lines = max(3, min(20, int(max_lines)))
     units: dict[str, dict[str, Any]] = {}
     total_blocks = max(1, len(items_sorted))
+    centroid_counts: dict[str, int] = {}
     for it in items_sorted:
         pri = int(it.get("priority", 0) or 0)
         src = str(it.get("name") or "")
+        ctext = str(it.get("content") or "")
+        for tk in _mem_text_tokens(ctext):
+            centroid_counts[tk] = centroid_counts.get(tk, 0) + 1
         for u in _split_guidance_units(str(it.get("content") or "")):
             key = u.lower()
             cur = units.get(key)
             if cur is None:
-                units[key] = {"text": u, "count": 1, "max_priority": pri, "sources": {src}}
+                units[key] = {"text": u, "count": 1, "max_priority": pri, "sources": {src}, "tokens": _mem_text_tokens(u)}
             else:
                 cur["count"] = int(cur.get("count", 0)) + 1
                 cur["max_priority"] = max(int(cur.get("max_priority", 0)), pri)
@@ -3272,22 +3280,47 @@ def _synthesize_merged_guidance(
                 cur_sources.add(src)
                 cur["sources"] = cur_sources
 
-    ranked = sorted(
-        units.values(),
-        key=lambda x: (
-            float(int(x.get("count", 0)) / total_blocks),
-            float(int(x.get("max_priority", 0)) / 100.0),
-            len(str(x.get("text") or "")),
-        ),
-        reverse=True,
-    )
-    picked = ranked[:max_lines]
+    if mode == "semantic":
+        centroid = {k for k, c in centroid_counts.items() if c >= max(1, int(round(0.35 * total_blocks)))}
+        ranked_sem = []
+        for u in units.values():
+            toks = set(u.get("tokens") or set())
+            agreement = float(int(u.get("count", 0)) / total_blocks)
+            pri_score = float(int(u.get("max_priority", 0)) / 100.0)
+            sem = _jaccard(toks, centroid) if centroid and toks else 0.0
+            score = (0.45 * agreement) + (0.30 * sem) + (0.25 * pri_score)
+            ranked_sem.append({"unit": u, "score": score})
+        ranked_sem.sort(key=lambda x: (float(x.get("score", 0.0)), len(str((x.get("unit") or {}).get("text") or ""))), reverse=True)
+        picked_units: list[dict[str, Any]] = []
+        for cand in ranked_sem:
+            u = dict(cand.get("unit") or {})
+            toks = set(u.get("tokens") or set())
+            if picked_units:
+                max_sim = max(_jaccard(toks, set(p.get("tokens") or set())) for p in picked_units)
+                if max_sim >= 0.72:
+                    continue
+            picked_units.append(u)
+            if len(picked_units) >= max_lines:
+                break
+        picked = picked_units
+    else:
+        ranked = sorted(
+            units.values(),
+            key=lambda x: (
+                float(int(x.get("count", 0)) / total_blocks),
+                float(int(x.get("max_priority", 0)) / 100.0),
+                len(str(x.get("text") or "")),
+            ),
+            reverse=True,
+        )
+        picked = ranked[:max_lines]
     lines = [str(x.get("text") or "") for x in picked]
     support = float(sum(int(x.get("count", 0)) for x in picked) / max(1, len(picked) * total_blocks))
     return {
         "text": "\n".join(lines).strip(),
         "lines": len(lines),
         "support": max(0.0, min(1.0, support)),
+        "mode": mode,
     }
 
 
@@ -3316,8 +3349,8 @@ def suggest_core_block_merges(
         raise ValueError("loser_action must be one of: none|deprioritize|expire")
     min_apply_quality = max(0.0, min(1.0, float(min_apply_quality)))
     merge_mode = str(merge_mode or "synthesize").strip().lower()
-    if merge_mode not in {"synthesize", "concat"}:
-        raise ValueError("merge_mode must be one of: synthesize|concat")
+    if merge_mode not in {"synthesize", "semantic", "concat"}:
+        raise ValueError("merge_mode must be one of: synthesize|semantic|concat")
     max_merged_lines = max(3, min(20, int(max_merged_lines)))
 
     with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
@@ -3389,8 +3422,9 @@ def suggest_core_block_merges(
         quality = max(0.0, min(1.0, (0.50 * agreement) + (0.30 * dominance) + (0.20 * coverage)))
         loser_names = [str(x.get("name") or "") for x in items_sorted[1:]]
         merged_name = f"{topic}-merged"
-        synth = _synthesize_merged_guidance(items_sorted=items_sorted, max_lines=max_merged_lines)
-        if merge_mode == "synthesize":
+        synth_mode = "semantic" if merge_mode == "semantic" else "synthesize"
+        synth = _synthesize_merged_guidance(items_sorted=items_sorted, mode=synth_mode, max_lines=max_merged_lines)
+        if merge_mode in {"synthesize", "semantic"}:
             merged_guidance = str(synth.get("text") or str(winner.get("content") or "").strip())
         else:
             merged_content_parts = [str(winner.get("content") or "").strip()]

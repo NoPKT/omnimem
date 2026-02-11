@@ -371,6 +371,43 @@ class CoreBlocksTest(unittest.TestCase):
         lblock = loser.get("block") or {}
         self.assertLess(int(lblock.get("priority", 100) or 100), 65)
 
+    def test_core_merge_semantic_mode(self) -> None:
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="sem-1",
+            topic="semantic",
+            content="Always include assumptions and constraints.",
+            project_id="OM",
+            session_id="s1",
+            priority=70,
+        )
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="sem-2",
+            topic="semantic",
+            content="Include constraints, dependencies, and rollout risks.",
+            project_id="OM",
+            session_id="s1",
+            priority=88,
+        )
+        out = suggest_core_block_merges(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            apply=False,
+            merge_mode="semantic",
+            max_merged_lines=5,
+        )
+        self.assertTrue(out.get("ok"))
+        cand = next((x for x in (out.get("candidates") or []) if str(x.get("topic") or "") == "semantic"), None)
+        self.assertIsNotNone(cand)
+        self.assertEqual(str((cand or {}).get("merge_mode") or ""), "semantic")
+        syn = (cand or {}).get("synthesis") or {}
+        self.assertGreaterEqual(int(syn.get("lines", 0) or 0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -66,7 +66,7 @@ class CLIFrontierCommandTest(unittest.TestCase):
                 "--min-apply-quality",
                 "0.2",
                 "--merge-mode",
-                "synthesize",
+                "semantic",
                 "--max-merged-lines",
                 "6",
             ]

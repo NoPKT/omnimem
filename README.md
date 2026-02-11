@@ -147,6 +147,7 @@ omnimem core-merge-suggest --project-id OM --min-conflicts 2
 omnimem core-merge-suggest --project-id OM --min-conflicts 2 --apply
 omnimem core-merge-suggest --project-id OM --apply --loser-action deprioritize --min-apply-quality 0.25
 omnimem core-merge-suggest --project-id OM --merge-mode synthesize --max-merged-lines 6
+omnimem core-merge-suggest --project-id OM --merge-mode semantic --max-merged-lines 6
 omnimem core-list --project-id OM
 omnimem core-list --project-id OM --include-expired
 omnimem core-get --project-id OM --name persona
