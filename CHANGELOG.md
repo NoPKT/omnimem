@@ -7,6 +7,7 @@
 - Ingestion upgrade: support structured chunking (`--chunk-mode heading|fixed`) with multi-memory writes and chunk metadata for long document ingestion.
 - Feedback loop: add explicit memory feedback operation (`omnimem feedback` / `POST /api/memory/feedback`) supporting positive/negative/forget/correct signals with deterministic score updates.
 - Retrieval upgrade: add profile-aware re-ranking (`retrieve --profile-aware`) and expose profile settings in retrieval explain output; WebUI smart retrieval now enables profile bias by default.
+- Governance upgrade: adaptive threshold inference now incorporates explicit memory feedback distribution (`memory.feedback`) so negative/forget-heavy periods make demotion easier and promotion stricter.
 
 ## 0.2.21 - 2026-02-11
 

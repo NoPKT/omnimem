@@ -896,6 +896,20 @@ def infer_adaptive_governance_thresholds(
             """,
             (project_id, project_id, *sid_args, cutoff),
         ).fetchall()
+        fb_rows = conn.execute(
+            f"""
+            SELECT e.payload_json
+            FROM memory_events e
+            JOIN memories m ON m.id = e.memory_id
+            WHERE e.event_type = 'memory.feedback'
+              AND e.event_time >= ?
+              AND (json_extract(m.scope_json, '$.project_id') = ? OR ? = '')
+              {sid_where}
+            ORDER BY e.event_time DESC
+            LIMIT 3000
+            """,
+            (cutoff, project_id, project_id, *sid_args),
+        ).fetchall()
 
     all_imp = sorted(float(r["importance_score"] or 0.0) for r in rows)
     all_conf = sorted(float(r["confidence_score"] or 0.0) for r in rows)
@@ -910,6 +924,33 @@ def infer_adaptive_governance_thresholds(
     d_vol = max(0.55, min(0.98, _quantile(all_vol, q_demote_vol, 0.75)))
     d_stab = max(0.10, min(0.70, _quantile(all_stab, q_demote_stab, 0.45)))
     d_reuse = max(0, min(8, int(_quantile([float(x) for x in all_reuse], q_demote_reuse, 1.0))))
+
+    fb_counts = {"positive": 0, "negative": 0, "forget": 0, "correct": 0}
+    for r in fb_rows:
+        try:
+            p = json.loads(r["payload_json"] or "{}")
+        except Exception:
+            p = {}
+        k = str((p or {}).get("feedback", "")).strip().lower()
+        if k in fb_counts:
+            fb_counts[k] += 1
+    fb_total = int(sum(int(v) for v in fb_counts.values()))
+    fb_neg = int(fb_counts.get("negative", 0)) + int(fb_counts.get("forget", 0))
+    fb_pos = int(fb_counts.get("positive", 0)) + int(fb_counts.get("correct", 0))
+    feedback_bias = 0.0
+    if fb_total > 0:
+        # Negative/forget feedback should make demotion easier and promotion stricter.
+        feedback_bias = (float(fb_neg) - float(fb_pos)) / float(max(1, fb_total))
+
+    if abs(feedback_bias) > 1e-6:
+        p_imp = max(0.55, min(0.92, p_imp + (0.04 * feedback_bias)))
+        p_conf = max(0.50, min(0.90, p_conf + (0.06 * feedback_bias)))
+        p_stab = max(0.50, min(0.95, p_stab + (0.06 * feedback_bias)))
+        p_vol = max(0.20, min(0.85, p_vol - (0.04 * feedback_bias)))
+
+        d_vol = max(0.50, min(0.98, d_vol - (0.08 * feedback_bias)))
+        d_stab = max(0.10, min(0.75, d_stab + (0.07 * feedback_bias)))
+        d_reuse = max(0, min(8, int(round(d_reuse + (2.0 * feedback_bias)))))
 
     return {
         "ok": True,
@@ -934,6 +975,11 @@ def infer_adaptive_governance_thresholds(
             "q_demote_vol": float(q_demote_vol),
             "q_demote_stab": float(q_demote_stab),
             "q_demote_reuse": float(q_demote_reuse),
+        },
+        "feedback": {
+            "counts": {k: int(v) for k, v in fb_counts.items()},
+            "total": fb_total,
+            "bias": float(round(feedback_bias, 4)),
         },
     }
 
