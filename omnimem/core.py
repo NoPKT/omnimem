@@ -3233,6 +3233,64 @@ def _merge_core_block_conflicts(rows: list[dict[str, Any]], *, merge_by_topic: b
     return kept
 
 
+def _split_guidance_units(text: str) -> list[str]:
+    s = str(text or "").strip()
+    if not s:
+        return []
+    parts = re.split(r"(?:\n+|(?<=[。！？.!?]))\s*", s)
+    out: list[str] = []
+    for p in parts:
+        t = re.sub(r"\s+", " ", str(p or "").strip())
+        if not t:
+            continue
+        if len(t) < 6:
+            continue
+        out.append(t[:240])
+    return out
+
+
+def _synthesize_merged_guidance(
+    *,
+    items_sorted: list[dict[str, Any]],
+    max_lines: int = 8,
+) -> dict[str, Any]:
+    max_lines = max(3, min(20, int(max_lines)))
+    units: dict[str, dict[str, Any]] = {}
+    total_blocks = max(1, len(items_sorted))
+    for it in items_sorted:
+        pri = int(it.get("priority", 0) or 0)
+        src = str(it.get("name") or "")
+        for u in _split_guidance_units(str(it.get("content") or "")):
+            key = u.lower()
+            cur = units.get(key)
+            if cur is None:
+                units[key] = {"text": u, "count": 1, "max_priority": pri, "sources": {src}}
+            else:
+                cur["count"] = int(cur.get("count", 0)) + 1
+                cur["max_priority"] = max(int(cur.get("max_priority", 0)), pri)
+                cur_sources = set(cur.get("sources") or set())
+                cur_sources.add(src)
+                cur["sources"] = cur_sources
+
+    ranked = sorted(
+        units.values(),
+        key=lambda x: (
+            float(int(x.get("count", 0)) / total_blocks),
+            float(int(x.get("max_priority", 0)) / 100.0),
+            len(str(x.get("text") or "")),
+        ),
+        reverse=True,
+    )
+    picked = ranked[:max_lines]
+    lines = [str(x.get("text") or "") for x in picked]
+    support = float(sum(int(x.get("count", 0)) for x in picked) / max(1, len(picked) * total_blocks))
+    return {
+        "text": "\n".join(lines).strip(),
+        "lines": len(lines),
+        "support": max(0.0, min(1.0, support)),
+    }
+
+
 def suggest_core_block_merges(
     *,
     paths: MemoryPaths,
@@ -3244,6 +3302,8 @@ def suggest_core_block_merges(
     apply: bool = False,
     loser_action: str = "none",
     min_apply_quality: float = 0.0,
+    merge_mode: str = "synthesize",
+    max_merged_lines: int = 8,
     session_actor: str = "system",
     tool: str = "cli",
 ) -> dict[str, Any]:
@@ -3255,6 +3315,10 @@ def suggest_core_block_merges(
     if loser_action not in {"none", "deprioritize", "expire"}:
         raise ValueError("loser_action must be one of: none|deprioritize|expire")
     min_apply_quality = max(0.0, min(1.0, float(min_apply_quality)))
+    merge_mode = str(merge_mode or "synthesize").strip().lower()
+    if merge_mode not in {"synthesize", "concat"}:
+        raise ValueError("merge_mode must be one of: synthesize|concat")
+    max_merged_lines = max(3, min(20, int(max_merged_lines)))
 
     with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
         conn.row_factory = sqlite3.Row
@@ -3325,21 +3389,31 @@ def suggest_core_block_merges(
         quality = max(0.0, min(1.0, (0.50 * agreement) + (0.30 * dominance) + (0.20 * coverage)))
         loser_names = [str(x.get("name") or "") for x in items_sorted[1:]]
         merged_name = f"{topic}-merged"
-        merged_content_parts = [
-            f"- topic: {topic}",
-            f"- winner: {str(winner.get('name') or '')}",
-            f"- quality: {quality:.3f}",
-            f"- merged_from: {', '.join([str(x.get('name') or '') for x in items_sorted])}",
-            "",
-            "## Merged Guidance",
-            str(winner.get("content") or "").strip(),
-        ]
-        for x in items_sorted[1:]:
-            c = str(x.get("content") or "").strip()
-            if not c:
-                continue
-            merged_content_parts.extend(["", f"### variant: {str(x.get('name') or '')}", c])
-        merged_content = "\n".join(merged_content_parts).strip()
+        synth = _synthesize_merged_guidance(items_sorted=items_sorted, max_lines=max_merged_lines)
+        if merge_mode == "synthesize":
+            merged_guidance = str(synth.get("text") or str(winner.get("content") or "").strip())
+        else:
+            merged_content_parts = [str(winner.get("content") or "").strip()]
+            for x in items_sorted[1:]:
+                c = str(x.get("content") or "").strip()
+                if c:
+                    merged_content_parts.append(c)
+            merged_guidance = "\n\n".join([x for x in merged_content_parts if x]).strip()
+        merged_content = (
+            "\n".join(
+                [
+                    f"- topic: {topic}",
+                    f"- winner: {str(winner.get('name') or '')}",
+                    f"- quality: {quality:.3f}",
+                    f"- merge_mode: {merge_mode}",
+                    f"- merged_from: {', '.join([str(x.get('name') or '') for x in items_sorted])}",
+                    "",
+                    "## Merged Guidance",
+                    merged_guidance,
+                ]
+            )
+            .strip()
+        )
         out = {
             "topic": topic,
             "count": len(items_sorted),
@@ -3349,6 +3423,8 @@ def suggest_core_block_merges(
             "suggested_priority": int(winner.get("priority", 0) or 0),
             "quality": float(round(quality, 4)),
             "apply_recommended": bool(quality >= min_apply_quality),
+            "merge_mode": merge_mode,
+            "synthesis": {"lines": int(synth.get("lines", 0) or 0), "support": float(round(float(synth.get("support", 0.0) or 0.0), 4))},
             "suggested_preview": merged_content[:260],
         }
         candidates.append(out)
@@ -3433,6 +3509,8 @@ def suggest_core_block_merges(
         "apply": bool(apply),
         "loser_action": loser_action,
         "min_apply_quality": float(min_apply_quality),
+        "merge_mode": merge_mode,
+        "max_merged_lines": int(max_merged_lines),
         "candidates": candidates,
         "applied": applied,
         "skipped": skipped,

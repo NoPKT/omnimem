@@ -430,6 +430,8 @@ def cmd_core_merge_suggest(args: argparse.Namespace) -> int:
         apply=bool(getattr(args, "apply", False)),
         loser_action=str(getattr(args, "loser_action", "none") or "none"),
         min_apply_quality=float(getattr(args, "min_apply_quality", 0.0)),
+        merge_mode=str(getattr(args, "merge_mode", "synthesize") or "synthesize"),
+        max_merged_lines=int(getattr(args, "max_merged_lines", 8)),
         session_actor=str(getattr(args, "session_actor", "system") or "system"),
         tool="cli",
     )
@@ -2146,6 +2148,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_core_merge.add_argument("--min-conflicts", type=int, default=2)
     p_core_merge.add_argument("--loser-action", choices=["none", "deprioritize", "expire"], default="none")
     p_core_merge.add_argument("--min-apply-quality", type=float, default=0.0)
+    p_core_merge.add_argument("--merge-mode", choices=["synthesize", "concat"], default="synthesize")
+    p_core_merge.add_argument("--max-merged-lines", type=int, default=8)
     p_core_merge.add_argument("--apply", action="store_true", help="write suggested merged core blocks")
     p_core_merge.set_defaults(func=cmd_core_merge_suggest)
 

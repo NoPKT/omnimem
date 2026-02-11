@@ -19,6 +19,7 @@
 - Core memory conflict policy: support per-block `topic` and retrieval-time conflict merge (`core_merge_by_topic`) so competing blocks in the same topic collapse to the highest-priority active block.
 - Core merge suggester: add `core-merge-suggest` (preview/apply) to detect topic conflicts and optionally materialize an auto-merged core block (`<topic>-merged`) for stable policy consolidation.
 - Core merge governance: `core-merge-suggest` now emits quality score, supports apply quality gate (`--min-apply-quality`), and can post-process loser blocks via `--loser-action deprioritize|expire`.
+- Core merge synthesis: `core-merge-suggest` now supports `--merge-mode synthesize|concat` and bounded extractive synthesis (`--max-merged-lines`) for cleaner merged policy blocks.
 
 ## 0.2.21 - 2026-02-11
 

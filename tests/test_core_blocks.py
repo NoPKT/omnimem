@@ -275,11 +275,17 @@ class CoreBlocksTest(unittest.TestCase):
             project_id="OM",
             session_id="s1",
             apply=False,
+            merge_mode="synthesize",
+            max_merged_lines=5,
         )
         self.assertTrue(p.get("ok"))
         cands = list(p.get("candidates") or [])
         self.assertGreaterEqual(len(cands), 1)
         self.assertTrue(any(str(x.get("topic") or "") == "policy" for x in cands))
+        pc = next(x for x in cands if str(x.get("topic") or "") == "policy")
+        self.assertEqual(str(pc.get("merge_mode") or ""), "synthesize")
+        syn = pc.get("synthesis") or {}
+        self.assertGreaterEqual(int(syn.get("lines", 0) or 0), 1)
 
         a = suggest_core_block_merges(
             paths=self.paths,
@@ -341,6 +347,7 @@ class CoreBlocksTest(unittest.TestCase):
             apply=True,
             loser_action="deprioritize",
             min_apply_quality=0.0,
+            merge_mode="concat",
         )
         self.assertTrue(out_apply.get("ok"))
         merged = get_core_block(
@@ -351,6 +358,8 @@ class CoreBlocksTest(unittest.TestCase):
             session_id="s1",
         )
         self.assertTrue(merged.get("ok"))
+        mblock = merged.get("block") or {}
+        self.assertIn("merge_mode: concat", str(mblock.get("content") or ""))
         loser = get_core_block(
             paths=self.paths,
             schema_sql_path=self.schema,

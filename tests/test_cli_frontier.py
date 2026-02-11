@@ -55,7 +55,21 @@ class CLIFrontierCommandTest(unittest.TestCase):
         a4 = p.parse_args(["retrieve", "hello", "--include-core-blocks", "--core-merge-by-topic"])
         self.assertEqual(a4.cmd, "retrieve")
         a5 = p.parse_args(
-            ["core-merge-suggest", "--project-id", "OM", "--min-conflicts", "2", "--loser-action", "deprioritize", "--min-apply-quality", "0.2"]
+            [
+                "core-merge-suggest",
+                "--project-id",
+                "OM",
+                "--min-conflicts",
+                "2",
+                "--loser-action",
+                "deprioritize",
+                "--min-apply-quality",
+                "0.2",
+                "--merge-mode",
+                "synthesize",
+                "--max-merged-lines",
+                "6",
+            ]
         )
         self.assertEqual(a5.cmd, "core-merge-suggest")
 
