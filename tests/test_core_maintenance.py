@@ -7,6 +7,7 @@ from pathlib import Path
 
 from omnimem.core import (
     MemoryPaths,
+    build_temporal_memory_tree,
     compress_session_context,
     consolidate_memories,
     distill_session_memory,
@@ -185,6 +186,70 @@ class CoreMaintenanceTest(unittest.TestCase):
         )
         self.assertTrue(ap.get("ok"))
         self.assertTrue(ap.get("distilled"))
+        source_ids = [str(x) for x in (ap.get("source_ids") or []) if str(x)]
+        self.assertGreaterEqual(len(source_ids), 8)
+        sem_id = str(ap.get("semantic_memory_id") or "")
+        proc_id = str(ap.get("procedural_memory_id") or "")
+        self.assertTrue(sem_id)
+        self.assertTrue(proc_id)
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            sem_ref_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM memory_refs WHERE memory_id = ? AND ref_type = 'memory' AND note = 'distill-source'",
+                    (sem_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            proc_ref_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM memory_refs WHERE memory_id = ? AND ref_type = 'memory' AND note = 'distill-source'",
+                    (proc_id,),
+                ).fetchone()[0]
+                or 0
+            )
+        self.assertGreaterEqual(sem_ref_count, min(8, len(source_ids)))
+        self.assertGreaterEqual(proc_ref_count, min(8, len(source_ids)))
+
+    def test_build_temporal_memory_tree_apply(self) -> None:
+        for i in range(10):
+            self._write(
+                layer="short" if i % 2 == 0 else "long",
+                summary=f"timeline step {i}",
+                session_id="s-tree",
+                importance=0.7,
+                confidence=0.7,
+                stability=0.7,
+                reuse_count=1,
+                volatility=0.2,
+            )
+        distill_session_memory(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-tree",
+            limit=100,
+            min_items=8,
+            dry_run=False,
+        )
+        out = build_temporal_memory_tree(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            days=30,
+            max_sessions=5,
+            per_session_limit=100,
+            dry_run=False,
+            tool="test",
+            actor_session_id="s-tree",
+        )
+        self.assertTrue(out.get("ok"))
+        self.assertGreaterEqual(int(out.get("temporal_links", 0)), 8)
+        self.assertGreaterEqual(int(out.get("distill_links", 0)), 1)
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            n_temporal = int(conn.execute("SELECT COUNT(*) FROM memory_links WHERE link_type='temporal_next'").fetchone()[0] or 0)
+            n_distill = int(conn.execute("SELECT COUNT(*) FROM memory_links WHERE link_type='distill_of'").fetchone()[0] or 0)
+        self.assertGreaterEqual(n_temporal, 8)
+        self.assertGreaterEqual(n_distill, 1)
 
     def test_retrieve_thread_ppr_mode(self) -> None:
         self._write(

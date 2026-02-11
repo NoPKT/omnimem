@@ -1317,6 +1317,156 @@ def compress_hot_sessions(
     return {"ok": True, "project_id": project_id, "sessions": sessions, "items": items}
 
 
+def build_temporal_memory_tree(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    days: int = 30,
+    max_sessions: int = 20,
+    per_session_limit: int = 120,
+    dry_run: bool = True,
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Build temporal/hierarchical links to support low-cost episodic traversal.
+
+    - temporal_next: ordered links within each session
+    - distill_of: latest distill summaries linked to recent source memories
+    """
+    ensure_storage(paths, schema_sql_path)
+    days = max(1, min(180, int(days)))
+    max_sessions = max(1, min(100, int(max_sessions)))
+    per_session_limit = max(20, min(500, int(per_session_limit)))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat()
+    when = utc_now()
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        srows = conn.execute(
+            """
+            SELECT COALESCE(json_extract(source_json, '$.session_id'), '') AS sid, COUNT(*) AS c
+            FROM memories
+            WHERE updated_at >= ?
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND COALESCE(json_extract(source_json, '$.session_id'), '') != ''
+              AND kind NOT IN ('retrieve')
+            GROUP BY sid
+            ORDER BY c DESC
+            LIMIT ?
+            """,
+            (cutoff, project_id, project_id, max_sessions * 2),
+        ).fetchall()
+
+        sessions = [str(r["sid"]).strip() for r in srows if str(r["sid"]).strip() and str(r["sid"]) not in {"system", "webui-session"}][:max_sessions]
+        temporal_links: list[dict[str, Any]] = []
+        distill_links: list[dict[str, Any]] = []
+
+        for sid in sessions:
+            rows = conn.execute(
+                """
+                SELECT id, updated_at, tags_json
+                FROM memories
+                WHERE updated_at >= ?
+                  AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                  AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?
+                  AND kind NOT IN ('retrieve')
+                ORDER BY updated_at ASC
+                LIMIT ?
+                """,
+                (cutoff, project_id, project_id, sid, per_session_limit),
+            ).fetchall()
+            ids = [str(r["id"]) for r in rows if str(r["id"]).strip()]
+            for i in range(len(ids) - 1):
+                temporal_links.append(
+                    {
+                        "created_at": when,
+                        "src_id": ids[i],
+                        "dst_id": ids[i + 1],
+                        "link_type": "temporal_next",
+                        "weight": 1.0,
+                        "reason": f"session:{sid}",
+                    }
+                )
+
+            drows = conn.execute(
+                """
+                SELECT id, tags_json
+                FROM memories
+                WHERE updated_at >= ?
+                  AND kind='summary'
+                  AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                  AND EXISTS (SELECT 1 FROM json_each(memories.tags_json) WHERE value='auto:distill')
+                  AND EXISTS (SELECT 1 FROM json_each(memories.tags_json) WHERE value=?)
+                ORDER BY updated_at DESC
+                LIMIT 2
+                """,
+                (cutoff, project_id, project_id, f"session:{sid}"),
+            ).fetchall()
+            dids = [str(r["id"]) for r in drows if str(r["id"]).strip()]
+            for did in dids:
+                for mid in ids[-20:]:
+                    distill_links.append(
+                        {
+                            "created_at": when,
+                            "src_id": did,
+                            "dst_id": mid,
+                            "link_type": "distill_of",
+                            "weight": 0.86,
+                            "reason": f"session:{sid}",
+                        }
+                    )
+
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "project_id": project_id,
+                "days": days,
+                "sessions": sessions,
+                "temporal_links": len(temporal_links),
+                "distill_links": len(distill_links),
+            }
+
+        made = 0
+        for lk in temporal_links + distill_links:
+            insert_link(conn, lk)
+            made += 1
+        conn.commit()
+
+    try:
+        log_system_event(
+            paths,
+            schema_sql_path,
+            "memory.update",
+            {
+                "action": "temporal-tree",
+                "project_id": project_id,
+                "days": days,
+                "sessions": len(sessions),
+                "made": made,
+                "temporal_links": len(temporal_links),
+                "distill_links": len(distill_links),
+                "tool": tool,
+                "actor_session_id": actor_session_id,
+            },
+            portable=False,
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "project_id": project_id,
+        "days": days,
+        "sessions": sessions,
+        "made": made,
+        "temporal_links": len(temporal_links),
+        "distill_links": len(distill_links),
+    }
+
+
 def distill_session_memory(
     *,
     paths: MemoryPaths,
@@ -1400,17 +1550,26 @@ def distill_session_memory(
     facts = facts[:14]
     steps = steps[:14]
 
+    source_ids = [str(x.get("id") or "").strip() for x in items if str(x.get("id") or "").strip()][:40]
+    refs = [{"type": "memory", "target": mid, "note": "distill-source"} for mid in source_ids]
+
     sem_summary = f"Semantic distill: {sid[:12]}…"
     sem_body = "## Semantic Memory Distillation\n\n"
     sem_body += f"- project_id: {project_id or '(all)'}\n- session_id: {sid}\n- source_items: {len(items)}\n\n### Stable facts\n"
     for f in facts:
         sem_body += f"- {f}\n"
+    sem_body += "\n### Source memory ids\n"
+    for mid in source_ids[:30]:
+        sem_body += f"- {mid}\n"
 
     proc_summary = f"Procedural distill: {sid[:12]}…"
     proc_body = "## Procedural Memory Distillation\n\n"
     proc_body += f"- project_id: {project_id or '(all)'}\n- session_id: {sid}\n- source_items: {len(items)}\n\n### Reusable steps\n"
     for s in steps:
         proc_body += f"- {s}\n"
+    proc_body += "\n### Source memory ids\n"
+    for mid in source_ids[:30]:
+        proc_body += f"- {mid}\n"
 
     if dry_run:
         return {
@@ -1432,7 +1591,7 @@ def distill_session_memory(
         summary=sem_summary,
         body=sem_body,
         tags=["auto:distill", "mem:semantic", f"session:{sid}", *(["project:" + project_id] if project_id else [])],
-        refs=[],
+        refs=refs,
         cred_refs=[],
         tool=tool,
         account="default",
@@ -1455,7 +1614,7 @@ def distill_session_memory(
         summary=proc_summary,
         body=proc_body,
         tags=["auto:distill", "mem:procedural", f"session:{sid}", *(["project:" + project_id] if project_id else [])],
-        refs=[],
+        refs=refs,
         cred_refs=[],
         tool=tool,
         account="default",
@@ -1478,6 +1637,7 @@ def distill_session_memory(
         "session_id": sid,
         "distilled": True,
         "source_count": len(items),
+        "source_ids": source_ids,
         "semantic_memory_id": str((sem_out.get("memory") or {}).get("id") or ""),
         "procedural_memory_id": str((proc_out.get("memory") or {}).get("id") or ""),
     }
@@ -3432,6 +3592,8 @@ def run_sync_daemon(
     maintenance_distill_enabled: bool = True,
     maintenance_distill_sessions: int = 1,
     maintenance_distill_min_items: int = 12,
+    maintenance_temporal_tree_enabled: bool = True,
+    maintenance_temporal_tree_days: int = 30,
     maintenance_adaptive_q_promote_imp: float = 0.68,
     maintenance_adaptive_q_promote_conf: float = 0.60,
     maintenance_adaptive_q_promote_stab: float = 0.62,
@@ -3627,6 +3789,19 @@ def run_sync_daemon(
                             distill_items.append(d_out)
                         except Exception as exc:  # pragma: no cover
                             distill_items.append({"ok": False, "session_id": sid, "error": str(exc)})
+                tree_out = {"ok": True, "made": 0, "temporal_links": 0, "distill_links": 0}
+                if bool(maintenance_temporal_tree_enabled):
+                    tree_out = build_temporal_memory_tree(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id="",
+                        days=int(maintenance_temporal_tree_days),
+                        max_sessions=max(6, int(maintenance_compress_sessions) * 4),
+                        per_session_limit=120,
+                        dry_run=False,
+                        tool="daemon",
+                        actor_session_id="system",
+                    )
                 last_maintenance_result = {
                     "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
                     "decay": decay_out,
@@ -3644,6 +3819,14 @@ def run_sync_daemon(
                         "sessions": len(distill_items),
                         "distilled": len([x for x in distill_items if x.get("distilled")]),
                         "errors": len([x for x in distill_items if not x.get("ok")]),
+                    },
+                    "temporal_tree": {
+                        "enabled": bool(maintenance_temporal_tree_enabled),
+                        "days": int(maintenance_temporal_tree_days),
+                        "made": int(tree_out.get("made", 0) or 0),
+                        "temporal_links": int(tree_out.get("temporal_links", 0) or 0),
+                        "distill_links": int(tree_out.get("distill_links", 0) or 0),
+                        "ok": bool(tree_out.get("ok", True)),
                     },
                 }
                 maintenance_runs += 1

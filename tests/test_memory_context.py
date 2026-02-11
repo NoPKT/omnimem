@@ -78,6 +78,9 @@ class MemoryContextTest(unittest.TestCase):
             self.assertLessEqual(int(out1.get("estimated_tokens", 999999)), 180)
             self.assertGreaterEqual(int(out1.get("selected_count", 0)), 1)
             self.assertGreaterEqual(int(out1.get("carry_queued_count", 0)), 1)
+            self.assertGreaterEqual(int(out1.get("core_budget_tokens", 0)), 60)
+            self.assertGreaterEqual(int(out1.get("selected_core_count", 0)), 0)
+            self.assertGreaterEqual(int(out1.get("selected_expand_count", 0)), 0)
 
             out2 = build_budgeted_memory_context(
                 paths_root=root,

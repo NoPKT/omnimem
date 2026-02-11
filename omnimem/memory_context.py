@@ -97,10 +97,12 @@ def build_budgeted_memory_context(
     include_user_request: bool = False,
     delta_enabled: bool = True,
     carry_over_enabled: bool = True,
+    core_budget_ratio: float = 0.68,
     max_checkpoints: int = 3,
     max_memories: int = 8,
 ) -> dict[str, Any]:
     budget = max(120, int(budget_tokens))
+    core_budget = max(60, min(budget, int(budget * max(0.35, min(0.9, float(core_budget_ratio))))))
     route = infer_query_route(user_prompt)
     st = _load_delta_state(paths_root, state_key) if delta_enabled else {"seen": {}, "carry": []}
     seen = dict(st.get("seen") or {})
@@ -137,16 +139,34 @@ def build_budgeted_memory_context(
             delta_new.append(x)
         else:
             delta_seen.append(x)
+    def _route_rank(x: dict[str, Any]) -> tuple[int, int]:
+        layer = str(x.get("layer", "") or "")
+        # Lower is better.
+        if route == "semantic":
+            pri = {"long": 0, "short": 1, "archive": 2, "instant": 3}.get(layer, 4)
+        elif route == "procedural":
+            pri = {"short": 0, "long": 1, "archive": 2, "instant": 3}.get(layer, 4)
+        elif route == "episodic":
+            pri = {"short": 0, "instant": 1, "long": 2, "archive": 3}.get(layer, 4)
+        else:
+            pri = {"short": 0, "long": 1, "instant": 2, "archive": 3}.get(layer, 4)
+        score = float((x.get("retrieval") or {}).get("score", x.get("score", 0.0)) or 0.0)
+        return (pri, -int(score * 1000))
+
     if delta_enabled and carry_over_enabled and carry_ids:
         by_id = {str(x.get("id", "")).strip(): x for x in (delta_new + delta_seen) if str(x.get("id", "")).strip()}
         carry_front = [by_id[mid] for mid in carry_ids if mid in by_id]
         rest = [x for x in (delta_new + delta_seen) if str(x.get("id", "")).strip() not in set(carry_ids)]
+        rest.sort(key=_route_rank)
         ordered = carry_front + rest
     else:
         ordered = (delta_new + delta_seen) if delta_enabled else cand
+        ordered.sort(key=_route_rank)
     lines.append(f"Memory recalls (route={route}, budget={budget}):")
 
     selected: list[dict[str, Any]] = []
+    selected_core = 0
+    selected_expand = 0
     cur = estimate_tokens("\n".join(lines))
     not_selected: list[str] = []
     for x in ordered:
@@ -161,12 +181,20 @@ def build_budgeted_memory_context(
             continue
         one = _mem_line(x, route=route, delta_new=(seen.get(mid, "") != up))
         need = estimate_tokens(one) + 2
+        # Two-phase paging: first fill a compact core memory pack, then opportunistically expand.
+        if cur < core_budget and (cur + need) > core_budget:
+            not_selected.append(mid)
+            continue
         if cur + need > budget:
             not_selected.append(mid)
             continue
         lines.append(one)
         cur += need
         selected.append(x)
+        if cur <= core_budget:
+            selected_core += 1
+        else:
+            selected_expand += 1
     if len(selected) < max(1, int(max_memories)):
         # collect remaining non-selected ids for carry-over
         sel_set = {str(x.get("id", "")).strip() for x in selected}
@@ -221,8 +249,11 @@ def build_budgeted_memory_context(
         "estimated_tokens": est,
         "selected_ids": [str(x.get("id", "")) for x in selected if str(x.get("id", ""))],
         "selected_count": len(selected),
+        "selected_core_count": selected_core,
+        "selected_expand_count": selected_expand,
         "candidate_count": len(cand),
         "delta_new_count": len(delta_new),
         "delta_seen_count": len(delta_seen),
         "carry_queued_count": len(not_selected),
+        "core_budget_tokens": core_budget,
     }
