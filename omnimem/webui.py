@@ -865,6 +865,14 @@ HTML_PAGE = """<!doctype html>
                 <label style=\"margin-top:0\">since(days)
                   <input id=\"memQSinceDays\" type=\"number\" min=\"0\" max=\"365\" value=\"0\" style=\"max-width:110px\" />
                 </label>
+                <label style=\"margin-top:0\">dedup
+                  <select id=\"memDedupMode\" class=\"lang\" style=\"max-width:150px;\">
+                    <option value=\"off\" selected>off</option>
+                    <option value=\"summary_kind\">summary+kind</option>
+                  </select>
+                </label>
+                <label style=\"margin-top:0\"><input id=\"memShowReason\" type=\"checkbox\" checked /> show reason</label>
+                <label style=\"margin-top:0\"><input id=\"memShowExplain\" type=\"checkbox\" /> detail</label>
                 <button id=\"btnMemBuildQuery\" class=\"secondary\" style=\"margin-top:0\">Build Query</button>
               </div>
             </div>
@@ -1951,7 +1959,10 @@ HTML_PAGE = """<!doctype html>
       renderInitState(Boolean(d.initialized));
     }
 
-	    function retrievalHintHtml(x) {
+	    function retrievalHintHtml(x, opts = {}) {
+        const showReason = opts.showReason !== false;
+        const showDetail = !!opts.showDetail;
+        if (!showReason && !showDetail) return '';
 	      const r = x && x.retrieval ? x.retrieval : null;
         const why = Array.isArray(x?.why_recalled) ? x.why_recalled.filter(Boolean).slice(0, 2) : [];
         const whyHtml = why.length ? `<div class=\"small\">why: ${escHtml(why.join(' | '))}</div>` : '<div class=\"small\">why: (none)</div>';
@@ -1968,18 +1979,25 @@ HTML_PAGE = """<!doctype html>
           + `<span class=\"mono\">S</span>${spark(stab, 'warn')}`
           + `</div>`;
 	      if ((!r || typeof r !== 'object') && typeof x.score === 'number') {
-          const quick = `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>${heat}${whyHtml}`;
+          const line = `<div class=\"small mono\">why: score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>`;
+          if (!showDetail) return showReason ? line : '';
+          const quick = `${line}${heat}${whyHtml}`;
 	        return `<details class="disclosure"><summary>retrieval explain</summary>${quick}</details>`;
 	      }
-	      if (!r || typeof r !== 'object') return `<details class="disclosure"><summary>retrieval explain</summary>${heat}${whyHtml}</details>`;
+	      if (!r || typeof r !== 'object') {
+          if (!showDetail) return '';
+          return `<details class="disclosure"><summary>retrieval explain</summary>${heat}${whyHtml}</details>`;
+        }
 	      const c = (r.components && typeof r.components === 'object') ? r.components : {};
 	      const score = Number(r.score || 0);
 	      const rel = Number(c.relevance || 0);
+	      const lex = Number(c.lexical_overlap || 0);
 	      const rec = Number(c.recency || 0);
-	      const impRel = Number(c.importance || 0);
 	      const strat = String(r.strategy || '');
+        const line = `<div class=\"small mono\">why: ${escHtml(strat || 'n/a')} score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} lex=${escHtml(lex.toFixed(2))} rec=${escHtml(rec.toFixed(2))}</div>`;
+        if (!showDetail) return showReason ? line : '';
         const comp = Object.entries(c).slice(0, 8).map(([k, v]) => `${k}=${Number(v || 0).toFixed(3)}`).join(' ');
-        const quick = `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(impRel.toFixed(2))} ${escHtml(strat)}</div>${heat}${whyHtml}`;
+        const quick = `${line}${heat}${whyHtml}`;
         const detail = `<div class="small mono" style="margin-top:6px">components: ${escHtml(comp || '(none)')}</div>`;
 	      return `<details class="disclosure"><summary>retrieval explain</summary>${quick}${detail}</details>`;
 	    }
@@ -2095,6 +2113,30 @@ HTML_PAGE = """<!doctype html>
         const diversify = (document.getElementById('memDiversify')?.value || 'true') !== 'false';
         const mmr_lambda = Number(document.getElementById('memMmrLambda')?.value || 0.72);
         const route_mode = document.getElementById('memRouteMode')?.value?.trim() || 'auto';
+        const dedup_mode = document.getElementById('memDedupMode')?.value?.trim() || 'off';
+        const show_reason = !!document.getElementById('memShowReason')?.checked;
+        const show_explain = !!document.getElementById('memShowExplain')?.checked;
+        function buildMemoriesApiUrl() {
+          const params = new URLSearchParams({
+            limit: '20',
+            project_id: project_id,
+            session_id: session_id,
+            layer: layer,
+            query: query,
+            kind: composed.kind || '',
+            tag: composed.tag || '',
+            since_days: String(composed.since_days || 0),
+            mode: mode,
+            depth: String(Number.isFinite(depth) ? depth : 2),
+            per_hop: String(Number.isFinite(per_hop) ? per_hop : 6),
+            ranking_mode: ranking_mode,
+            diversify: diversify ? '1' : '0',
+            mmr_lambda: String(Number.isFinite(mmr_lambda) ? mmr_lambda : 0.72),
+            route: route_mode,
+            dedup: dedup_mode,
+          });
+          return '/api/memories?' + params.toString();
+        }
 	      safeSetRetrievePrefs({
 	        mode,
 	        depth: Number.isFinite(depth) ? Math.max(1, Math.min(4, Math.floor(depth))) : 2,
@@ -2102,25 +2144,9 @@ HTML_PAGE = """<!doctype html>
 	        ranking: ranking_mode || 'hybrid',
           diversify: !!diversify,
           mmr_lambda: Number.isFinite(mmr_lambda) ? Math.max(0.05, Math.min(0.95, mmr_lambda)) : 0.72,
-          route: route_mode || 'auto',
+	          route: route_mode || 'auto',
 	      });
-	      const d = await jget(
-	        '/api/memories?limit=20'
-	        + '&project_id=' + encodeURIComponent(project_id)
-	        + '&session_id=' + encodeURIComponent(session_id)
-	        + '&layer=' + encodeURIComponent(layer)
-	        + '&query=' + encodeURIComponent(query)
-          + '&kind=' + encodeURIComponent(composed.kind || '')
-          + '&tag=' + encodeURIComponent(composed.tag || '')
-          + '&since_days=' + encodeURIComponent(String(composed.since_days || 0))
-	        + '&mode=' + encodeURIComponent(mode)
-	        + '&depth=' + encodeURIComponent(String(Number.isFinite(depth) ? depth : 2))
-	        + '&per_hop=' + encodeURIComponent(String(Number.isFinite(per_hop) ? per_hop : 6))
-	        + '&ranking_mode=' + encodeURIComponent(ranking_mode)
-          + '&diversify=' + encodeURIComponent(diversify ? '1' : '0')
-          + '&mmr_lambda=' + encodeURIComponent(String(Number.isFinite(mmr_lambda) ? mmr_lambda : 0.72))
-          + '&route=' + encodeURIComponent(route_mode)
-	      );
+	      const d = await jget(buildMemoriesApiUrl());
 	      const rh = document.getElementById('memRetrieveHint');
 	      if (rh) {
 	        if (d && d.mode === 'smart' && d.explain) {
@@ -2139,7 +2165,7 @@ HTML_PAGE = """<!doctype html>
 	      b.innerHTML = '';
 	      (d.items || []).forEach(x => {
 	        const tr = document.createElement('tr');
-	        tr.innerHTML = `<td><a href=\"#\" data-id=\"${escHtml(x.id)}\">${escHtml(String(x.id).slice(0,10))}...</a></td><td>${escHtml(x.project_id || '')}</td><td>${escHtml(x.layer || '')}</td><td>${escHtml(x.kind || '')}</td><td>${escHtml(x.summary || '')}${retrievalHintHtml(x)}</td><td>${escHtml(x.updated_at || '')}</td>`;
+	        tr.innerHTML = `<td><a href=\"#\" data-id=\"${escHtml(x.id)}\">${escHtml(String(x.id).slice(0,10))}...</a></td><td>${escHtml(x.project_id || '')}</td><td>${escHtml(x.layer || '')}</td><td>${escHtml(x.kind || '')}</td><td>${escHtml(x.summary || '')}${retrievalHintHtml(x, { showReason: show_reason, showDetail: show_explain })}</td><td>${escHtml(x.updated_at || '')}</td>`;
 	        tr.querySelector('a').onclick = async (e) => {
 	          e.preventDefault();
 	          await openMemory(x.id);
@@ -3778,6 +3804,12 @@ HTML_PAGE = """<!doctype html>
           document.getElementById('memRouteMode').onchange = () => loadMem();
           document.getElementById('memRetrieveDepth').onchange = () => loadMem();
           document.getElementById('memRetrievePerHop').onchange = () => loadMem();
+          document.getElementById('memQKind').onchange = () => loadMem();
+          document.getElementById('memQTag').onchange = () => loadMem();
+          document.getElementById('memQSinceDays').onchange = () => loadMem();
+          document.getElementById('memDedupMode').onchange = () => loadMem();
+          document.getElementById('memShowReason').onchange = () => loadMem();
+          document.getElementById('memShowExplain').onchange = () => loadMem();
           document.getElementById('memSessionId').onchange = () => { loadMem(); loadLayerStats(); };
           document.getElementById('memProjectId').onchange = () => { loadMem(); loadLayerStats(); };
           const mq = document.getElementById('memQuery');
@@ -4735,6 +4767,73 @@ def _filter_items_by_route(paths, items: list[dict[str, Any]], route: str) -> li
     return [x for x in items if str(x.get("id", "")) in keep]
 
 
+def _parse_updated_at_utc(raw: str) -> datetime | None:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _apply_memory_filters(
+    items: list[dict[str, Any]],
+    *,
+    kind_filter: str,
+    tag_filter: str,
+    since_days: int,
+) -> list[dict[str, Any]]:
+    out = list(items or [])
+    if kind_filter:
+        out = [x for x in out if str(x.get("kind") or "").strip().lower() == kind_filter]
+    if tag_filter:
+        out = [
+            x
+            for x in out
+            if any(str(t).strip().lower() == tag_filter for t in (x.get("tags") or []))
+        ]
+    if since_days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
+        keep: list[dict[str, Any]] = []
+        for x in out:
+            dt = _parse_updated_at_utc(str(x.get("updated_at") or ""))
+            if dt is not None and dt >= cutoff:
+                keep.append(x)
+        out = keep
+    return out
+
+
+def _normalize_dedup_mode(raw: str) -> str:
+    s = str(raw or "").strip().lower()
+    return s if s in {"off", "summary_kind"} else "off"
+
+
+def _dedup_memory_items(items: list[dict[str, Any]], *, mode: str) -> list[dict[str, Any]]:
+    dedup_mode = _normalize_dedup_mode(mode)
+    if dedup_mode == "off":
+        return list(items or [])
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for x in (items or []):
+        kind = str(x.get("kind") or "").strip().lower()
+        summary = re.sub(r"\s+", " ", str(x.get("summary") or "").strip().lower())
+        if dedup_mode == "summary_kind":
+            key = f"{kind}|{summary}"
+        else:
+            key = str(x.get("id") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(x)
+    return out
+
+
 def _run_health_check(paths, daemon_state: dict[str, Any]) -> dict[str, Any]:
     checked_at = utc_now()
     db_ok = False
@@ -5522,6 +5621,7 @@ def run_webui(
                 per_hop = int(q.get("per_hop", ["6"])[0])
                 ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
                 diversify = str(q.get("diversify", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
+                dedup_mode = _normalize_dedup_mode(q.get("dedup", ["off"])[0])
                 try:
                     mmr_lambda = float(q.get("mmr_lambda", ["0.72"])[0])
                 except Exception:
@@ -5559,35 +5659,21 @@ def run_webui(
                     if layer:
                         items = [x for x in items if str(x.get("layer") or "") == layer]
                     items = _filter_items_by_route(paths, items, route)
-                    if kind_filter:
-                        items = [x for x in items if str(x.get("kind") or "").strip().lower() == kind_filter]
-                    if tag_filter:
-                        items = [
-                            x
-                            for x in items
-                            if any(str(t).strip().lower() == tag_filter for t in (x.get("tags") or []))
-                        ]
-                    if since_days > 0:
-                        cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
-                        keep: list[dict[str, Any]] = []
-                        for x in items:
-                            try:
-                                raw = str(x.get("updated_at") or "")
-                                raw = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-                                dt = datetime.fromisoformat(raw)
-                                if dt.tzinfo is None:
-                                    dt = dt.replace(tzinfo=timezone.utc)
-                                if dt.astimezone(timezone.utc) >= cutoff:
-                                    keep.append(x)
-                            except Exception:
-                                continue
-                        items = keep
+                    items = _apply_memory_filters(
+                        items,
+                        kind_filter=kind_filter,
+                        tag_filter=tag_filter,
+                        since_days=since_days,
+                    )
+                    before_dedup = len(items)
+                    items = _dedup_memory_items(items, mode=dedup_mode)
                     self._send_json(
                         {
                             "ok": True,
                             "items": items[: max(1, min(200, int(limit)))],
                             "mode": "smart",
                             "route": route,
+                            "dedup": {"mode": dedup_mode, "before": before_dedup, "after": len(items)},
                             "explain": out.get("explain", {}),
                         }
                     )
@@ -5602,30 +5688,23 @@ def run_webui(
                         session_id=session_id,
                     )
                     items = _filter_items_by_route(paths, items, route)
-                    if kind_filter:
-                        items = [x for x in items if str(x.get("kind") or "").strip().lower() == kind_filter]
-                    if tag_filter:
-                        items = [
-                            x
-                            for x in items
-                            if any(str(t).strip().lower() == tag_filter for t in (x.get("tags") or []))
-                        ]
-                    if since_days > 0:
-                        cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
-                        keep: list[dict[str, Any]] = []
-                        for x in items:
-                            try:
-                                raw = str(x.get("updated_at") or "")
-                                raw = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-                                dt = datetime.fromisoformat(raw)
-                                if dt.tzinfo is None:
-                                    dt = dt.replace(tzinfo=timezone.utc)
-                                if dt.astimezone(timezone.utc) >= cutoff:
-                                    keep.append(x)
-                            except Exception:
-                                continue
-                        items = keep
-                    self._send_json({"ok": True, "items": items, "mode": "basic", "route": route})
+                    items = _apply_memory_filters(
+                        items,
+                        kind_filter=kind_filter,
+                        tag_filter=tag_filter,
+                        since_days=since_days,
+                    )
+                    before_dedup = len(items)
+                    items = _dedup_memory_items(items, mode=dedup_mode)
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "items": items,
+                            "mode": "basic",
+                            "route": route,
+                            "dedup": {"mode": dedup_mode, "before": before_dedup, "after": len(items)},
+                        }
+                    )
                 return
 
             if parsed.path == "/api/layer-stats":

@@ -86,8 +86,25 @@ if [[ "$server_ok" -eq 1 ]]; then
 
   # create memory and verify memory list in webui
   "$CLI" --config "$CFG" write --summary 'webui test memory' --body 'hello webui' >/dev/null
+  "$CLI" --config "$CFG" write --summary 'webui dedup sample' --body 'hello dedup one' >/dev/null
+  "$CLI" --config "$CFG" write --summary 'webui dedup sample' --body 'hello dedup two' >/dev/null
   mem_json="$(curl -sS "http://127.0.0.1:$PORT/api/memories?limit=5")"
   echo "$mem_json" | rg '"items"' >/dev/null
+  dedup_json="$(curl -sS "http://127.0.0.1:$PORT/api/memories?limit=20&query=webui&dedup=summary_kind")"
+  python3 - "$dedup_json" <<'PY'
+import json
+import sys
+d = json.loads(sys.argv[1])
+dd = d.get("dedup") or {}
+if dd.get("mode") != "summary_kind":
+    raise SystemExit("[FAIL] dedup mode missing or wrong")
+before = int(dd.get("before", 0) or 0)
+after = int(dd.get("after", 0) or 0)
+if before < after:
+    raise SystemExit(f"[FAIL] dedup after cannot exceed before: before={before} after={after}")
+if not isinstance(d.get("items"), list):
+    raise SystemExit("[FAIL] /api/memories items is not a list")
+PY
 
   # restart with token auth and verify API protection
   kill "$WEBUI_PID" >/dev/null 2>&1 || true

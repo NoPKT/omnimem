@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.19
+
+- Release guard: add `omnimem preflight` and block clean-worktree releases by default; update publish docs and README pre-check flow.
+- Retrieval ranking: tune cognitive scoring to gate reuse bonus by lexical relevance, reducing weak-match domination; add regression tests.
+- Doctor diagnostics: enrich `omnimem doctor` with daemon sync latency signals and recent `memory.sync` failure aggregation (`failure_rate`, error-kind distribution, dominant failure issues).
+- WebUI memories: add `dedup` query mode (`off` / `summary+kind`), compact `why` line rendering controls, and return dedup metadata (`before`/`after`).
+- WebUI cleanup: refactor duplicated memories filtering logic into shared helpers (`_apply_memory_filters`, `_dedup_memory_items`) and simplify front-end query URL assembly.
+- Versioning: align Python runtime version and npm package version to `0.2.19`.
+
 ## 0.2.18
 
 - CLI: add `omnimem doctor` diagnostics with actionable remediation hints for WebUI runtime health, daemon status, sync readiness, and storage verification.

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import signal
+import sqlite3
 import threading
 import time
 import uuid
@@ -41,6 +42,7 @@ from .core import (
     parse_ref,
     resolve_paths,
     run_sync_daemon,
+    classify_sync_error,
     sync_error_hint,
     sync_git,
     verify_storage,
@@ -1426,6 +1428,121 @@ def _doctor_actions(facts: dict[str, Any]) -> list[str]:
     return dedup
 
 
+def _seconds_since_iso(raw: str) -> float | None:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds())
+    except Exception:
+        return None
+
+
+def _doctor_sync_history(paths, *, limit: int = 24) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "event_count": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "failure_rate": 0.0,
+        "error_kinds": {},
+        "mode_counts": {},
+        "last_event_at": "",
+        "last_event_age_s": None,
+    }
+    try:
+        with sqlite3.connect(paths.sqlite_path, timeout=1.2) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT event_time, payload_json
+                FROM memory_events
+                WHERE event_type = 'memory.sync'
+                ORDER BY event_time DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+    except Exception as exc:
+        out["error"] = str(exc)
+        return out
+
+    out["event_count"] = len(rows)
+    if rows:
+        out["last_event_at"] = str(rows[0]["event_time"] or "")
+        out["last_event_age_s"] = _seconds_since_iso(out["last_event_at"])
+
+    error_kinds: dict[str, int] = {}
+    mode_counts: dict[str, int] = {}
+    success_count = 0
+    failure_count = 0
+    for r in rows:
+        payload: dict[str, Any] = {}
+        try:
+            payload = json.loads(r["payload_json"] or "{}") or {}
+        except Exception:
+            payload = {}
+        daemon_payload = payload.get("daemon") if isinstance(payload, dict) else None
+        if isinstance(daemon_payload, dict):
+            mode = "daemon"
+            ok = bool(daemon_payload.get("ok", False))
+            err_kind = str(daemon_payload.get("last_error_kind", "none") or "none")
+        else:
+            mode = str((payload or {}).get("mode", "unknown") or "unknown")
+            ok = bool((payload or {}).get("ok", False))
+            if ok:
+                err_kind = "none"
+            else:
+                err_kind = classify_sync_error(str((payload or {}).get("message", "")), (payload or {}).get("detail", ""))
+
+        mode_counts[mode] = int(mode_counts.get(mode, 0)) + 1
+        if ok:
+            success_count += 1
+        else:
+            failure_count += 1
+            error_kinds[err_kind] = int(error_kinds.get(err_kind, 0)) + 1
+
+    total = max(1, success_count + failure_count)
+    out["success_count"] = success_count
+    out["failure_count"] = failure_count
+    out["failure_rate"] = round(float(failure_count) / float(total), 4)
+    out["error_kinds"] = error_kinds
+    out["mode_counts"] = mode_counts
+    return out
+
+
+def _doctor_sync_issues(daemon_info: dict[str, Any], sync_recent: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    latency = daemon_info.get("latency") if isinstance(daemon_info.get("latency"), dict) else {}
+    run_age_s = latency.get("since_last_run_s")
+    pull_interval_s = latency.get("pull_interval_s")
+    if bool(daemon_info.get("enabled", False)) and bool(daemon_info.get("running", False)):
+        if isinstance(run_age_s, (int, float)) and isinstance(pull_interval_s, (int, float)) and pull_interval_s > 0:
+            stale_threshold = max(90.0, float(pull_interval_s) * 2.5)
+            if float(run_age_s) > stale_threshold:
+                issues.append(
+                    f"daemon sync appears stale (last_run_age_s={int(run_age_s)}, expected<={int(stale_threshold)})"
+                )
+
+    event_count = int(sync_recent.get("event_count", 0) or 0)
+    failure_rate = float(sync_recent.get("failure_rate", 0.0) or 0.0)
+    if event_count >= 5 and failure_rate >= 0.6:
+        issues.append(
+            f"recent sync failure rate is high ({int(round(failure_rate * 100))}% over {event_count} events)"
+        )
+
+    ek = sync_recent.get("error_kinds") if isinstance(sync_recent.get("error_kinds"), dict) else {}
+    if isinstance(ek, dict) and ek:
+        top_kind, top_count = max(ek.items(), key=lambda kv: int(kv[1]))
+        if str(top_kind) and str(top_kind) not in {"none", ""} and int(top_count) >= 3:
+            issues.append(f"recent dominant sync error_kind={top_kind} ({int(top_count)} events)")
+    return issues
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     cfg = load_config(cfg_path_arg(args))
     paths = resolve_paths(cfg)
@@ -1459,11 +1576,30 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 raw = resp.read().decode("utf-8", errors="ignore")
             d = json.loads(raw) if raw else {}
             if isinstance(d, dict):
+                run_age = _seconds_since_iso(str(d.get("last_run_at", "")))
+                success_age = _seconds_since_iso(str(d.get("last_success_at", "")))
+                failure_age = _seconds_since_iso(str(d.get("last_failure_at", "")))
+                pull_iv = int(d.get("pull_interval", 0) or 0)
                 daemon_info = {
                     "enabled": bool(d.get("enabled", False)),
                     "running": bool(d.get("running", False)),
+                    "initialized": bool(d.get("initialized", False)),
+                    "cycles": int(d.get("cycles", 0) or 0),
+                    "success_count": int(d.get("success_count", 0) or 0),
+                    "failure_count": int(d.get("failure_count", 0) or 0),
+                    "last_run_at": str(d.get("last_run_at", "")),
+                    "last_success_at": str(d.get("last_success_at", "")),
+                    "last_failure_at": str(d.get("last_failure_at", "")),
                     "last_error_kind": str(d.get("last_error_kind", "none")),
+                    "last_error": str(d.get("last_error", "")),
                     "remediation_hint": str(d.get("remediation_hint", "")),
+                    "latency": {
+                        "scan_interval_s": int(d.get("scan_interval", 0) or 0),
+                        "pull_interval_s": pull_iv,
+                        "since_last_run_s": int(run_age) if isinstance(run_age, (int, float)) else None,
+                        "since_last_success_s": int(success_age) if isinstance(success_age, (int, float)) else None,
+                        "since_last_failure_s": int(failure_age) if isinstance(failure_age, (int, float)) else None,
+                    },
                 }
         except Exception as exc:
             daemon_info = {"error": str(exc), "last_error_kind": "unknown", "enabled": False, "running": False}
@@ -1485,6 +1621,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except Exception:
         dirty = False
 
+    sync_recent = _doctor_sync_history(paths, limit=24)
+
     facts = {
         "webui": {
             "host": host,
@@ -1503,6 +1641,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "branch": branch,
             "remote_url_configured": bool(remote_url.strip()),
             "dirty": dirty,
+            "recent": sync_recent,
         },
     }
     actions = _doctor_actions(facts)
@@ -1518,6 +1657,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         issues.append("sync remote_url not configured")
     if bool(dirty):
         issues.append("git worktree has uncommitted changes")
+    issues.extend(_doctor_sync_issues(daemon_info, sync_recent))
 
     out = {
         "ok": len(issues) == 0,
@@ -1526,6 +1666,73 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "issues": issues,
         "actions": actions,
     }
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def _git_changed_files(cwd: Path) -> tuple[bool, list[str], str]:
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode != 0 or str(probe.stdout or "").strip().lower() != "true":
+            err = str(probe.stderr or probe.stdout or "").strip() or "not a git worktree"
+            return False, [], err
+    except Exception as exc:
+        return False, [], str(exc)
+
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(cwd), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:
+        return True, [], str(exc)
+    if cp.returncode != 0:
+        return True, [], str(cp.stderr or cp.stdout or "").strip() or "git status failed"
+
+    files: list[str] = []
+    for raw in (cp.stdout or "").splitlines():
+        line = str(raw or "").rstrip()
+        if len(line) < 4:
+            continue
+        path_part = line[3:].strip()
+        if " -> " in path_part:
+            path_part = path_part.split(" -> ", 1)[1].strip()
+        if path_part:
+            files.append(path_part)
+    return True, files, ""
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    target = Path(str(getattr(args, "path", ".") or ".")).expanduser().resolve()
+    allow_clean = bool(getattr(args, "allow_clean", False))
+
+    in_git, changed_files, git_error = _git_changed_files(target)
+    issues: list[str] = []
+    if not in_git:
+        issues.append("path is not inside a git worktree")
+    if in_git and not changed_files and not allow_clean:
+        issues.append("no local changes detected; release is blocked")
+
+    out = {
+        "ok": len(issues) == 0,
+        "path": str(target),
+        "checks": {
+            "git_worktree": in_git,
+            "changed_count": len(changed_files),
+            "changed_files": changed_files,
+            "allow_clean": allow_clean,
+        },
+        "issues": issues,
+    }
+    if git_error:
+        out["checks"]["git_error"] = git_error
     print_json(out)
     return 0 if out.get("ok") else 1
 
@@ -1812,6 +2019,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--host", default="127.0.0.1")
     p_doctor.add_argument("--port", type=int, default=8765)
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_preflight = sub.add_parser("preflight", help="release preflight checks (blocks publish on clean worktree)")
+    p_preflight.add_argument("--path", default=".", help="project path to check")
+    p_preflight.add_argument("--allow-clean", action="store_true", help="allow release when no local changes are detected")
+    p_preflight.set_defaults(func=cmd_preflight)
 
     p_cfg_path = sub.add_parser("config-path", help="print active config path")
     p_cfg_path.add_argument("--config", help="path to omnimem config json")

@@ -2680,22 +2680,31 @@ def _attach_cognitive_retrieval(
         confidence = max(0.0, min(1.0, float(sig.get("confidence_score", 0.0) or 0.0)))
         stability = max(0.0, min(1.0, float(sig.get("stability_score", 0.0) or 0.0)))
         volatility = max(0.0, min(1.0, float(sig.get("volatility_score", 0.0) or 0.0)))
-        reuse = _reuse_norm(int(sig.get("reuse_count", 0) or 0))
+        reuse_raw = _reuse_norm(int(sig.get("reuse_count", 0) or 0))
         recency = _recency_score(str(it.get("updated_at", "")), now_dt)
         lexical = _token_overlap_score(str(it.get("summary", "")), query_tokens)
         fts_rel = _fts_rank_to_relevance(it.pop("fts_rank", None))
-        relevance = max(lexical, fts_rel)
+        if query_tokens:
+            relevance = (0.65 * fts_rel) + (0.35 * lexical)
+        else:
+            relevance = fts_rel
+        # Memory-strength signals should help most when the candidate is relevant to the current query.
+        # This reduces false positives where highly reused but weakly matched memories dominate.
+        relevance_gate = 0.15 + (0.85 * lexical if query_tokens else 0.85 * relevance)
+        reuse = reuse_raw * relevance_gate
+        stability_eff = stability * (0.55 + (0.45 * relevance))
 
         # Inspired by generative-memory retrieval (relevance + recency + importance)
         # and long-term-memory stabilization signals used by OmniMem.
         score = (
-            0.38 * relevance
+            0.34 * relevance
+            + 0.12 * lexical
             + 0.18 * importance
             + 0.12 * recency
-            + 0.11 * stability
-            + 0.08 * confidence
-            + 0.08 * reuse
-            - 0.05 * volatility
+            + 0.10 * stability_eff
+            + 0.07 * confidence
+            + 0.05 * reuse
+            - 0.04 * volatility
         )
         score = max(0.0, min(1.0, float(score)))
         it["retrieval"] = {
@@ -2708,8 +2717,11 @@ def _attach_cognitive_retrieval(
                 "recency": recency,
                 "importance": importance,
                 "confidence": confidence,
-                "stability": stability,
+                "stability": stability_eff,
+                "stability_raw": stability,
                 "reuse": reuse,
+                "reuse_raw": reuse_raw,
+                "relevance_gate": relevance_gate,
                 "volatility_penalty": volatility,
             },
         }

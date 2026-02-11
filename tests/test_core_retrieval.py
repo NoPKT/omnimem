@@ -93,6 +93,40 @@ class RetrievalRankingTest(unittest.TestCase):
             float(items[1]["retrieval"]["score"]),
         )
 
+    def test_relevance_gating_prevents_reuse_dominating_weak_match(self) -> None:
+        self._write(
+            "alpha beta gamma exact match candidate",
+            importance=0.55,
+            stability=0.50,
+            confidence=0.50,
+            reuse_count=0,
+        )
+        self._write(
+            "alpha beta gamma old reused generic note with many unrelated filler terms delta epsilon zeta theta kappa lambda",
+            importance=0.60,
+            stability=0.60,
+            confidence=0.60,
+            reuse_count=25,
+        )
+
+        out = find_memories_ex(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            query="alpha beta gamma",
+            layer="short",
+            limit=10,
+            project_id="OM",
+            session_id="s1",
+        )
+        self.assertTrue(out.get("ok"))
+        items = list(out.get("items") or [])
+        self.assertGreaterEqual(len(items), 2)
+        self.assertIn("exact match candidate", str(items[0].get("summary", "")))
+        c0 = items[0]["retrieval"]["components"]
+        c1 = items[1]["retrieval"]["components"]
+        self.assertGreater(float(c0["lexical_overlap"]), float(c1["lexical_overlap"]))
+        self.assertGreater(float(items[0]["retrieval"]["score"]), float(items[1]["retrieval"]["score"]))
+
 
 if __name__ == "__main__":
     unittest.main()

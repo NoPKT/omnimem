@@ -3,6 +3,7 @@
 ## Pre-check
 
 ```bash
+omnimem preflight --path .
 npm_config_cache=/tmp/omnimem-npm-cache npm run pack:check
 bash scripts/verify_phase_d.sh
 ```

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from omnimem.cli import _doctor_actions, build_parser
+from omnimem.cli import _doctor_actions, _doctor_sync_issues, build_parser
 
 
 class CLIDoctorTest(unittest.TestCase):
@@ -33,6 +33,25 @@ class CLIDoctorTest(unittest.TestCase):
         self.assertTrue(any("github-bootstrap" in x for x in actions))
         self.assertTrue(any("github-status" in x for x in actions))
         self.assertTrue(any("resolve conflicts" in x for x in actions))
+
+    def test_doctor_sync_issues_for_stale_daemon(self) -> None:
+        issues = _doctor_sync_issues(
+            {
+                "enabled": True,
+                "running": True,
+                "latency": {"since_last_run_s": 420, "pull_interval_s": 30},
+            },
+            {"event_count": 0, "failure_rate": 0.0, "error_kinds": {}},
+        )
+        self.assertTrue(any("stale" in x for x in issues))
+
+    def test_doctor_sync_issues_for_high_failure_rate(self) -> None:
+        issues = _doctor_sync_issues(
+            {"enabled": True, "running": True, "latency": {"since_last_run_s": 10, "pull_interval_s": 30}},
+            {"event_count": 8, "failure_rate": 0.75, "error_kinds": {"network": 5}},
+        )
+        self.assertTrue(any("failure rate is high" in x for x in issues))
+        self.assertTrue(any("dominant sync error_kind=network" in x for x in issues))
 
 
 if __name__ == "__main__":

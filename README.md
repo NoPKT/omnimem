@@ -79,6 +79,12 @@ bash scripts/detach_project.sh /path/to/project
 
 ## Publish and npx
 
+Pre-check before npm publish:
+
+```bash
+omnimem preflight --path .
+```
+
 After publishing to npm, end users can run:
 
 ```bash

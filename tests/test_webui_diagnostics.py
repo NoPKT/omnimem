@@ -8,6 +8,8 @@ import sqlite3
 
 from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
+    _apply_memory_filters,
+    _dedup_memory_items,
     _evaluate_governance_action,
     _infer_memory_route,
     _maintenance_impact_forecast,
@@ -26,6 +28,32 @@ def _schema_sql_path() -> Path:
 
 
 class WebUIDiagnosticsTest(unittest.TestCase):
+    def test_apply_memory_filters_kind_tag_since(self) -> None:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        old = (now - timedelta(days=10)).isoformat()
+        new = now.isoformat()
+        items = [
+            {"id": "1", "kind": "note", "tags": ["x", "keep"], "updated_at": new},
+            {"id": "2", "kind": "decision", "tags": ["keep"], "updated_at": new},
+            {"id": "3", "kind": "note", "tags": ["other"], "updated_at": old},
+        ]
+        out = _apply_memory_filters(
+            items,
+            kind_filter="note",
+            tag_filter="keep",
+            since_days=7,
+        )
+        self.assertEqual([x["id"] for x in out], ["1"])
+
+    def test_dedup_memory_items_summary_kind(self) -> None:
+        items = [
+            {"id": "a1", "kind": "note", "summary": "Same   Summary"},
+            {"id": "a2", "kind": "note", "summary": "same summary"},
+            {"id": "b1", "kind": "decision", "summary": "same summary"},
+        ]
+        out = _dedup_memory_items(items, mode="summary_kind")
+        self.assertEqual([x["id"] for x in out], ["a1", "b1"])
+
     def test_memory_route_inference(self) -> None:
         self.assertEqual(_normalize_memory_route("procedural"), "procedural")
         self.assertEqual(_normalize_memory_route("bad-value"), "auto")

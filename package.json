@@ -1,6 +1,6 @@
 {
   "name": "omnimem",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "private": false,
   "description": "OmniMem CLI and bootstrap runner",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "prepack": "find omnimem -name '__pycache__' -type d -prune -exec rm -rf {} +",
+    "prepack": "find omnimem scripts -name '__pycache__' -type d -prune -exec rm -rf {} +",
     "start": "./bin/omnimem start --host 127.0.0.1 --port 8765",
     "test": "python3 -m pytest -q",
     "verify": "bash scripts/verify_phase_d.sh",
