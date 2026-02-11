@@ -4817,6 +4817,57 @@ def _normalize_dedup_mode(raw: str) -> str:
     return s if s in {"off", "summary_kind"} else "off"
 
 
+def _parse_int_param(raw: Any, *, default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(float(raw))
+    except Exception:
+        v = int(default)
+    return max(int(lo), min(int(hi), v))
+
+
+def _parse_float_param(raw: Any, *, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float(raw)
+    except Exception:
+        v = float(default)
+    return max(float(lo), min(float(hi), v))
+
+
+def _cache_get(
+    cache: dict[Any, tuple[float, dict[str, Any]]],
+    key: Any,
+    *,
+    now: float,
+    ttl_s: float,
+) -> dict[str, Any] | None:
+    hit = cache.get(key)
+    if not hit:
+        return None
+    ts, val = hit
+    if (now - float(ts)) > float(ttl_s):
+        cache.pop(key, None)
+        return None
+    return val
+
+
+def _cache_set(
+    cache: dict[Any, tuple[float, dict[str, Any]]],
+    key: Any,
+    value: dict[str, Any],
+    *,
+    now: float,
+    max_items: int,
+) -> None:
+    cache[key] = (float(now), value)
+    overflow = len(cache) - max(1, int(max_items))
+    if overflow <= 0:
+        return
+    # Evict oldest entries first to keep cache bounded.
+    evict_keys = [k for k, _ in sorted(cache.items(), key=lambda kv: float(kv[1][0]))[:overflow]]
+    for k in evict_keys:
+        cache.pop(k, None)
+
+
 def _dedup_memory_items(items: list[dict[str, Any]], *, mode: str) -> list[dict[str, Any]]:
     dedup_mode = _normalize_dedup_mode(mode)
     if dedup_mode == "off":
@@ -4835,6 +4886,64 @@ def _dedup_memory_items(items: list[dict[str, Any]], *, mode: str) -> list[dict[
         seen.add(key)
         out.append(x)
     return out
+
+
+def _aggregate_event_stats(
+    rows: list[dict[str, Any] | sqlite3.Row],
+    *,
+    project_id: str,
+    session_id: str,
+    days: int,
+) -> dict[str, Any]:
+    # Aggregate in Python because memory_events doesn't store project/session columns.
+    type_counts: dict[str, int] = {}
+    day_counts: dict[str, int] = {}
+    total = 0
+    day_allow: set[str] | None = None
+    # Only keep last N days keys if present; compute by seen days.
+    seen_days: list[str] = []
+
+    def accept_event(payload: dict[str, Any]) -> tuple[str, str]:
+        env = payload.get("envelope") if isinstance(payload, dict) else None
+        if not isinstance(env, dict):
+            env = {}
+        scope = env.get("scope") if isinstance(env.get("scope"), dict) else {}
+        source = env.get("source") if isinstance(env.get("source"), dict) else {}
+        pid = str(scope.get("project_id", "") or payload.get("project_id", "") or "").strip()
+        sid = str(source.get("session_id", "") or payload.get("session_id", "") or "").strip()
+        return pid, sid
+
+    for r in rows:
+        et = str(r["event_type"] or "")
+        ts = str(r["event_time"] or "")
+        day = ts[:10] if len(ts) >= 10 else ""
+        if not day:
+            continue
+        if day_allow is None:
+            if day not in seen_days:
+                seen_days.append(day)
+            if len(seen_days) > days:
+                day_allow = set(seen_days[:days])
+        if day_allow is not None and day not in day_allow:
+            continue
+
+        try:
+            payload = json.loads(r["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        pid, sid = accept_event(payload if isinstance(payload, dict) else {})
+        if project_id and pid != project_id:
+            continue
+        if session_id and sid != session_id:
+            continue
+
+        total += 1
+        type_counts[et] = type_counts.get(et, 0) + 1
+        day_counts[day] = day_counts.get(day, 0) + 1
+
+    types = [{"event_type": k, "count": int(v)} for k, v in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)]
+    days_out = [{"day": k, "count": int(v)} for k, v in sorted(day_counts.items(), key=lambda x: x[0])]
+    return {"total": int(total), "types": types, "days": days_out}
 
 
 def _run_health_check(paths, daemon_state: dict[str, Any]) -> dict[str, Any]:
@@ -5476,7 +5585,7 @@ def run_webui(
     event_stats_lock = threading.Lock()
     events_cache: dict[tuple[str, str, str, int], tuple[float, dict[str, Any]]] = {}
     events_cache_lock = threading.Lock()
-    smart_retrieve_cache: dict[tuple[str, str, str, int, int, str, int], tuple[float, dict[str, Any]]] = {}
+    smart_retrieve_cache: dict[tuple[str, str, str, int, int, str, bool, float, int], tuple[float, dict[str, Any]]] = {}
     smart_retrieve_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -5606,41 +5715,33 @@ def run_webui(
 
             if parsed.path == "/api/memories":
                 q = parse_qs(parsed.query)
-                limit = int(q.get("limit", ["20"])[0])
+                limit = _parse_int_param(q.get("limit", ["20"])[0], default=20, lo=1, hi=200)
                 project_id = q.get("project_id", [""])[0].strip()
                 session_id = q.get("session_id", [""])[0].strip()
                 layer = q.get("layer", [""])[0].strip() or None
                 query = q.get("query", [""])[0].strip()
                 kind_filter = q.get("kind", [""])[0].strip().lower()
                 tag_filter = q.get("tag", [""])[0].strip().lower()
-                try:
-                    since_days = max(0, min(365, int(float(q.get("since_days", ["0"])[0]))))
-                except Exception:
-                    since_days = 0
+                since_days = _parse_int_param(q.get("since_days", ["0"])[0], default=0, lo=0, hi=365)
                 mode = q.get("mode", ["basic"])[0].strip().lower() or "basic"
                 route_raw = _normalize_memory_route(q.get("route", ["auto"])[0].strip())
                 route = _infer_memory_route(query) if route_raw == "auto" else route_raw
-                depth = int(q.get("depth", ["2"])[0])
-                per_hop = int(q.get("per_hop", ["6"])[0])
+                depth = _parse_int_param(q.get("depth", ["2"])[0], default=2, lo=1, hi=4)
+                per_hop = _parse_int_param(q.get("per_hop", ["6"])[0], default=6, lo=1, hi=30)
                 ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
                 diversify = str(q.get("diversify", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
                 dedup_mode = _normalize_dedup_mode(q.get("dedup", ["off"])[0])
-                try:
-                    mmr_lambda = float(q.get("mmr_lambda", ["0.72"])[0])
-                except Exception:
-                    mmr_lambda = 0.72
-                mmr_lambda = max(0.05, min(0.95, mmr_lambda))
+                mmr_lambda = _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95)
                 if mode == "smart" and query:
-                    depth_i = max(1, min(4, int(depth)))
-                    hop_i = max(1, min(30, int(per_hop)))
+                    depth_i = int(depth)
+                    hop_i = int(per_hop)
                     rank_i = ranking_mode if ranking_mode in {"path", "ppr", "hybrid"} else "hybrid"
                     limit_i = max(8, min(30, int(limit)))
                     cache_key = (project_id, session_id, query, depth_i, hop_i, rank_i, bool(diversify), float(mmr_lambda), limit_i)
                     out: dict[str, Any] | None = None
+                    now = time.time()
                     with smart_retrieve_lock:
-                        hit = smart_retrieve_cache.get(cache_key)
-                        if hit and (time.time() - hit[0]) <= 12.0:
-                            out = hit[1]
+                        out = _cache_get(smart_retrieve_cache, cache_key, now=now, ttl_s=12.0)
                     if out is None:
                         out = retrieve_thread(
                             paths=paths,
@@ -5660,7 +5761,7 @@ def run_webui(
                             feedback_reuse_step=1,
                         )
                         with smart_retrieve_lock:
-                            smart_retrieve_cache[cache_key] = (time.time(), out)
+                            _cache_set(smart_retrieve_cache, cache_key, out, now=now, max_items=96)
                     items = list(out.get("items") or [])
                     if layer:
                         items = [x for x in items if str(x.get("layer") or "") == layer]
@@ -6153,15 +6254,14 @@ def run_webui(
                 project_id = q.get("project_id", [""])[0].strip()
                 session_id = q.get("session_id", [""])[0].strip()
                 event_type = q.get("event_type", [""])[0].strip()
-                limit = int(q.get("limit", ["60"])[0])
-                limit = max(1, min(200, limit))
+                limit = _parse_int_param(q.get("limit", ["60"])[0], default=60, lo=1, hi=200)
                 fetch_limit = max(400, min(2000, limit * 20))
                 cache_key = (project_id, session_id, event_type, limit)
                 now = time.time()
                 with events_cache_lock:
-                    hit = events_cache.get(cache_key)
-                    if hit and (now - float(hit[0]) <= 2.0):
-                        self._send_json(hit[1])
+                    out_cached = _cache_get(events_cache, cache_key, now=now, ttl_s=2.0)
+                    if out_cached is not None:
+                        self._send_json(out_cached)
                         return
                 try:
                     with _db_connect() as conn:
@@ -6240,7 +6340,7 @@ def run_webui(
                         "items": items,
                     }
                     with events_cache_lock:
-                        events_cache[cache_key] = (now, out)
+                        _cache_set(events_cache, cache_key, out, now=now, max_items=128)
                     self._send_json(out)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
@@ -6290,16 +6390,14 @@ def run_webui(
                 q = parse_qs(parsed.query)
                 project_id = q.get("project_id", [""])[0].strip()
                 session_id = q.get("session_id", [""])[0].strip()
-                days = int(float(q.get("days", ["14"])[0]))
-                limit = int(float(q.get("limit", ["8000"])[0]))
-                days = max(1, min(60, days))
-                limit = max(200, min(20000, limit))
+                days = _parse_int_param(q.get("days", ["14"])[0], default=14, lo=1, hi=60)
+                limit = _parse_int_param(q.get("limit", ["8000"])[0], default=8000, lo=200, hi=20000)
                 cache_key = (project_id, session_id, days)
                 now = time.time()
                 with event_stats_lock:
-                    hit = event_stats_cache.get(cache_key)
-                    if hit and (now - float(hit[0]) <= 3.0):
-                        self._send_json(hit[1])
+                    out_cached = _cache_get(event_stats_cache, cache_key, now=now, ttl_s=3.0)
+                    if out_cached is not None:
+                        self._send_json(out_cached)
                         return
                 try:
                     with _db_connect() as conn:
@@ -6314,64 +6412,22 @@ def run_webui(
                             (limit,),
                         ).fetchall()
 
-                    # Aggregate in Python because memory_events doesn't store project/session columns.
-                    type_counts: dict[str, int] = {}
-                    day_counts: dict[str, int] = {}
-                    total = 0
-                    day_allow: set[str] | None = None
-                    # Only keep last N days keys if present; compute by seen days.
-                    seen_days: list[str] = []
-
-                    def accept_event(payload: dict[str, Any]) -> tuple[str, str]:
-                        env = payload.get("envelope") if isinstance(payload, dict) else None
-                        if not isinstance(env, dict):
-                            env = {}
-                        scope = env.get("scope") if isinstance(env.get("scope"), dict) else {}
-                        source = env.get("source") if isinstance(env.get("source"), dict) else {}
-                        pid = str(scope.get("project_id", "") or payload.get("project_id", "") or "").strip()
-                        sid = str(source.get("session_id", "") or payload.get("session_id", "") or "").strip()
-                        return pid, sid
-
-                    for r in rows:
-                        et = str(r["event_type"] or "")
-                        ts = str(r["event_time"] or "")
-                        day = ts[:10] if len(ts) >= 10 else ""
-                        if not day:
-                            continue
-                        if day_allow is None:
-                            if day not in seen_days:
-                                seen_days.append(day)
-                            if len(seen_days) > days:
-                                day_allow = set(seen_days[:days])
-                        if day_allow is not None and day not in day_allow:
-                            continue
-
-                        try:
-                            payload = json.loads(r["payload_json"] or "{}")
-                        except Exception:
-                            payload = {}
-                        pid, sid = accept_event(payload if isinstance(payload, dict) else {})
-                        if project_id and pid != project_id:
-                            continue
-                        if session_id and sid != session_id:
-                            continue
-
-                    total += 1
-                    type_counts[et] = type_counts.get(et, 0) + 1
-                    day_counts[day] = day_counts.get(day, 0) + 1
-
-                    types = [{"event_type": k, "count": int(v)} for k, v in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)]
-                    days_out = [{"day": k, "count": int(v)} for k, v in sorted(day_counts.items(), key=lambda x: x[0])]
+                    agg = _aggregate_event_stats(
+                        rows,
+                        project_id=project_id,
+                        session_id=session_id,
+                        days=days,
+                    )
                     out = {
                         "ok": True,
                         "project_id": project_id,
                         "session_id": session_id,
-                        "total": total,
-                        "types": types,
-                        "days": days_out,
+                        "total": int(agg.get("total", 0) or 0),
+                        "types": list(agg.get("types") or []),
+                        "days": list(agg.get("days") or []),
                     }
                     with event_stats_lock:
-                        event_stats_cache[cache_key] = (now, out)
+                        _cache_set(event_stats_cache, cache_key, out, now=now, max_items=64)
                     self._send_json(out)
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)

@@ -8,13 +8,18 @@ import sqlite3
 
 from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
+    _aggregate_event_stats,
     _apply_memory_filters,
+    _cache_get,
+    _cache_set,
     _dedup_memory_items,
     _evaluate_governance_action,
     _infer_memory_route,
     _maintenance_impact_forecast,
     _maintenance_status_feedback,
     _normalize_memory_route,
+    _parse_float_param,
+    _parse_int_param,
     _normalize_route_templates,
     _quality_alerts,
     _quality_window_summary,
@@ -28,6 +33,48 @@ def _schema_sql_path() -> Path:
 
 
 class WebUIDiagnosticsTest(unittest.TestCase):
+    def test_parse_param_bounds(self) -> None:
+        self.assertEqual(_parse_int_param("bad", default=5, lo=1, hi=9), 5)
+        self.assertEqual(_parse_int_param("100", default=5, lo=1, hi=9), 9)
+        self.assertEqual(_parse_float_param("bad", default=0.7, lo=0.1, hi=0.9), 0.7)
+        self.assertAlmostEqual(_parse_float_param("0.01", default=0.7, lo=0.1, hi=0.9), 0.1, places=6)
+
+    def test_cache_helpers_ttl_and_eviction(self) -> None:
+        cache: dict[object, tuple[float, dict[str, object]]] = {}
+        _cache_set(cache, "k1", {"ok": True}, now=10.0, max_items=2)
+        self.assertEqual((_cache_get(cache, "k1", now=10.5, ttl_s=1.0) or {}).get("ok"), True)
+        self.assertIsNone(_cache_get(cache, "k1", now=12.5, ttl_s=1.0))
+        _cache_set(cache, "a", {"v": 1}, now=20.0, max_items=2)
+        _cache_set(cache, "b", {"v": 2}, now=21.0, max_items=2)
+        _cache_set(cache, "c", {"v": 3}, now=22.0, max_items=2)
+        self.assertEqual(len(cache), 2)
+        self.assertNotIn("a", cache)
+
+    def test_aggregate_event_stats_counts_and_filters(self) -> None:
+        rows = [
+            {
+                "event_type": "memory.write",
+                "event_time": "2026-02-11T10:00:00+00:00",
+                "payload_json": '{"project_id":"OM","session_id":"s1"}',
+            },
+            {
+                "event_type": "memory.write",
+                "event_time": "2026-02-11T11:00:00+00:00",
+                "payload_json": '{"project_id":"OM","session_id":"s1"}',
+            },
+            {
+                "event_type": "memory.decay",
+                "event_time": "2026-02-10T10:00:00+00:00",
+                "payload_json": '{"project_id":"OM","session_id":"s2"}',
+            },
+        ]
+        out_all = _aggregate_event_stats(rows, project_id="", session_id="", days=14)
+        self.assertEqual(int(out_all.get("total", 0)), 3)
+        out_s1 = _aggregate_event_stats(rows, project_id="OM", session_id="s1", days=14)
+        self.assertEqual(int(out_s1.get("total", 0)), 2)
+        types = {x["event_type"]: int(x["count"]) for x in (out_s1.get("types") or [])}
+        self.assertEqual(types.get("memory.write"), 2)
+
     def test_apply_memory_filters_kind_tag_since(self) -> None:
         now = datetime.now(timezone.utc).replace(microsecond=0)
         old = (now - timedelta(days=10)).isoformat()
