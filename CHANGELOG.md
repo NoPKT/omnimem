@@ -18,6 +18,7 @@
 - Core memory blocks upgrade: support per-block priority (`core:priority`) and expiry (`core:expires`) with retrieval/list filters that skip expired blocks by default.
 - Core memory conflict policy: support per-block `topic` and retrieval-time conflict merge (`core_merge_by_topic`) so competing blocks in the same topic collapse to the highest-priority active block.
 - Core merge suggester: add `core-merge-suggest` (preview/apply) to detect topic conflicts and optionally materialize an auto-merged core block (`<topic>-merged`) for stable policy consolidation.
+- Core merge governance: `core-merge-suggest` now emits quality score, supports apply quality gate (`--min-apply-quality`), and can post-process loser blocks via `--loser-action deprioritize|expire`.
 
 ## 0.2.21 - 2026-02-11
 

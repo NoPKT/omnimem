@@ -300,6 +300,68 @@ class CoreBlocksTest(unittest.TestCase):
         )
         self.assertTrue(got.get("ok"))
 
+    def test_core_merge_suggest_loser_action_and_quality_gate(self) -> None:
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="ops-a",
+            topic="ops",
+            content="Use concise checklist.",
+            project_id="OM",
+            session_id="s1",
+            priority=65,
+        )
+        upsert_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="ops-b",
+            topic="ops",
+            content="Use concise checklist with risk and rollback.",
+            project_id="OM",
+            session_id="s1",
+            priority=92,
+        )
+        out_skip = suggest_core_block_merges(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            apply=True,
+            min_apply_quality=0.95,
+        )
+        self.assertTrue(out_skip.get("ok"))
+        self.assertEqual(len(list(out_skip.get("applied") or [])), 0)
+        self.assertGreaterEqual(len(list(out_skip.get("skipped") or [])), 1)
+
+        out_apply = suggest_core_block_merges(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s1",
+            apply=True,
+            loser_action="deprioritize",
+            min_apply_quality=0.0,
+        )
+        self.assertTrue(out_apply.get("ok"))
+        merged = get_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="ops-merged",
+            project_id="OM",
+            session_id="s1",
+        )
+        self.assertTrue(merged.get("ok"))
+        loser = get_core_block(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            name="ops-a",
+            project_id="OM",
+            session_id="s1",
+        )
+        self.assertTrue(loser.get("ok"))
+        lblock = loser.get("block") or {}
+        self.assertLess(int(lblock.get("priority", 100) or 100), 65)
+
 
 if __name__ == "__main__":
     unittest.main()

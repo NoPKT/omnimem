@@ -145,6 +145,7 @@ omnimem core-set --project-id OM --name style-b --topic style --body "Use number
 omnimem core-set --project-id OM --name temporary-guardrail --body "Prefer safe default ops." --ttl-days 7
 omnimem core-merge-suggest --project-id OM --min-conflicts 2
 omnimem core-merge-suggest --project-id OM --min-conflicts 2 --apply
+omnimem core-merge-suggest --project-id OM --apply --loser-action deprioritize --min-apply-quality 0.25
 omnimem core-list --project-id OM
 omnimem core-list --project-id OM --include-expired
 omnimem core-get --project-id OM --name persona

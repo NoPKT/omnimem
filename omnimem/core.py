@@ -2913,6 +2913,40 @@ def _core_block_topic_from_tags(tags: list[str]) -> str:
     return ""
 
 
+def _rewrite_core_policy_tags(
+    *,
+    tags: list[str],
+    name: str,
+    topic: str,
+    priority: int,
+    expires_at: str,
+    add_tags: list[str] | None = None,
+) -> list[str]:
+    out: list[str] = []
+    for t in tags:
+        s = str(t or "").strip()
+        if not s:
+            continue
+        sl = s.lower()
+        if sl.startswith("core:priority:") or sl.startswith("core:expires:") or sl.startswith("core:topic:"):
+            continue
+        if sl.startswith("core:block:"):
+            continue
+        out.append(s)
+    policy = ["core:block", f"core:block:{_normalize_core_block_name(name)}", f"core:priority:{max(0, min(100, int(priority)))}"]
+    topic_n = _normalize_core_block_topic(topic)
+    if topic_n:
+        policy.append(f"core:topic:{topic_n}")
+    ex = str(expires_at or "").strip()
+    if ex:
+        policy.append(f"core:expires:{_parse_iso_dt(ex).replace(microsecond=0).isoformat()}")
+    for t in (add_tags or []):
+        s = str(t or "").strip()
+        if s:
+            out.append(s)
+    return list(dict.fromkeys([*policy, *out]))
+
+
 def upsert_core_block(
     *,
     paths: MemoryPaths,
@@ -3208,6 +3242,8 @@ def suggest_core_block_merges(
     limit: int = 120,
     min_conflicts: int = 2,
     apply: bool = False,
+    loser_action: str = "none",
+    min_apply_quality: float = 0.0,
     session_actor: str = "system",
     tool: str = "cli",
 ) -> dict[str, Any]:
@@ -3215,6 +3251,10 @@ def suggest_core_block_merges(
     ensure_storage(paths, schema_sql_path)
     limit = max(10, min(500, int(limit)))
     min_conflicts = max(2, min(12, int(min_conflicts)))
+    loser_action = str(loser_action or "none").strip().lower()
+    if loser_action not in {"none", "deprioritize", "expire"}:
+        raise ValueError("loser_action must be one of: none|deprioritize|expire")
+    min_apply_quality = max(0.0, min(1.0, float(min_apply_quality)))
 
     with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
         conn.row_factory = sqlite3.Row
@@ -3261,21 +3301,34 @@ def suggest_core_block_merges(
                 "updated_at": str(r["updated_at"] or ""),
                 "summary": str(r["summary"] or ""),
                 "content": body,
+                "tags": tags,
             }
         )
 
     candidates: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     for topic, items in grouped.items():
         if len(items) < min_conflicts:
             continue
         items_sorted = sorted(items, key=lambda x: (int(x.get("priority", 0)), str(x.get("updated_at", ""))), reverse=True)
         winner = dict(items_sorted[0])
+        winner_tokens = _mem_text_tokens(str(winner.get("content") or ""))
+        loser_agreements: list[float] = []
+        for x in items_sorted[1:]:
+            toks = _mem_text_tokens(str(x.get("content") or ""))
+            loser_agreements.append(_jaccard(winner_tokens, toks))
+        agreement = float(sum(loser_agreements) / max(1, len(loser_agreements)))
+        max_loser_pri = max([int(x.get("priority", 0) or 0) for x in items_sorted[1:]] + [0])
+        dominance = float(int(winner.get("priority", 0) or 0) / float(max(1, max(int(winner.get("priority", 0) or 0), max_loser_pri))))
+        coverage = min(1.0, len(str(winner.get("content") or "").strip()) / 220.0)
+        quality = max(0.0, min(1.0, (0.50 * agreement) + (0.30 * dominance) + (0.20 * coverage)))
         loser_names = [str(x.get("name") or "") for x in items_sorted[1:]]
         merged_name = f"{topic}-merged"
         merged_content_parts = [
             f"- topic: {topic}",
             f"- winner: {str(winner.get('name') or '')}",
+            f"- quality: {quality:.3f}",
             f"- merged_from: {', '.join([str(x.get('name') or '') for x in items_sorted])}",
             "",
             "## Merged Guidance",
@@ -3294,11 +3347,13 @@ def suggest_core_block_merges(
             "losers": loser_names,
             "suggested_merged_name": merged_name,
             "suggested_priority": int(winner.get("priority", 0) or 0),
+            "quality": float(round(quality, 4)),
+            "apply_recommended": bool(quality >= min_apply_quality),
             "suggested_preview": merged_content[:260],
         }
         candidates.append(out)
 
-        if apply:
+        if apply and quality >= min_apply_quality:
             up = upsert_core_block(
                 paths=paths,
                 schema_sql_path=schema_sql_path,
@@ -3322,6 +3377,52 @@ def suggest_core_block_merges(
                     "name": merged_name,
                     "memory_id": str(up.get("memory_id") or ""),
                     "action": str(up.get("action") or ""),
+                    "quality": float(round(quality, 4)),
+                }
+            )
+            if loser_action != "none":
+                for x in items_sorted[1:]:
+                    l_name = str(x.get("name") or "")
+                    l_topic = str(x.get("topic") or "")
+                    l_pri = int(x.get("priority", 0) or 0)
+                    l_exp = _core_block_expires_from_tags(list(x.get("tags") or []))
+                    if loser_action == "deprioritize":
+                        new_pri = max(0, min(l_pri - 20, int(winner.get("priority", 0) or 0) - 10))
+                        new_exp = l_exp
+                    else:
+                        new_pri = l_pri
+                        new_exp = (datetime.now(timezone.utc) - timedelta(seconds=1)).replace(microsecond=0).isoformat()
+                    new_tags = _rewrite_core_policy_tags(
+                        tags=list(x.get("tags") or []),
+                        name=l_name,
+                        topic=l_topic,
+                        priority=new_pri,
+                        expires_at=new_exp,
+                        add_tags=["core:merged:loser"],
+                    )
+                    try:
+                        update_memory_content(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            memory_id=str(x.get("id") or ""),
+                            summary=str(x.get("summary") or f"core block: {l_name}"),
+                            body=str(x.get("content") or ""),
+                            tags=new_tags,
+                            tool=tool,
+                            account="default",
+                            device="local",
+                            session_id=session_actor,
+                            event_type="memory.update",
+                        )
+                    except Exception:
+                        pass
+        elif apply and quality < min_apply_quality:
+            skipped.append(
+                {
+                    "topic": topic,
+                    "reason": "quality_below_threshold",
+                    "quality": float(round(quality, 4)),
+                    "min_apply_quality": float(min_apply_quality),
                 }
             )
 
@@ -3330,8 +3431,11 @@ def suggest_core_block_merges(
         "project_id": project_id,
         "session_id": session_id,
         "apply": bool(apply),
+        "loser_action": loser_action,
+        "min_apply_quality": float(min_apply_quality),
         "candidates": candidates,
         "applied": applied,
+        "skipped": skipped,
         "count": len(candidates),
     }
 
