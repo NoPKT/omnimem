@@ -12,6 +12,7 @@
 - WebUI cleanup: unify repeated boolean query parsing with shared `_parse_bool_param` helper.
 - Drift-aware retrieval/governance: `retrieve_thread` can now adapt exploration/diversity/profile bias using profile drift signal (`--drift-aware`), and adaptive governance threshold inference can optionally incorporate drift signal (`drift_aware`) for safer promote/demote decisions.
 - Evaluation: upgrade `scripts/eval_retrieval.py` with drift-aware A/B reporting (`basic` vs `smart` vs `smart_drift`) and explicit metric deltas.
+- CI hardening/docs: set pack-job npm cache to a runner-local writable directory and fix README evaluation commands to use existing dataset + drift-aware A/B flags.
 
 ## 0.2.21 - 2026-02-11
 

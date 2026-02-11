@@ -156,7 +156,7 @@ python3 scripts/eval_locomo_style.py --dataset eval/locomo_style.sample.jsonl
 Retrieval A/B eval (basic vs smart vs smart+drift-aware):
 
 ```bash
-python3 scripts/eval_retrieval.py --dataset eval/retrieval.sample.json --with-drift-ab --drift-weight 0.4
+python3 scripts/eval_retrieval.py --dataset eval/retrieval_dataset_om.json --with-drift-ab --drift-weight 0.4
 ```
 
 Single turn:
@@ -197,10 +197,10 @@ Bootstrap a retrieval eval dataset from recent memories:
 PYTHONPATH=. python3 scripts/build_eval_dataset.py --project-id OM --limit 60 --out eval/retrieval_dataset_om.json
 ```
 
-Run retrieval quality evaluation (`basic` vs `smart` ranking):
+Run retrieval quality evaluation (`basic` vs `smart` vs `smart_drift`):
 
 ```bash
-PYTHONPATH=. python3 scripts/eval_retrieval.py --project-id OM --dataset eval/retrieval_dataset_om.json --out eval/retrieval_report_om.json
+PYTHONPATH=. python3 scripts/eval_retrieval.py --dataset eval/retrieval_dataset_om.json --with-drift-ab --drift-weight 0.4 --out eval/retrieval_report_om.json
 ```
 
 Distill one session into compact semantic/procedural memories (preview by default):
@@ -235,6 +235,20 @@ bash scripts/verify_phase_a.sh
 bash scripts/verify_phase_b.sh
 bash scripts/verify_phase_c.sh
 bash scripts/verify_phase_d.sh
+```
+
+CI-parity checks (same shape as GitHub Actions):
+
+```bash
+python3 -m pytest -q
+bash scripts/release_gate.sh --allow-clean --skip-doctor --skip-pack --project-id OM --home ./.omnimem_gate
+NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
+```
+
+If `npm pack --dry-run` fails with cache permission errors (`EPERM` under `~/.npm`), run it with a writable cache:
+
+```bash
+NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 ```
 
 ## Docs

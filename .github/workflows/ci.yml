@@ -41,4 +41,6 @@ jobs:
           node-version: "18"
 
       - name: npm pack dry-run
+        env:
+          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
         run: npm pack --dry-run
