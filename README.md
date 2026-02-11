@@ -122,7 +122,8 @@ Notes:
 - `omnimem codex` / `omnimem claude` launches native CLI (full tool capability).
 - WebUI is auto-started by default at `http://127.0.0.1:8765`.
 - Use `--no-webui` to disable sidecar UI startup.
-- Use `--webui-on-demand` (or `OMNIMEM_WEBUI_ON_DEMAND=1`) to auto-stop the shared WebUI when the last active wrapper session exits.
+- Wrapper sessions now auto-stop the shared WebUI when the last active wrapper exits (default on-demand lifecycle).
+- Use `--webui-persist` (or `OMNIMEM_WEBUI_PERSIST=1`) to keep WebUI running after wrapper exit.
 - Injected memory context now uses a budgeted planner with delta-state by default in smart/inject flows, to reduce repeated context tokens.
 - For safer governance rollout in WebUI, you can enable apply approval and a preview-only window in Configuration:
   - `webui.approval_required=true`

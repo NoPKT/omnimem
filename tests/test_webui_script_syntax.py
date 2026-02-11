@@ -31,6 +31,8 @@ class WebUiScriptSyntaxTest(unittest.TestCase):
         self.assertIn('id="maintForecast"', HTML_PAGE)
         self.assertIn("function renderMaintenanceForecast", HTML_PAGE)
         self.assertIn('details class="disclosure"', HTML_PAGE)
+        self.assertIn("status_feedback", HTML_PAGE)
+        self.assertIn("change pressure", HTML_PAGE)
 
 
 if __name__ == "__main__":

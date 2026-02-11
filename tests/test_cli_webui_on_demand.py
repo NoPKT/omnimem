@@ -6,10 +6,20 @@ from omnimem.cli import build_parser
 
 
 class CLIDemandWebUITest(unittest.TestCase):
+    def test_codex_default_on_demand(self) -> None:
+        p = build_parser()
+        args = p.parse_args(["codex"])
+        self.assertFalse(getattr(args, "webui_persist", False))
+
     def test_codex_flag_is_parsable(self) -> None:
         p = build_parser()
         args = p.parse_args(["codex", "--webui-on-demand"])
         self.assertTrue(getattr(args, "webui_on_demand", False))
+
+    def test_codex_persist_flag_is_parsable(self) -> None:
+        p = build_parser()
+        args = p.parse_args(["codex", "--webui-persist"])
+        self.assertTrue(getattr(args, "webui_persist", False))
 
     def test_claude_flag_is_parsable(self) -> None:
         p = build_parser()
@@ -26,4 +36,3 @@ class CLIDemandWebUITest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

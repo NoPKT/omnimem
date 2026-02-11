@@ -288,6 +288,9 @@ HTML_PAGE = """<!doctype html>
         .forecast-risk-ok { color: var(--good); }
         .forecast-risk-warn { color: var(--warn); }
         .forecast-risk-high { color: var(--bad); }
+        .step-ok { color: var(--good); }
+        .step-warn { color: var(--warn); }
+        .step-muted { color: var(--muted); }
 
 	    .modal-overlay {
 	      position: fixed;
@@ -2970,19 +2973,35 @@ HTML_PAGE = """<!doctype html>
         }
         const f = (d.forecast && typeof d.forecast === 'object') ? d.forecast : {};
         const ex = (f.expected && typeof f.expected === 'object') ? f.expected : {};
+        const sf = (d.status_feedback && typeof d.status_feedback === 'object') ? d.status_feedback : {};
         const risk = String(f.risk_level || 'low').toLowerCase();
         const riskCls = risk === 'high' ? 'forecast-risk-high' : (risk === 'warn' ? 'forecast-risk-warn' : 'forecast-risk-ok');
         const summary = String(f.summary || '');
+        const pressure = Math.max(0, Math.min(1, Number(sf.pressure || 0)));
+        const pressurePct = Math.round(pressure * 100);
+        const steps = Array.isArray(sf.steps) ? sf.steps : [];
+        const stepCls = (s) => {
+          const v = String(s || '');
+          if (v === 'done' || v === 'ok' || v === 'ready') return 'step-ok';
+          if (v === 'required' || v === 'blocked') return 'step-warn';
+          return 'step-muted';
+        };
+        const stepHtml = steps.map(x => `<span class="pill"><b>${escHtml(String(x.name || 'step'))}</b><span class="${escHtml(stepCls(x.state))}">${escHtml(String(x.state || '-'))}</span></span>`).join(' ');
         el.innerHTML =
           `<div class="small"><b>Impact Forecast</b> · <span class="${escHtml(riskCls)}">${escHtml(risk)}</span></div>` +
+          `<div class="small" style="margin-top:4px">${escHtml(String(sf.status_line || ''))}</div>` +
           `<div class="small" style="margin-top:4px">${escHtml(summary || 'No summary')}</div>` +
           `<div class="forecast-grid">` +
           `<span class="pill"><b>decay</b><span class="mono">${escHtml(String(ex.decay || 0))}</span></span>` +
           `<span class="pill"><b>promote</b><span class="mono">${escHtml(String(ex.promote || 0))}</span></span>` +
           `<span class="pill"><b>demote</b><span class="mono">${escHtml(String(ex.demote || 0))}</span></span>` +
           `<span class="pill"><b>compress</b><span class="mono">${escHtml(String(ex.compress || 0))}</span></span>` +
+          `<span class="pill"><b>touches</b><span class="mono">${escHtml(String(ex.total_touches || 0))}</span></span>` +
           `</div>` +
-          `<details class="disclosure"><summary>details</summary><pre class="mono" style="white-space:pre-wrap; margin-top:6px">${escHtml(JSON.stringify(f, null, 2))}</pre></details>`;
+          `<div class="small" style="margin-top:6px">change pressure ${pressurePct}%</div>` +
+          `<div class="bar" style="margin-top:4px"><i style="width:${pressurePct}%"></i></div>` +
+          `<div class="row-btn" style="margin-top:8px">${stepHtml || '<span class="small">(no steps)</span>'}</div>` +
+          `<details class="disclosure"><summary>details</summary><pre class="mono" style="white-space:pre-wrap; margin-top:6px">${escHtml(JSON.stringify({ forecast: f, status_feedback: sf }, null, 2))}</pre></details>`;
       }
 
 	    async function runConsolidate(dry_run) {
@@ -4953,6 +4972,42 @@ def _maintenance_impact_forecast(
     }
 
 
+def _maintenance_status_feedback(
+    *,
+    dry_run: bool,
+    approval_required: bool,
+    approval_met: bool,
+    risk_level: str,
+    total_touches: int,
+) -> dict[str, Any]:
+    phase = "preview" if dry_run else "apply"
+    ready = bool(dry_run or (not approval_required) or approval_met)
+    pressure = max(0.0, min(1.0, float(max(0, int(total_touches))) / 240.0))
+    status_line = (
+        f"{phase} mode: "
+        f"{'ready' if ready else 'approval pending'}; "
+        f"risk={str(risk_level or 'low')}; "
+        f"estimated touches={int(max(0, int(total_touches)))}"
+    )
+    approval_state = "skipped"
+    if approval_required:
+        approval_state = "ok" if approval_met else "required"
+    apply_state = "preview-only" if dry_run else ("ready" if ready else "blocked")
+    return {
+        "phase": phase,
+        "ready": ready,
+        "approval_required": bool(approval_required),
+        "approval_met": bool(approval_met),
+        "pressure": pressure,
+        "status_line": status_line,
+        "steps": [
+            {"name": "forecast", "state": "done"},
+            {"name": "approval", "state": approval_state},
+            {"name": "apply", "state": apply_state},
+        ],
+    }
+
+
 def _rollback_preview_items(conn: sqlite3.Connection, *, memory_id: str, cutoff_iso: str, limit: int = 200) -> tuple[list[dict[str, Any]], str]:
     conn.row_factory = sqlite3.Row
     now_layer = conn.execute("SELECT layer FROM memories WHERE id = ?", (memory_id,)).fetchone()
@@ -6727,6 +6782,7 @@ def run_webui(
                     dry_run = bool(data.get("dry_run", True))
                     ack_token = str(data.get("ack_token", "")).strip()
                     approval_required = bool(cfg.get("webui", {}).get("approval_required", False))
+                    approval_met = bool(ack_token == "APPLY")
                     preview_until = str(cfg.get("webui", {}).get("maintenance_preview_only_until", "") or "").strip()
                     if not dry_run and preview_until:
                         try:
@@ -6739,7 +6795,7 @@ def run_webui(
                                 return
                         except Exception:
                             pass
-                    if not dry_run and approval_required and ack_token != "APPLY":
+                    if not dry_run and approval_required and not approval_met:
                         self._send_json({"ok": False, "error": "approval required: set ack_token=APPLY"}, 403)
                         return
                     decay_out = apply_decay(
@@ -6815,12 +6871,20 @@ def run_webui(
                         approval_required=bool(approval_required),
                         session_id=session_id,
                     )
+                    status_feedback = _maintenance_status_feedback(
+                        dry_run=bool(dry_run),
+                        approval_required=bool(approval_required),
+                        approval_met=bool(approval_met),
+                        risk_level=str(forecast.get("risk_level", "low")),
+                        total_touches=int((forecast.get("expected") or {}).get("total_touches", 0) or 0),
+                    )
                     out = {
                         "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
                         "dry_run": dry_run,
                         "project_id": project_id,
                         "session_id": session_id,
                         "approval_required": approval_required,
+                        "status_feedback": status_feedback,
                         "forecast": forecast,
                         "decay": {
                             "ok": decay_out.get("ok"),

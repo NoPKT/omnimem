@@ -11,6 +11,7 @@ from omnimem.webui import (
     _evaluate_governance_action,
     _infer_memory_route,
     _maintenance_impact_forecast,
+    _maintenance_status_feedback,
     _normalize_memory_route,
     _normalize_route_templates,
     _quality_alerts,
@@ -77,6 +78,31 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         )
         self.assertEqual(out.get("risk_level"), "high")
         self.assertEqual((out.get("expected") or {}).get("compress"), 9)
+
+    def test_maintenance_status_feedback_preview(self) -> None:
+        out = _maintenance_status_feedback(
+            dry_run=True,
+            approval_required=True,
+            approval_met=False,
+            risk_level="warn",
+            total_touches=120,
+        )
+        self.assertEqual(out.get("phase"), "preview")
+        self.assertTrue(out.get("ready"))
+        self.assertEqual((out.get("steps") or [])[1].get("state"), "required")
+        self.assertGreater(float(out.get("pressure", 0.0)), 0.0)
+
+    def test_maintenance_status_feedback_apply_blocked(self) -> None:
+        out = _maintenance_status_feedback(
+            dry_run=False,
+            approval_required=True,
+            approval_met=False,
+            risk_level="low",
+            total_touches=20,
+        )
+        self.assertEqual(out.get("phase"), "apply")
+        self.assertFalse(out.get("ready"))
+        self.assertEqual((out.get("steps") or [])[2].get("state"), "blocked")
 
     def test_normalize_route_templates(self) -> None:
         out = _normalize_route_templates(

@@ -793,13 +793,36 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         print_json(out)
         return 0
 
-    webui_on_demand = bool(getattr(args, "webui_on_demand", False))
-    if not webui_on_demand:
-        v = os.getenv("OMNIMEM_WEBUI_ON_DEMAND", "").strip().lower()
-        webui_on_demand = v in {"1", "true", "yes", "on"}
+    def _truthy_env(name: str) -> bool:
+        return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+    # Default to on-demand lifecycle for wrapper commands to avoid stale sidecar ports.
+    # Users can still opt into persistent WebUI via --webui-persist or OMNIMEM_WEBUI_PERSIST=1.
+    webui_on_demand = True
+    if bool(getattr(args, "webui_persist", False)) or _truthy_env("OMNIMEM_WEBUI_PERSIST"):
+        webui_on_demand = False
+    elif bool(getattr(args, "webui_on_demand", False)) or _truthy_env("OMNIMEM_WEBUI_ON_DEMAND"):
+        webui_on_demand = True
 
     if not args.no_webui:
         started_by_me = ensure_webui_running(cfg_path_arg(args), args.webui_host, args.webui_port, args.no_daemon)
+        try:
+            daemon_url = f"http://{args.webui_host}:{int(args.webui_port)}/api/daemon"
+            with urllib.request.urlopen(daemon_url, timeout=1.0) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+                ds = json.loads(raw) if raw else {}
+                if isinstance(ds, dict):
+                    if not bool(ds.get("enabled", True)):
+                        sys.stderr.write("[omnimem] WebUI daemon is disabled; GitHub sync will not run automatically.\n")
+                    elif str(ds.get("last_error_kind", "none")) not in {"none", ""}:
+                        hint = str(ds.get("remediation_hint", "") or "")
+                        sys.stderr.write(
+                            f"[omnimem] WebUI daemon last_error_kind={ds.get('last_error_kind')}. "
+                            + (hint + "\n" if hint else "\n")
+                        )
+                    sys.stderr.flush()
+        except Exception:
+            pass
         if webui_on_demand:
             home = Path(os.environ.get("OMNIMEM_HOME", "") or "").expanduser().resolve()
             if started_by_me:
@@ -1581,7 +1604,12 @@ def build_parser() -> argparse.ArgumentParser:
         p_short.add_argument(
             "--webui-on-demand",
             action="store_true",
-            help="auto-stop WebUI when no active wrapper sessions (shared home); can also set OMNIMEM_WEBUI_ON_DEMAND=1",
+            help="auto-stop WebUI when no active wrapper sessions (default behavior)",
+        )
+        p_short.add_argument(
+            "--webui-persist",
+            action="store_true",
+            help="keep WebUI running after wrapper exits; can also set OMNIMEM_WEBUI_PERSIST=1",
         )
         p_short.add_argument("--webui-host", default="127.0.0.1")
         p_short.add_argument("--webui-port", type=int, default=8765)
