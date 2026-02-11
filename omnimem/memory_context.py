@@ -47,19 +47,24 @@ def _load_delta_state(paths_root: Path, key: str) -> dict[str, Any]:
         if isinstance(obj, dict):
             seen = obj.get("seen")
             if isinstance(seen, dict):
-                return {"seen": {str(k): str(v) for k, v in seen.items()}}
+                carry_raw = obj.get("carry")
+                carry: list[str] = []
+                if isinstance(carry_raw, list):
+                    carry = [str(x).strip() for x in carry_raw if str(x).strip()]
+                return {"seen": {str(k): str(v) for k, v in seen.items()}, "carry": carry}
     except Exception:
         pass
-    return {"seen": {}}
+    return {"seen": {}, "carry": []}
 
 
-def _save_delta_state(paths_root: Path, key: str, seen: dict[str, str]) -> None:
+def _save_delta_state(paths_root: Path, key: str, seen: dict[str, str], carry: list[str]) -> None:
     fp = _delta_state_path(paths_root, key)
     fp.write_text(
         json.dumps(
             {
                 "saved_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                 "seen": seen,
+                "carry": list(carry)[:1200],
             },
             ensure_ascii=False,
             indent=2,
@@ -91,13 +96,15 @@ def build_budgeted_memory_context(
     include_protocol: bool = True,
     include_user_request: bool = False,
     delta_enabled: bool = True,
+    carry_over_enabled: bool = True,
     max_checkpoints: int = 3,
     max_memories: int = 8,
 ) -> dict[str, Any]:
     budget = max(120, int(budget_tokens))
     route = infer_query_route(user_prompt)
-    st = _load_delta_state(paths_root, state_key) if delta_enabled else {"seen": {}}
+    st = _load_delta_state(paths_root, state_key) if delta_enabled else {"seen": {}, "carry": []}
     seen = dict(st.get("seen") or {})
+    carry_ids = [str(x).strip() for x in (st.get("carry") or []) if str(x).strip()]
 
     lines: list[str] = []
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -130,13 +137,23 @@ def build_budgeted_memory_context(
             delta_new.append(x)
         else:
             delta_seen.append(x)
-    ordered = (delta_new + delta_seen) if delta_enabled else cand
+    if delta_enabled and carry_over_enabled and carry_ids:
+        by_id = {str(x.get("id", "")).strip(): x for x in (delta_new + delta_seen) if str(x.get("id", "")).strip()}
+        carry_front = [by_id[mid] for mid in carry_ids if mid in by_id]
+        rest = [x for x in (delta_new + delta_seen) if str(x.get("id", "")).strip() not in set(carry_ids)]
+        ordered = carry_front + rest
+    else:
+        ordered = (delta_new + delta_seen) if delta_enabled else cand
     lines.append(f"Memory recalls (route={route}, budget={budget}):")
 
     selected: list[dict[str, Any]] = []
     cur = estimate_tokens("\n".join(lines))
+    not_selected: list[str] = []
     for x in ordered:
         if len(selected) >= max(1, int(max_memories)):
+            mid2 = str(x.get("id", "") or "").strip()
+            if mid2:
+                not_selected.append(mid2)
             break
         mid = str(x.get("id", "") or "")
         up = str(x.get("updated_at", "") or "")
@@ -145,10 +162,18 @@ def build_budgeted_memory_context(
         one = _mem_line(x, route=route, delta_new=(seen.get(mid, "") != up))
         need = estimate_tokens(one) + 2
         if cur + need > budget:
+            not_selected.append(mid)
             continue
         lines.append(one)
         cur += need
         selected.append(x)
+    if len(selected) < max(1, int(max_memories)):
+        # collect remaining non-selected ids for carry-over
+        sel_set = {str(x.get("id", "")).strip() for x in selected}
+        for x in ordered:
+            mid = str(x.get("id", "")).strip()
+            if mid and mid not in sel_set and mid not in not_selected:
+                not_selected.append(mid)
 
     if include_user_request and str(user_prompt or "").strip():
         tail = f"\nUser request:\n{user_prompt.strip()}"
@@ -177,7 +202,16 @@ def build_budgeted_memory_context(
         if len(next_seen) > 1200:
             ks = list(next_seen.keys())[-1200:]
             next_seen = {k: next_seen[k] for k in ks}
-        _save_delta_state(paths_root, state_key, next_seen)
+        if carry_over_enabled:
+            # prioritize fresh misses, then prior carry misses still relevant.
+            seen_mids = set(str(x.get("id", "")).strip() for x in ordered)
+            next_carry = [mid for mid in not_selected if mid and mid in seen_mids]
+            # bound queue
+            if len(next_carry) > 1200:
+                next_carry = next_carry[:1200]
+        else:
+            next_carry = []
+        _save_delta_state(paths_root, state_key, next_seen, next_carry)
 
     return {
         "ok": True,
@@ -190,5 +224,5 @@ def build_budgeted_memory_context(
         "candidate_count": len(cand),
         "delta_new_count": len(delta_new),
         "delta_seen_count": len(delta_seen),
+        "carry_queued_count": len(not_selected),
     }
-

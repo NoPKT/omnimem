@@ -22,9 +22,41 @@ class MemoryContextTest(unittest.TestCase):
                 ]
             }
             candidates = [
-                {"id": "a1", "layer": "short", "kind": "summary", "summary": "first memory", "updated_at": "2026-02-11T00:00:01+00:00"},
-                {"id": "a2", "layer": "long", "kind": "decision", "summary": "second memory", "updated_at": "2026-02-11T00:00:02+00:00"},
-                {"id": "a3", "layer": "long", "kind": "decision", "summary": "third memory", "updated_at": "2026-02-11T00:00:03+00:00"},
+                {
+                    "id": "a1",
+                    "layer": "short",
+                    "kind": "summary",
+                    "summary": "first memory with many details and long text repeated repeated repeated repeated repeated repeated",
+                    "updated_at": "2026-02-11T00:00:01+00:00",
+                },
+                {
+                    "id": "a2",
+                    "layer": "long",
+                    "kind": "decision",
+                    "summary": "second memory with many details and long text repeated repeated repeated repeated repeated repeated",
+                    "updated_at": "2026-02-11T00:00:02+00:00",
+                },
+                {
+                    "id": "a3",
+                    "layer": "long",
+                    "kind": "decision",
+                    "summary": "third memory with many details and long text repeated repeated repeated repeated repeated repeated",
+                    "updated_at": "2026-02-11T00:00:03+00:00",
+                },
+                {
+                    "id": "a4",
+                    "layer": "short",
+                    "kind": "summary",
+                    "summary": "fourth memory with many details and long text repeated repeated repeated repeated repeated repeated",
+                    "updated_at": "2026-02-11T00:00:04+00:00",
+                },
+                {
+                    "id": "a5",
+                    "layer": "short",
+                    "kind": "summary",
+                    "summary": "fifth memory with many details and long text repeated repeated repeated repeated repeated repeated",
+                    "updated_at": "2026-02-11T00:00:05+00:00",
+                },
             ]
             out1 = build_budgeted_memory_context(
                 paths_root=root,
@@ -34,16 +66,18 @@ class MemoryContextTest(unittest.TestCase):
                 user_prompt="how to do rollback",
                 brief=brief,
                 candidates=candidates,
-                budget_tokens=120,
+                budget_tokens=90,
                 include_protocol=True,
                 include_user_request=True,
                 delta_enabled=True,
+                carry_over_enabled=True,
                 max_checkpoints=2,
                 max_memories=3,
             )
             self.assertTrue(out1.get("ok"))
             self.assertLessEqual(int(out1.get("estimated_tokens", 999999)), 180)
             self.assertGreaterEqual(int(out1.get("selected_count", 0)), 1)
+            self.assertGreaterEqual(int(out1.get("carry_queued_count", 0)), 1)
 
             out2 = build_budgeted_memory_context(
                 paths_root=root,
@@ -57,13 +91,14 @@ class MemoryContextTest(unittest.TestCase):
                 include_protocol=True,
                 include_user_request=True,
                 delta_enabled=True,
+                carry_over_enabled=True,
                 max_checkpoints=2,
                 max_memories=3,
             )
             self.assertTrue(out2.get("ok"))
             self.assertGreaterEqual(int(out2.get("delta_seen_count", 0)), int(out1.get("selected_count", 0)))
+            self.assertGreaterEqual(int(out2.get("selected_count", 0)), int(out1.get("selected_count", 0)))
 
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -32,6 +32,7 @@ from .core import (
     build_brief,
     compress_session_context,
     consolidate_memories,
+    distill_session_memory,
     find_memories,
     retrieve_thread,
     load_config,
@@ -358,6 +359,26 @@ def cmd_compress(args: argparse.Namespace) -> int:
         min_items=int(args.min_items),
         target_layer=str(args.layer or "short").strip(),
         dry_run=not bool(args.apply),
+        tool="cli",
+        actor_session_id=str(args.actor_session_id or "system"),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_distill(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = distill_session_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        limit=int(args.limit),
+        min_items=int(args.min_items),
+        dry_run=not bool(args.apply),
+        semantic_layer=str(args.semantic_layer or "long").strip(),
+        procedural_layer=str(args.procedural_layer or "short").strip(),
         tool="cli",
         actor_session_id=str(args.actor_session_id or "system"),
     )
@@ -1275,6 +1296,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_compress.add_argument("--layer", choices=sorted(LAYER_SET), default="short")
     p_compress.add_argument("--apply", action="store_true", help="write summary memory (default preview)")
     p_compress.set_defaults(func=cmd_compress)
+
+    p_distill = sub.add_parser("distill", help="distill session memories into semantic/procedural summaries")
+    p_distill.add_argument("--config", help="path to omnimem config json")
+    p_distill.add_argument("--project-id", default="", help="optional project filter")
+    p_distill.add_argument("--session-id", required=True, help="target session id")
+    p_distill.add_argument("--limit", type=int, default=140, help="source memory scan limit")
+    p_distill.add_argument("--min-items", type=int, default=10, help="minimum source memories to distill")
+    p_distill.add_argument("--semantic-layer", choices=sorted(LAYER_SET), default="long")
+    p_distill.add_argument("--procedural-layer", choices=sorted(LAYER_SET), default="short")
+    p_distill.add_argument("--apply", action="store_true", help="write distilled memories (default preview)")
+    p_distill.add_argument("--actor-session-id", default="session-local")
+    p_distill.set_defaults(func=cmd_distill)
 
     p_webui = sub.add_parser("webui", help="start local web ui")
     p_webui.add_argument("--config", help="path to omnimem config json")

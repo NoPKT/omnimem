@@ -9,6 +9,7 @@ from omnimem.core import (
     MemoryPaths,
     compress_session_context,
     consolidate_memories,
+    distill_session_memory,
     infer_adaptive_governance_thresholds,
     retrieve_thread,
     weave_links,
@@ -147,6 +148,43 @@ class CoreMaintenanceTest(unittest.TestCase):
                 "SELECT COUNT(*) FROM memories WHERE kind='summary' AND summary LIKE 'Session digest:%'"
             ).fetchone()[0]
         self.assertGreaterEqual(int(c), 1)
+
+    def test_session_distill_preview_and_apply(self) -> None:
+        for i in range(12):
+            self._write(
+                layer="short" if i % 2 == 0 else "long",
+                summary=f"decision step runbook {i}",
+                session_id="s-distill",
+                importance=0.7,
+                confidence=0.7,
+                stability=0.7,
+                reuse_count=1,
+                volatility=0.2,
+            )
+        pre = distill_session_memory(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-distill",
+            limit=80,
+            min_items=8,
+            dry_run=True,
+        )
+        self.assertTrue(pre.get("ok"))
+        self.assertIn("semantic_preview", pre)
+        self.assertIn("procedural_preview", pre)
+
+        ap = distill_session_memory(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-distill",
+            limit=80,
+            min_items=8,
+            dry_run=False,
+        )
+        self.assertTrue(ap.get("ok"))
+        self.assertTrue(ap.get("distilled"))
 
     def test_retrieve_thread_ppr_mode(self) -> None:
         self._write(

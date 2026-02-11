@@ -142,6 +142,13 @@ Run retrieval quality evaluation (`basic` vs `smart` ranking):
 PYTHONPATH=. python3 scripts/eval_retrieval.py --project-id OM --dataset eval/retrieval_dataset_om.json --out eval/retrieval_report_om.json
 ```
 
+Distill one session into compact semantic/procedural memories (preview by default):
+
+```bash
+PYTHONPATH=. python3 -m omnimem.cli distill --project-id OM --session-id <session_id>
+PYTHONPATH=. python3 -m omnimem.cli distill --project-id OM --session-id <session_id> --apply
+```
+
 Tune daemon adaptive governance quantiles from the eval report:
 
 ```bash

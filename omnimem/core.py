@@ -1317,6 +1317,172 @@ def compress_hot_sessions(
     return {"ok": True, "project_id": project_id, "sessions": sessions, "items": items}
 
 
+def distill_session_memory(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str,
+    limit: int = 140,
+    min_items: int = 10,
+    dry_run: bool = True,
+    semantic_layer: str = "long",
+    procedural_layer: str = "short",
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Distill session traces into compact semantic + procedural memories.
+
+    Deterministic (no model call): extract high-signal facts/steps from summaries and tags.
+    """
+    ensure_storage(paths, schema_sql_path)
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise ValueError("session_id is required")
+    if semantic_layer not in LAYER_SET or procedural_layer not in LAYER_SET:
+        raise ValueError("invalid target layers")
+    limit = max(20, min(600, int(limit)))
+    min_items = max(3, min(200, int(min_items)))
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, layer, kind, summary, updated_at, tags_json
+            FROM memories
+            WHERE (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?
+              AND kind NOT IN ('retrieve')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, sid, limit),
+        ).fetchall()
+
+    items = [dict(r) for r in rows]
+    if len(items) < min_items:
+        return {
+            "ok": True,
+            "dry_run": bool(dry_run),
+            "project_id": project_id,
+            "session_id": sid,
+            "distilled": False,
+            "reason": f"insufficient items ({len(items)} < {min_items})",
+        }
+
+    fact_kw = ("decision", "rule", "constraint", "must", "final", "结论", "规则", "约束")
+    step_kw = ("how", "step", "run", "command", "fix", "script", "流程", "步骤", "命令", "修复")
+    facts: list[str] = []
+    steps: list[str] = []
+    seen_fact: set[str] = set()
+    seen_step: set[str] = set()
+
+    for x in items:
+        sm = str(x.get("summary") or "").strip()
+        if not sm:
+            continue
+        low = sm.lower()
+        is_fact = (str(x.get("kind") or "") in {"decision", "evidence", "summary"}) or any(k in low for k in fact_kw)
+        is_step = any(k in low for k in step_kw)
+        if is_fact and sm not in seen_fact:
+            seen_fact.add(sm)
+            facts.append(sm)
+        if is_step and sm not in seen_step:
+            seen_step.add(sm)
+            steps.append(sm)
+        if len(facts) >= 14 and len(steps) >= 14:
+            break
+
+    if not facts:
+        facts = [str(x.get("summary") or "").strip() for x in items[:8] if str(x.get("summary") or "").strip()]
+    if not steps:
+        steps = [str(x.get("summary") or "").strip() for x in items[:8] if str(x.get("summary") or "").strip()]
+    facts = facts[:14]
+    steps = steps[:14]
+
+    sem_summary = f"Semantic distill: {sid[:12]}…"
+    sem_body = "## Semantic Memory Distillation\n\n"
+    sem_body += f"- project_id: {project_id or '(all)'}\n- session_id: {sid}\n- source_items: {len(items)}\n\n### Stable facts\n"
+    for f in facts:
+        sem_body += f"- {f}\n"
+
+    proc_summary = f"Procedural distill: {sid[:12]}…"
+    proc_body = "## Procedural Memory Distillation\n\n"
+    proc_body += f"- project_id: {project_id or '(all)'}\n- session_id: {sid}\n- source_items: {len(items)}\n\n### Reusable steps\n"
+    for s in steps:
+        proc_body += f"- {s}\n"
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "project_id": project_id,
+            "session_id": sid,
+            "distilled": False,
+            "semantic_preview": {"summary": sem_summary, "body": sem_body},
+            "procedural_preview": {"summary": proc_summary, "body": proc_body},
+            "source_count": len(items),
+        }
+
+    sem_out = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        layer=semantic_layer,
+        kind="summary",
+        summary=sem_summary,
+        body=sem_body,
+        tags=["auto:distill", "mem:semantic", f"session:{sid}", *(["project:" + project_id] if project_id else [])],
+        refs=[],
+        cred_refs=[],
+        tool=tool,
+        account="default",
+        device="local",
+        session_id=actor_session_id,
+        project_id=project_id or "global",
+        workspace=str(paths.root),
+        importance=0.82,
+        confidence=0.72,
+        stability=0.84,
+        reuse_count=0,
+        volatility=0.20,
+        event_type="memory.write",
+    )
+    proc_out = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        layer=procedural_layer,
+        kind="summary",
+        summary=proc_summary,
+        body=proc_body,
+        tags=["auto:distill", "mem:procedural", f"session:{sid}", *(["project:" + project_id] if project_id else [])],
+        refs=[],
+        cred_refs=[],
+        tool=tool,
+        account="default",
+        device="local",
+        session_id=actor_session_id,
+        project_id=project_id or "global",
+        workspace=str(paths.root),
+        importance=0.80,
+        confidence=0.70,
+        stability=0.78,
+        reuse_count=0,
+        volatility=0.26,
+        event_type="memory.write",
+    )
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "project_id": project_id,
+        "session_id": sid,
+        "distilled": True,
+        "source_count": len(items),
+        "semantic_memory_id": str((sem_out.get("memory") or {}).get("id") or ""),
+        "procedural_memory_id": str((proc_out.get("memory") or {}).get("id") or ""),
+    }
+
+
 def insert_event(conn: sqlite3.Connection, evt: dict[str, Any]) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO memory_events(event_id, event_type, event_time, memory_id, payload_json) VALUES (?, ?, ?, ?, ?)",
@@ -3263,6 +3429,9 @@ def run_sync_daemon(
     maintenance_consolidate_limit: int = 80,
     maintenance_compress_sessions: int = 2,
     maintenance_compress_min_items: int = 8,
+    maintenance_distill_enabled: bool = True,
+    maintenance_distill_sessions: int = 1,
+    maintenance_distill_min_items: int = 12,
     maintenance_adaptive_q_promote_imp: float = 0.68,
     maintenance_adaptive_q_promote_conf: float = 0.60,
     maintenance_adaptive_q_promote_stab: float = 0.62,
@@ -3419,6 +3588,45 @@ def run_sync_daemon(
                     tool="daemon",
                     actor_session_id="system",
                 )
+                distill_items: list[dict[str, Any]] = []
+                if bool(maintenance_distill_enabled):
+                    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn_d:
+                        conn_d.row_factory = sqlite3.Row
+                        srows = conn_d.execute(
+                            """
+                            SELECT COALESCE(json_extract(source_json, '$.session_id'), '') AS sid, COUNT(*) AS c
+                            FROM memories
+                            WHERE COALESCE(json_extract(source_json, '$.session_id'), '') != ''
+                              AND kind NOT IN ('retrieve')
+                            GROUP BY sid
+                            ORDER BY c DESC
+                            LIMIT ?
+                            """,
+                            (max(1, int(maintenance_distill_sessions)) * 3,),
+                        ).fetchall()
+                    ds = [
+                        str(r["sid"])
+                        for r in srows
+                        if str(r["sid"]).strip() and str(r["sid"]) not in {"system", "webui-session"}
+                    ][: max(1, int(maintenance_distill_sessions))]
+                    for sid in ds:
+                        try:
+                            d_out = distill_session_memory(
+                                paths=paths,
+                                schema_sql_path=schema_sql_path,
+                                project_id="",
+                                session_id=sid,
+                                limit=140,
+                                min_items=int(maintenance_distill_min_items),
+                                dry_run=False,
+                                semantic_layer="long",
+                                procedural_layer="short",
+                                tool="daemon",
+                                actor_session_id="system",
+                            )
+                            distill_items.append(d_out)
+                        except Exception as exc:  # pragma: no cover
+                            distill_items.append({"ok": False, "session_id": sid, "error": str(exc)})
                 last_maintenance_result = {
                     "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
                     "decay": decay_out,
@@ -3430,6 +3638,12 @@ def run_sync_daemon(
                     "compress": {
                         "sessions": len(comp_out.get("sessions") or []),
                         "compressed": len([x for x in (comp_out.get("items") or []) if x.get("compressed")]),
+                    },
+                    "distill": {
+                        "enabled": bool(maintenance_distill_enabled),
+                        "sessions": len(distill_items),
+                        "distilled": len([x for x in distill_items if x.get("distilled")]),
+                        "errors": len([x for x in distill_items if not x.get("ok")]),
                     },
                 }
                 maintenance_runs += 1
