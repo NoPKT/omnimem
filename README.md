@@ -173,6 +173,12 @@ Retrieval A/B eval (basic vs smart vs smart+drift-aware):
 python3 scripts/eval_retrieval.py --dataset eval/retrieval_dataset_om.json --with-drift-ab --drift-weight 0.4
 ```
 
+Core merge mode eval (concat vs synthesize vs semantic):
+
+```bash
+python3 scripts/eval_core_merge.py --project-id OM --modes concat,synthesize,semantic --max-merged-lines 6
+```
+
 Single turn:
 
 ```bash

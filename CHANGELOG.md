@@ -21,6 +21,7 @@
 - Core merge governance: `core-merge-suggest` now emits quality score, supports apply quality gate (`--min-apply-quality`), and can post-process loser blocks via `--loser-action deprioritize|expire`.
 - Core merge synthesis: `core-merge-suggest` now supports `--merge-mode synthesize|concat` and bounded extractive synthesis (`--max-merged-lines`) for cleaner merged policy blocks.
 - Core semantic merge: add `--merge-mode semantic` for centroid-style semantic unit ranking + redundancy suppression during merged policy generation.
+- Merge evaluation: add `scripts/eval_core_merge.py` for offline mode comparison (`concat` vs `synthesize` vs `semantic`) with quantitative deltas.
 
 ## 0.2.21 - 2026-02-11
 

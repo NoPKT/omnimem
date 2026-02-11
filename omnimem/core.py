@@ -3459,6 +3459,8 @@ def suggest_core_block_merges(
             "apply_recommended": bool(quality >= min_apply_quality),
             "merge_mode": merge_mode,
             "synthesis": {"lines": int(synth.get("lines", 0) or 0), "support": float(round(float(synth.get("support", 0.0) or 0.0), 4))},
+            "suggested_guidance": merged_guidance,
+            "suggested_guidance_chars": int(len(merged_guidance)),
             "suggested_preview": merged_content[:260],
         }
         candidates.append(out)
