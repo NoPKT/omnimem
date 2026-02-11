@@ -4865,6 +4865,91 @@ def _parse_retrieve_drift_options(q: dict[str, list[str]]) -> tuple[bool, int, i
     return bool(drift_aware), int(drift_recent_days), int(drift_baseline_days), float(drift_weight)
 
 
+def _parse_memories_request(q: dict[str, list[str]]) -> dict[str, Any]:
+    query = q.get("query", [""])[0].strip()
+    route_raw = _normalize_memory_route(q.get("route", ["auto"])[0].strip())
+    route = _infer_memory_route(query) if route_raw == "auto" else route_raw
+    include_core_blocks, core_block_limit, core_merge_by_topic = _parse_retrieve_core_options(q)
+    drift_aware, drift_recent_days, drift_baseline_days, drift_weight = _parse_retrieve_drift_options(q)
+    return {
+        "limit": _parse_int_param(q.get("limit", ["20"])[0], default=20, lo=1, hi=200),
+        "project_id": q.get("project_id", [""])[0].strip(),
+        "session_id": q.get("session_id", [""])[0].strip(),
+        "layer": q.get("layer", [""])[0].strip() or None,
+        "query": query,
+        "kind_filter": q.get("kind", [""])[0].strip().lower(),
+        "tag_filter": q.get("tag", [""])[0].strip().lower(),
+        "since_days": _parse_int_param(q.get("since_days", ["0"])[0], default=0, lo=0, hi=365),
+        "mode": q.get("mode", ["basic"])[0].strip().lower() or "basic",
+        "route": route,
+        "depth": _parse_int_param(q.get("depth", ["2"])[0], default=2, lo=1, hi=4),
+        "per_hop": _parse_int_param(q.get("per_hop", ["6"])[0], default=6, lo=1, hi=30),
+        "ranking_mode": q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid",
+        "diversify": _parse_bool_param(q.get("diversify", ["1"])[0], default=True),
+        "profile_aware": _parse_bool_param(q.get("profile_aware", ["1"])[0], default=True),
+        "profile_weight": _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0),
+        "include_core_blocks": include_core_blocks,
+        "core_block_limit": core_block_limit,
+        "core_merge_by_topic": core_merge_by_topic,
+        "drift_aware": drift_aware,
+        "drift_recent_days": drift_recent_days,
+        "drift_baseline_days": drift_baseline_days,
+        "drift_weight": drift_weight,
+        "dedup_mode": _normalize_dedup_mode(q.get("dedup", ["off"])[0]),
+        "mmr_lambda": _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95),
+    }
+
+
+def _build_smart_memories_cache_key(req: dict[str, Any]) -> tuple[Any, ...]:
+    depth_i = int(req["depth"])
+    hop_i = int(req["per_hop"])
+    rank_i = str(req.get("ranking_mode") or "").lower().strip()
+    rank_i = rank_i if rank_i in {"path", "ppr", "hybrid"} else "hybrid"
+    limit_i = max(8, min(30, int(req["limit"])))
+    return (
+        str(req.get("project_id") or ""),
+        str(req.get("session_id") or ""),
+        str(req.get("query") or ""),
+        depth_i,
+        hop_i,
+        rank_i,
+        bool(req.get("diversify", True)),
+        float(req.get("mmr_lambda", 0.72)),
+        limit_i,
+        bool(req.get("profile_aware", True)),
+        float(req.get("profile_weight", 0.35)),
+        bool(req.get("include_core_blocks", True)),
+        int(req.get("core_block_limit", 2)),
+        bool(req.get("core_merge_by_topic", True)),
+        bool(req.get("drift_aware", True)),
+        int(req.get("drift_recent_days", 14)),
+        int(req.get("drift_baseline_days", 120)),
+        float(req.get("drift_weight", 0.35)),
+    )
+
+
+def _process_memories_items(
+    *,
+    paths: Any,
+    items: list[dict[str, Any]],
+    route: str,
+    kind_filter: str,
+    tag_filter: str,
+    since_days: int,
+    dedup_mode: str,
+) -> tuple[list[dict[str, Any]], int]:
+    out = _filter_items_by_route(paths, items, route)
+    out = _apply_memory_filters(
+        out,
+        kind_filter=kind_filter,
+        tag_filter=tag_filter,
+        since_days=since_days,
+    )
+    before_dedup = len(out)
+    out = _dedup_memory_items(out, mode=dedup_mode)
+    return out, before_dedup
+
+
 def _cache_get(
     cache: dict[Any, tuple[float, dict[str, Any]]],
     key: Any,
@@ -5749,53 +5834,15 @@ def run_webui(
                 return
 
             if parsed.path == "/api/memories":
-                q = parse_qs(parsed.query)
-                limit = _parse_int_param(q.get("limit", ["20"])[0], default=20, lo=1, hi=200)
-                project_id = q.get("project_id", [""])[0].strip()
-                session_id = q.get("session_id", [""])[0].strip()
-                layer = q.get("layer", [""])[0].strip() or None
-                query = q.get("query", [""])[0].strip()
-                kind_filter = q.get("kind", [""])[0].strip().lower()
-                tag_filter = q.get("tag", [""])[0].strip().lower()
-                since_days = _parse_int_param(q.get("since_days", ["0"])[0], default=0, lo=0, hi=365)
-                mode = q.get("mode", ["basic"])[0].strip().lower() or "basic"
-                route_raw = _normalize_memory_route(q.get("route", ["auto"])[0].strip())
-                route = _infer_memory_route(query) if route_raw == "auto" else route_raw
-                depth = _parse_int_param(q.get("depth", ["2"])[0], default=2, lo=1, hi=4)
-                per_hop = _parse_int_param(q.get("per_hop", ["6"])[0], default=6, lo=1, hi=30)
-                ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
-                diversify = _parse_bool_param(q.get("diversify", ["1"])[0], default=True)
-                profile_aware = _parse_bool_param(q.get("profile_aware", ["1"])[0], default=True)
-                profile_weight = _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
-                include_core_blocks, core_block_limit, core_merge_by_topic = _parse_retrieve_core_options(q)
-                drift_aware, drift_recent_days, drift_baseline_days, drift_weight = _parse_retrieve_drift_options(q)
-                dedup_mode = _normalize_dedup_mode(q.get("dedup", ["off"])[0])
-                mmr_lambda = _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95)
-                if mode == "smart" and query:
-                    depth_i = int(depth)
-                    hop_i = int(per_hop)
-                    rank_i = ranking_mode if ranking_mode in {"path", "ppr", "hybrid"} else "hybrid"
-                    limit_i = max(8, min(30, int(limit)))
-                    cache_key = (
-                        project_id,
-                        session_id,
-                        query,
-                        depth_i,
-                        hop_i,
-                        rank_i,
-                        bool(diversify),
-                        float(mmr_lambda),
-                        limit_i,
-                        bool(profile_aware),
-                        float(profile_weight),
-                        bool(include_core_blocks),
-                        int(core_block_limit),
-                        bool(core_merge_by_topic),
-                        bool(drift_aware),
-                        int(drift_recent_days),
-                        int(drift_baseline_days),
-                        float(drift_weight),
-                    )
+                req = _parse_memories_request(parse_qs(parsed.query))
+                if str(req["mode"]) == "smart" and str(req["query"]):
+                    cache_key = _build_smart_memories_cache_key(req)
+                    depth_i = int(req["depth"])
+                    hop_i = int(req["per_hop"])
+                    rank_i = str(req["ranking_mode"]).lower()
+                    if rank_i not in {"path", "ppr", "hybrid"}:
+                        rank_i = "hybrid"
+                    limit_i = max(8, min(30, int(req["limit"])))
                     out: dict[str, Any] | None = None
                     now = time.time()
                     with smart_retrieve_lock:
@@ -5804,50 +5851,50 @@ def run_webui(
                         out = retrieve_thread(
                             paths=paths,
                             schema_sql_path=schema_sql_path,
-                            query=query,
-                            project_id=project_id,
-                            session_id=session_id,
+                            query=str(req["query"]),
+                            project_id=str(req["project_id"]),
+                            session_id=str(req["session_id"]),
                             seed_limit=limit_i,
                             depth=depth_i,
                             per_hop=hop_i,
                             ranking_mode=rank_i,
-                            diversify=bool(diversify),
-                            mmr_lambda=float(mmr_lambda),
+                            diversify=bool(req["diversify"]),
+                            mmr_lambda=float(req["mmr_lambda"]),
                             max_items=limit_i,
                             self_check=True,
                             adaptive_feedback=True,
                             feedback_reuse_step=1,
-                            profile_aware=bool(profile_aware),
-                            profile_weight=float(profile_weight),
-                            include_core_blocks=bool(include_core_blocks),
-                            core_block_limit=int(core_block_limit),
-                            core_merge_by_topic=bool(core_merge_by_topic),
-                            drift_aware=bool(drift_aware),
-                            drift_recent_days=int(drift_recent_days),
-                            drift_baseline_days=int(drift_baseline_days),
-                            drift_weight=float(drift_weight),
+                            profile_aware=bool(req["profile_aware"]),
+                            profile_weight=float(req["profile_weight"]),
+                            include_core_blocks=bool(req["include_core_blocks"]),
+                            core_block_limit=int(req["core_block_limit"]),
+                            core_merge_by_topic=bool(req["core_merge_by_topic"]),
+                            drift_aware=bool(req["drift_aware"]),
+                            drift_recent_days=int(req["drift_recent_days"]),
+                            drift_baseline_days=int(req["drift_baseline_days"]),
+                            drift_weight=float(req["drift_weight"]),
                         )
                         with smart_retrieve_lock:
                             _cache_set(smart_retrieve_cache, cache_key, out, now=now, max_items=96)
                     items = list(out.get("items") or [])
-                    if layer:
-                        items = [x for x in items if str(x.get("layer") or "") == layer]
-                    items = _filter_items_by_route(paths, items, route)
-                    items = _apply_memory_filters(
-                        items,
-                        kind_filter=kind_filter,
-                        tag_filter=tag_filter,
-                        since_days=since_days,
+                    if req["layer"]:
+                        items = [x for x in items if str(x.get("layer") or "") == str(req["layer"])]
+                    items, before_dedup = _process_memories_items(
+                        paths=paths,
+                        items=items,
+                        route=str(req["route"]),
+                        kind_filter=str(req["kind_filter"]),
+                        tag_filter=str(req["tag_filter"]),
+                        since_days=int(req["since_days"]),
+                        dedup_mode=str(req["dedup_mode"]),
                     )
-                    before_dedup = len(items)
-                    items = _dedup_memory_items(items, mode=dedup_mode)
                     self._send_json(
                         {
                             "ok": True,
-                            "items": items[: max(1, min(200, int(limit)))],
+                            "items": items[: max(1, min(200, int(req["limit"])))],
                             "mode": "smart",
-                            "route": route,
-                            "dedup": {"mode": dedup_mode, "before": before_dedup, "after": len(items)},
+                            "route": str(req["route"]),
+                            "dedup": {"mode": str(req["dedup_mode"]), "before": before_dedup, "after": len(items)},
                             "explain": out.get("explain", {}),
                         }
                     )
@@ -5855,28 +5902,28 @@ def run_webui(
                     items = find_memories(
                         paths,
                         schema_sql_path,
-                        query=query,
-                        layer=layer,
-                        limit=limit,
-                        project_id=project_id,
-                        session_id=session_id,
+                        query=str(req["query"]),
+                        layer=str(req["layer"] or "") or None,
+                        limit=int(req["limit"]),
+                        project_id=str(req["project_id"]),
+                        session_id=str(req["session_id"]),
                     )
-                    items = _filter_items_by_route(paths, items, route)
-                    items = _apply_memory_filters(
-                        items,
-                        kind_filter=kind_filter,
-                        tag_filter=tag_filter,
-                        since_days=since_days,
+                    items, before_dedup = _process_memories_items(
+                        paths=paths,
+                        items=items,
+                        route=str(req["route"]),
+                        kind_filter=str(req["kind_filter"]),
+                        tag_filter=str(req["tag_filter"]),
+                        since_days=int(req["since_days"]),
+                        dedup_mode=str(req["dedup_mode"]),
                     )
-                    before_dedup = len(items)
-                    items = _dedup_memory_items(items, mode=dedup_mode)
                     self._send_json(
                         {
                             "ok": True,
                             "items": items,
                             "mode": "basic",
-                            "route": route,
-                            "dedup": {"mode": dedup_mode, "before": before_dedup, "after": len(items)},
+                            "route": str(req["route"]),
+                            "dedup": {"mode": str(req["dedup_mode"]), "before": before_dedup, "after": len(items)},
                         }
                     )
                 return

@@ -10,6 +10,7 @@ from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
     _aggregate_event_stats,
     _apply_memory_filters,
+    _build_smart_memories_cache_key,
     _cache_get,
     _cache_set,
     _dedup_memory_items,
@@ -20,7 +21,9 @@ from omnimem.webui import (
     _normalize_memory_route,
     _parse_float_param,
     _parse_int_param,
+    _parse_memories_request,
     _normalize_route_templates,
+    _process_memories_items,
     _quality_alerts,
     _quality_window_summary,
     _rollback_preview_items,
@@ -100,6 +103,47 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         ]
         out = _dedup_memory_items(items, mode="summary_kind")
         self.assertEqual([x["id"] for x in out], ["a1", "b1"])
+
+    def test_parse_memories_request_defaults(self) -> None:
+        req = _parse_memories_request({})
+        self.assertEqual(int(req.get("limit", 0)), 20)
+        self.assertEqual(str(req.get("mode") or ""), "basic")
+        self.assertEqual(str(req.get("route") or ""), "general")
+        self.assertTrue(bool(req.get("profile_aware")))
+        self.assertTrue(bool(req.get("include_core_blocks")))
+
+    def test_build_smart_memories_cache_key_normalizes_ranking_mode(self) -> None:
+        req = _parse_memories_request(
+            {
+                "mode": ["smart"],
+                "query": ["alpha"],
+                "project_id": ["OM"],
+                "session_id": ["s1"],
+                "ranking_mode": ["bad-value"],
+                "limit": ["3"],
+            }
+        )
+        key = _build_smart_memories_cache_key(req)
+        self.assertEqual(key[5], "hybrid")
+        self.assertEqual(key[8], 8)
+
+    def test_process_memories_items_filters_route_and_dedup(self) -> None:
+        items = [
+            {"id": "m1", "kind": "note", "summary": "same", "tags": ["x"], "route": "semantic", "updated_at": "2026-02-11T00:00:00+00:00"},
+            {"id": "m2", "kind": "note", "summary": "same", "tags": ["x"], "route": "semantic", "updated_at": "2026-02-11T00:00:00+00:00"},
+            {"id": "m3", "kind": "decision", "summary": "other", "tags": ["y"], "route": "procedural", "updated_at": "2026-02-11T00:00:00+00:00"},
+        ]
+        out, before = _process_memories_items(
+            paths=None,
+            items=items,
+            route="general",
+            kind_filter="note",
+            tag_filter="x",
+            since_days=0,
+            dedup_mode="summary_kind",
+        )
+        self.assertEqual(before, 2)
+        self.assertEqual([x["id"] for x in out], ["m1"])
 
     def test_memory_route_inference(self) -> None:
         self.assertEqual(_normalize_memory_route("procedural"), "procedural")
