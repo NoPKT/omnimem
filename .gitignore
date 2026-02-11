@@ -16,9 +16,12 @@ __pycache__/
 
 # Local omnimem home for sandbox runs
 .omnimem_local/
+.omnimem_gate/
+.omnimem_gate.locomo_report.json
 .npm-cache/
 .tmp-omnimem-home*/
 eval/*.json
+.release/
 
 # Project attach artifacts (repo-root only; don't ignore templates/)
 /.omnimem-home/

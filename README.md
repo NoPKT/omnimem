@@ -85,6 +85,12 @@ Pre-check before npm publish:
 npm run release:gate
 ```
 
+Prepare next release draft (dry-run):
+
+```bash
+npm run release:prepare
+```
+
 Optional (partial gate):
 
 ```bash

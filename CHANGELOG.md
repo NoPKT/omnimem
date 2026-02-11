@@ -4,6 +4,7 @@
 
 - Release workflow: add one-command release gate script `scripts/release_gate.sh` to run preflight, doctor, pack dry-run, phase-D verification, and frontier smoke checks.
 - CI: keep frontier smoke checks in CI and align docs/scripts so local pre-publish flow matches automated checks.
+- Release automation: add `scripts/release_prepare.sh` (`npm run release:prepare`) to compute next semver, build release draft notes, and optionally apply version/changelog updates.
 
 ## 0.2.20
 

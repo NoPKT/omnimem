@@ -23,6 +23,7 @@
     "start": "./bin/omnimem start --host 127.0.0.1 --port 8765",
     "test": "python3 -m pytest -q",
     "verify": "bash scripts/verify_phase_d.sh",
+    "release:prepare": "bash scripts/release_prepare.sh",
     "release:gate": "bash scripts/release_gate.sh",
     "pack:check": "npm_config_cache=$PWD/.npm-cache npm pack --dry-run"
   },

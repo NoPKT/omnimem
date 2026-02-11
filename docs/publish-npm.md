@@ -6,6 +6,18 @@
 npm run release:gate
 ```
 
+## Prepare release draft
+
+```bash
+npm run release:prepare
+```
+
+Apply version/changelog updates:
+
+```bash
+bash scripts/release_prepare.sh --apply
+```
+
 If needed, you can run a partial gate:
 
 ```bash
