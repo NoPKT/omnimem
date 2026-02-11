@@ -1445,6 +1445,198 @@ def rehearse_memory_traces(
     }
 
 
+def trigger_reflective_summaries(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    days: int = 14,
+    limit: int = 4,
+    min_repeats: int = 2,
+    max_avg_retrieved: float = 2.0,
+    dry_run: bool = True,
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Create reflective memory tasks when repeated retrieval attempts keep under-recalling."""
+    ensure_storage(paths, schema_sql_path)
+    days = max(1, min(180, int(days)))
+    limit = max(1, min(20, int(limit)))
+    min_repeats = max(1, min(12, int(min_repeats)))
+    max_avg_retrieved = max(0.0, min(20.0, float(max_avg_retrieved)))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat()
+
+    rx_q = re.compile(r"^\s*-\s*query:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+    rx_n = re.compile(r"^\s*-\s*retrieved_count:\s*(\d+)\s*$", re.IGNORECASE | re.MULTILINE)
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, updated_at, body_text, source_json, scope_json
+            FROM memories
+            WHERE kind='retrieve'
+              AND updated_at >= ?
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT 500
+            """,
+            (cutoff, project_id, project_id),
+        ).fetchall()
+
+    groups: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        body = str(r["body_text"] or "")
+        mq = rx_q.search(body)
+        mn = rx_n.search(body)
+        if not mq:
+            continue
+        raw_q = str(mq.group(1) or "").strip()
+        if not raw_q:
+            continue
+        norm_q = re.sub(r"\s+", " ", raw_q).strip().lower()
+        retrieved = int(mn.group(1)) if mn else 0
+        g = groups.setdefault(
+            norm_q,
+            {
+                "query": raw_q,
+                "count": 0,
+                "retrieved_sum": 0,
+                "latest_at": "",
+                "sessions": set(),
+                "examples": [],
+            },
+        )
+        g["count"] += 1
+        g["retrieved_sum"] += retrieved
+        g["latest_at"] = max(str(g.get("latest_at") or ""), str(r["updated_at"] or ""))
+        try:
+            src = json.loads(r["source_json"] or "{}")
+            sid = str((src or {}).get("session_id") or "").strip()
+            if sid:
+                g["sessions"].add(sid)
+        except Exception:
+            pass
+        if len(g["examples"]) < 5:
+            g["examples"].append({"memory_id": str(r["id"] or ""), "retrieved_count": retrieved, "updated_at": str(r["updated_at"] or "")})
+
+    candidates: list[dict[str, Any]] = []
+    for nq, g in groups.items():
+        c = int(g["count"])
+        avg_r = (float(g["retrieved_sum"]) / max(1, c))
+        if c < min_repeats or avg_r > max_avg_retrieved:
+            continue
+        q_hash = sha256_text(nq)[:12]
+        severity = (min(1.0, c / 6.0) * 0.65) + (min(1.0, (max_avg_retrieved - avg_r + 1.0) / (max_avg_retrieved + 1.0)) * 0.35)
+        candidates.append(
+            {
+                "query": str(g["query"] or nq),
+                "query_norm": nq,
+                "query_hash": q_hash,
+                "count": c,
+                "avg_retrieved": round(avg_r, 3),
+                "latest_at": str(g.get("latest_at") or ""),
+                "sessions": sorted([str(x) for x in g.get("sessions") or []])[:8],
+                "examples": g.get("examples") or [],
+                "severity": round(float(severity), 6),
+            }
+        )
+    candidates.sort(key=lambda x: (float(x.get("severity", 0.0)), int(x.get("count", 0))), reverse=True)
+    selected = candidates[:limit]
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "project_id": project_id,
+            "days": days,
+            "selected": selected,
+        }
+
+    created: list[dict[str, Any]] = []
+    for c in selected:
+        qh = str(c.get("query_hash") or "")
+        q = str(c.get("query") or "")
+        with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+            existed = conn.execute(
+                """
+                SELECT COUNT(*) FROM memories
+                WHERE kind='task'
+                  AND updated_at >= ?
+                  AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+                  AND EXISTS (SELECT 1 FROM json_each(memories.tags_json) WHERE value=?)
+                """,
+                (cutoff, project_id, project_id, f"reflect:q:{qh}"),
+            ).fetchone()
+            if int((existed or [0])[0] or 0) > 0:
+                continue
+        body_lines = [
+            "## Reflective Retrieval Gap",
+            "",
+            f"- query: {q}",
+            f"- query_hash: {qh}",
+            f"- repeats: {int(c.get('count', 0) or 0)}",
+            f"- avg_retrieved: {float(c.get('avg_retrieved', 0.0) or 0.0):.3f}",
+            f"- sessions: {', '.join(c.get('sessions') or []) if (c.get('sessions') or []) else '(none)'}",
+            "",
+            "### Suggested actions",
+            "- Distill related episodic traces into semantic/procedural memory.",
+            "- Add one concise long-term fact memory for this query intent.",
+            "- Weave links from new summaries to key source memories.",
+            "",
+            "### Recent examples",
+        ]
+        for ex in (c.get("examples") or [])[:5]:
+            body_lines.append(
+                f"- [{str(ex.get('updated_at') or '')}] memory_id={str(ex.get('memory_id') or '')} retrieved={int(ex.get('retrieved_count', 0) or 0)}"
+            )
+        out = write_memory(
+            paths=paths,
+            schema_sql_path=schema_sql_path,
+            layer="short",
+            kind="task",
+            summary=f"Reflective gap: {q[:88]}",
+            body="\n".join(body_lines).strip() + "\n",
+            tags=[
+                "auto:reflection",
+                "reflect:retrieval-gap",
+                f"reflect:q:{qh}",
+                *(["project:" + project_id] if project_id else []),
+            ],
+            refs=[],
+            cred_refs=[],
+            tool=tool,
+            account="default",
+            device="local",
+            session_id=actor_session_id,
+            project_id=project_id or "global",
+            workspace=str(paths.root),
+            importance=min(0.95, 0.62 + (0.04 * int(c.get("count", 0) or 0))),
+            confidence=0.78,
+            stability=0.72,
+            reuse_count=0,
+            volatility=0.24,
+            event_type="memory.update",
+        )
+        created.append(
+            {
+                "query": q,
+                "query_hash": qh,
+                "memory_id": str((out.get("memory") or {}).get("id") or ""),
+            }
+        )
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "project_id": project_id,
+        "days": days,
+        "selected": selected,
+        "created": created,
+        "created_count": len(created),
+    }
+
+
 def build_temporal_memory_tree(
     *,
     paths: MemoryPaths,
@@ -2716,6 +2908,58 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return inter / max(1, union)
 
 
+def _mmr_diversify(
+    *,
+    items: list[dict[str, Any]],
+    score_key: str = "score",
+    text_key: str = "summary",
+    top_k: int = 12,
+    lambda_mult: float = 0.72,
+) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    top_k = max(1, min(len(items), int(top_k)))
+    lam = max(0.05, min(0.95, float(lambda_mult)))
+    if len(items) <= 1 or top_k <= 1:
+        return items[:top_k]
+
+    vals = [float(x.get(score_key) or 0.0) for x in items]
+    lo = min(vals)
+    hi = max(vals)
+    span = max(1e-9, hi - lo)
+    data: list[dict[str, Any]] = []
+    for x in items:
+        text = str(x.get(text_key) or "")
+        data.append(
+            {
+                "item": x,
+                "rel": (float(x.get(score_key) or 0.0) - lo) / span,
+                "toks": _mem_text_tokens(text),
+            }
+        )
+
+    picked: list[dict[str, Any]] = []
+    remain = list(data)
+    # Always keep the strongest candidate first to preserve precision.
+    first = max(remain, key=lambda z: z["rel"])
+    picked.append(first)
+    remain = [z for z in remain if z is not first]
+
+    while remain and len(picked) < top_k:
+        best_i = 0
+        best_s = -10.0
+        for i, cand in enumerate(remain):
+            max_sim = 0.0
+            for p in picked:
+                max_sim = max(max_sim, _jaccard(cand["toks"], p["toks"]))
+            s = (lam * float(cand["rel"])) - ((1.0 - lam) * float(max_sim))
+            if s > best_s:
+                best_s = s
+                best_i = i
+        picked.append(remain.pop(best_i))
+    return [z["item"] for z in picked]
+
+
 def weave_links(
     *,
     paths: MemoryPaths,
@@ -2890,6 +3134,9 @@ def retrieve_thread(
     ranking_mode: str = "hybrid",
     ppr_alpha: float = 0.85,
     ppr_iters: int = 16,
+    diversify: bool = True,
+    mmr_lambda: float = 0.72,
+    max_items: int = 12,
 ) -> dict[str, Any]:
     """Progressive, graph-aware retrieval.
 
@@ -2907,6 +3154,9 @@ def retrieve_thread(
         ranking_mode = "hybrid"
     ppr_alpha = max(0.10, min(0.98, float(ppr_alpha)))
     ppr_iters = max(4, min(64, int(ppr_iters)))
+    max_items = max(1, min(60, int(max_items)))
+    diversify = bool(diversify)
+    mmr_lambda = max(0.05, min(0.95, float(mmr_lambda)))
 
     # Best-effort: keep the link graph from being perpetually empty when running without a daemon.
     # Guard per home so repeated retrieves don't constantly try to weave while DB is busy.
@@ -2961,6 +3211,7 @@ def retrieve_thread(
 
     visited: set[str] = set()
     scored: dict[str, float] = {}
+    ppr_scores: dict[str, float] = {}
     paths_explain: dict[str, list[dict[str, Any]]] = {}
     frontier: list[str] = []
     graph_edges: list[tuple[str, str, float]] = []
@@ -3073,6 +3324,7 @@ def retrieve_thread(
             max_p = max([float(v) for v in p.values()] + [1e-9])
             for mid, pv in p.items():
                 ppr = float(pv) / max_p
+                ppr_scores[mid] = ppr
                 base = float(scored.get(mid, 0.0))
                 if ranking_mode == "ppr":
                     scored[mid] = ppr
@@ -3080,7 +3332,9 @@ def retrieve_thread(
                     scored[mid] = (0.62 * base) + (0.38 * ppr)
 
         # Materialize items.
-        ids = sorted(scored.keys(), key=lambda k: scored[k], reverse=True)[: max(seed_limit, 12)]
+        final_limit = max(1, int(max_items))
+        pool_limit = max(final_limit * 3, seed_limit * 2, 18)
+        ids = sorted(scored.keys(), key=lambda k: scored[k], reverse=True)[:pool_limit]
         if not ids:
             return {"ok": True, "query": query, "items": [], "explain": {"seeds": seeds, "paths": {}}}
         placeholders = ",".join(["?"] * len(ids))
@@ -3096,11 +3350,46 @@ def retrieve_thread(
             tuple(ids),
         ).fetchall()
         out_items = []
+        out_ids_set = set(ids)
+        seed_map = {str(x.get("id") or ""): x for x in seeds if str(x.get("id") or "")}
         for r in rows2:
             d = _signals_from_row(dict(r))
-            d["score"] = float(round(scored.get(str(d.get("id")), 0.0), 6))
+            mid = str(d.get("id") or "")
+            d["score"] = float(round(scored.get(mid, 0.0), 6))
+            why: list[str] = []
+            s0 = seed_map.get(mid)
+            if s0:
+                q_used = str(((s0.get("retrieval") or {}).get("query_used") or "")).strip()
+                strat = str(((s0.get("retrieval") or {}).get("strategy") or "")).strip()
+                lyr = str(s0.get("_seed_layer") or "")
+                why.append(f"seed-match layer={lyr or 'unknown'} strategy={strat or 'n/a'}")
+                if q_used:
+                    why.append(f"seed-query={q_used[:72]}")
+            pth = paths_explain.get(mid) or []
+            if len(pth) > 1:
+                hops = len(pth) - 1
+                last = pth[-1]
+                why.append(
+                    f"graph-hop={hops} via={str(last.get('link_type') or 'link')} w={float(last.get('weight') or 0.0):.2f}"
+                )
+            if mid in ppr_scores and ranking_mode in {"ppr", "hybrid"}:
+                why.append(f"ppr={float(ppr_scores.get(mid, 0.0)):.3f}")
+            why.append(f"score={float(d.get('score') or 0.0):.3f}")
+            d["why_recalled"] = why[:6]
             out_items.append(d)
         out_items.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
+        if diversify and len(out_items) > 1:
+            out_items = _mmr_diversify(
+                items=out_items,
+                score_key="score",
+                text_key="summary",
+                top_k=final_limit,
+                lambda_mult=mmr_lambda,
+            )
+        else:
+            out_items = out_items[:final_limit]
+        out_ids_set = {str(x.get("id") or "") for x in out_items if str(x.get("id") or "")}
+        why_map = {str(x.get("id") or ""): list(x.get("why_recalled") or []) for x in out_items if str(x.get("id") or "")}
 
     return {
         "ok": True,
@@ -3110,8 +3399,11 @@ def retrieve_thread(
             "ranking_mode": ranking_mode,
             "ppr_alpha": ppr_alpha,
             "ppr_iters": ppr_iters,
+            "diversify": bool(diversify),
+            "mmr_lambda": float(mmr_lambda),
             "seeds": seeds,
-            "paths": {k: v for k, v in paths_explain.items() if k in {x.get("id") for x in out_items}},
+            "paths": {k: v for k, v in paths_explain.items() if k in out_ids_set},
+            "why_recalled": why_map,
         },
     }
 
@@ -3725,6 +4017,11 @@ def run_sync_daemon(
     maintenance_rehearsal_enabled: bool = True,
     maintenance_rehearsal_days: int = 45,
     maintenance_rehearsal_limit: int = 16,
+    maintenance_reflection_enabled: bool = True,
+    maintenance_reflection_days: int = 14,
+    maintenance_reflection_limit: int = 4,
+    maintenance_reflection_min_repeats: int = 2,
+    maintenance_reflection_max_avg_retrieved: float = 2.0,
     maintenance_adaptive_q_promote_imp: float = 0.68,
     maintenance_adaptive_q_promote_conf: float = 0.60,
     maintenance_adaptive_q_promote_stab: float = 0.62,
@@ -3945,6 +4242,20 @@ def run_sync_daemon(
                         tool="daemon",
                         actor_session_id="system",
                     )
+                reflection_out = {"ok": True, "created_count": 0}
+                if bool(maintenance_reflection_enabled):
+                    reflection_out = trigger_reflective_summaries(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id="",
+                        days=int(maintenance_reflection_days),
+                        limit=int(maintenance_reflection_limit),
+                        min_repeats=int(maintenance_reflection_min_repeats),
+                        max_avg_retrieved=float(maintenance_reflection_max_avg_retrieved),
+                        dry_run=False,
+                        tool="daemon",
+                        actor_session_id="system",
+                    )
                 last_maintenance_result = {
                     "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
                     "decay": decay_out,
@@ -3977,6 +4288,15 @@ def run_sync_daemon(
                         "limit": int(maintenance_rehearsal_limit),
                         "selected": int(rehearsal_out.get("selected_count", 0) or len(rehearsal_out.get("selected") or [])),
                         "ok": bool(rehearsal_out.get("ok", True)),
+                    },
+                    "reflection": {
+                        "enabled": bool(maintenance_reflection_enabled),
+                        "days": int(maintenance_reflection_days),
+                        "limit": int(maintenance_reflection_limit),
+                        "min_repeats": int(maintenance_reflection_min_repeats),
+                        "max_avg_retrieved": float(maintenance_reflection_max_avg_retrieved),
+                        "created": int(reflection_out.get("created_count", 0) or len(reflection_out.get("created") or [])),
+                        "ok": bool(reflection_out.get("ok", True)),
                     },
                 }
                 maintenance_runs += 1

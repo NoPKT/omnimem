@@ -752,6 +752,16 @@ HTML_PAGE = """<!doctype html>
             <label><span>Maintenance Consolidate Limit</span><input name=\"daemon_maintenance_consolidate_limit\" type=\"number\" min=\"1\" max=\"1000\" /></label>
             <label><span>Maintenance Compress Sessions</span><input name=\"daemon_maintenance_compress_sessions\" type=\"number\" min=\"1\" max=\"20\" /></label>
             <label><span>Maintenance Compress Min Items</span><input name=\"daemon_maintenance_compress_min_items\" type=\"number\" min=\"2\" max=\"200\" /></label>
+            <label><span>Maintenance Temporal Tree Enabled</span><select name=\"daemon_maintenance_temporal_tree_enabled\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
+            <label><span>Maintenance Temporal Tree Days</span><input name=\"daemon_maintenance_temporal_tree_days\" type=\"number\" min=\"1\" max=\"365\" /></label>
+            <label><span>Maintenance Rehearsal Enabled</span><select name=\"daemon_maintenance_rehearsal_enabled\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
+            <label><span>Maintenance Rehearsal Days</span><input name=\"daemon_maintenance_rehearsal_days\" type=\"number\" min=\"1\" max=\"365\" /></label>
+            <label><span>Maintenance Rehearsal Limit</span><input name=\"daemon_maintenance_rehearsal_limit\" type=\"number\" min=\"1\" max=\"200\" /></label>
+            <label><span>Maintenance Reflection Enabled</span><select name=\"daemon_maintenance_reflection_enabled\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
+            <label><span>Maintenance Reflection Days</span><input name=\"daemon_maintenance_reflection_days\" type=\"number\" min=\"1\" max=\"365\" /></label>
+            <label><span>Maintenance Reflection Limit</span><input name=\"daemon_maintenance_reflection_limit\" type=\"number\" min=\"1\" max=\"20\" /></label>
+            <label><span>Maintenance Reflection Min Repeats</span><input name=\"daemon_maintenance_reflection_min_repeats\" type=\"number\" min=\"1\" max=\"12\" /></label>
+            <label><span>Maintenance Reflection Max Avg Retrieved</span><input name=\"daemon_maintenance_reflection_max_avg_retrieved\" type=\"number\" min=\"0\" max=\"20\" step=\"0.1\" /></label>
             <label><span>Approval Required For Apply</span><select name=\"webui_approval_required\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
             <label><span>Preview-Only Until (ISO UTC)</span><input name=\"webui_maintenance_preview_only_until\" placeholder=\"2026-02-18T00:00:00+00:00\" /></label>
             <button type=\"submit\" data-i18n=\"btn_save\">Save Configuration</button>
@@ -837,6 +847,15 @@ HTML_PAGE = """<!doctype html>
 	                <option value=\"path\">path</option>
 	              </select>
 	            </label>
+              <label style=\"margin-top:0\">Diversity
+                <select id=\"memDiversify\" class=\"lang\" style=\"max-width:160px;\">
+                  <option value=\"true\" selected>on (MMR)</option>
+                  <option value=\"false\">off</option>
+                </select>
+              </label>
+              <label style=\"margin-top:0\">MMR λ
+                <input id=\"memMmrLambda\" type=\"number\" min=\"0.05\" max=\"0.95\" step=\"0.01\" value=\"0.72\" style=\"max-width:100px\" />
+              </label>
               <label style=\"margin-top:0\">Route
                 <select id=\"memRouteMode\" class=\"lang\" style=\"max-width:170px;\">
                   <option value=\"auto\" selected>auto</option>
@@ -1181,9 +1200,11 @@ HTML_PAGE = """<!doctype html>
 	          per_hop: Number(localStorage.getItem('omnimem.mem_per_hop') || '6'),
 	          ranking: localStorage.getItem('omnimem.mem_ranking') || 'hybrid',
             route: localStorage.getItem('omnimem.mem_route') || 'auto',
+            diversify: (localStorage.getItem('omnimem.mem_diversify') || '1') !== '0',
+            mmr_lambda: Number(localStorage.getItem('omnimem.mem_mmr_lambda') || '0.72'),
 	        };
 	      } catch (_) {
-	        return { mode: 'basic', depth: 2, per_hop: 6, ranking: 'hybrid', route: 'auto' };
+	        return { mode: 'basic', depth: 2, per_hop: 6, ranking: 'hybrid', route: 'auto', diversify: true, mmr_lambda: 0.72 };
 	      }
 	    }
 	    function safeSetRetrievePrefs(p) {
@@ -1193,6 +1214,8 @@ HTML_PAGE = """<!doctype html>
 	        localStorage.setItem('omnimem.mem_per_hop', String(p.per_hop || 6));
 	        localStorage.setItem('omnimem.mem_ranking', String(p.ranking || 'hybrid'));
 	        localStorage.setItem('omnimem.mem_route', String(p.route || 'auto'));
+          localStorage.setItem('omnimem.mem_diversify', p.diversify === false ? '0' : '1');
+          localStorage.setItem('omnimem.mem_mmr_lambda', String(p.mmr_lambda || 0.72));
 	      } catch (_) {}
 	    }
       function safeLoadRouteTemplates() {
@@ -1834,7 +1857,15 @@ HTML_PAGE = """<!doctype html>
         `error_kind=${daemonCache.last_error_kind || '-'}`,
         `last_error=${daemonCache.last_error || '-'}`
       ].join(' | ');
-      document.getElementById('daemonMetrics').innerHTML = `<span class="pill"><b>metrics</b><span class="mono">${escHtml(metrics)}</span></span>`;
+      let maint = '';
+      try {
+        const mr = (daemonCache.last_result && daemonCache.last_result.maintenance) || {};
+        const t = mr.temporal_tree || {};
+        const rh = mr.rehearsal || {};
+        const rf = mr.reflection || {};
+        maint = `maint: tree=${Number(t.made || 0)} rehearse=${Number(rh.selected || 0)} reflect=${Number(rf.created || 0)}`;
+      } catch (_) {}
+      document.getElementById('daemonMetrics').innerHTML = `<span class="pill"><b>metrics</b><span class="mono">${escHtml([metrics, maint].filter(Boolean).join(' | '))}</span></span>`;
       document.getElementById('daemonAdvice').innerHTML = daemonCache.remediation_hint ? `<span class="pill"><b>advice</b><span class="mono">${escHtml(daemonCache.remediation_hint)}</span></span>` : '';
       const recoverBtn = document.getElementById('btnConflictRecovery');
       recoverBtn.style.display = daemonCache.last_error_kind === 'conflict' ? 'inline-block' : 'none';
@@ -1850,6 +1881,10 @@ HTML_PAGE = """<!doctype html>
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
         'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
         'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
+        'daemon_maintenance_temporal_tree_enabled','daemon_maintenance_temporal_tree_days',
+        'daemon_maintenance_rehearsal_enabled','daemon_maintenance_rehearsal_days','daemon_maintenance_rehearsal_limit',
+        'daemon_maintenance_reflection_enabled','daemon_maintenance_reflection_days','daemon_maintenance_reflection_limit',
+        'daemon_maintenance_reflection_min_repeats','daemon_maintenance_reflection_max_avg_retrieved',
         'webui_approval_required','webui_maintenance_preview_only_until'
       ]) {
         const v = d[k];
@@ -1860,17 +1895,19 @@ HTML_PAGE = """<!doctype html>
 
 	    function retrievalHintHtml(x) {
 	      const r = x && x.retrieval ? x.retrieval : null;
+        const why = Array.isArray(x?.why_recalled) ? x.why_recalled.filter(Boolean).slice(0, 2) : [];
+        const whyHtml = why.length ? `<div class=\"small\">why: ${escHtml(why.join(' | '))}</div>` : '';
 	      if ((!r || typeof r !== 'object') && typeof x.score === 'number') {
-	        return `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>`;
+	        return `<div class=\"small mono\">score=${escHtml(Number(x.score).toFixed(3))} smart-retrieve</div>${whyHtml}`;
 	      }
-	      if (!r || typeof r !== 'object') return '';
+	      if (!r || typeof r !== 'object') return whyHtml;
 	      const c = (r.components && typeof r.components === 'object') ? r.components : {};
 	      const score = Number(r.score || 0);
 	      const rel = Number(c.relevance || 0);
 	      const rec = Number(c.recency || 0);
 	      const imp = Number(c.importance || 0);
 	      const strat = String(r.strategy || '');
-	      return `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(imp.toFixed(2))} ${escHtml(strat)}</div>`;
+	      return `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(imp.toFixed(2))} ${escHtml(strat)}</div>${whyHtml}`;
 	    }
 
 	    function smartTuneRetrieveParams() {
@@ -1897,15 +1934,19 @@ HTML_PAGE = """<!doctype html>
 	      const depthEl = document.getElementById('memRetrieveDepth');
 	      const hopEl = document.getElementById('memRetrievePerHop');
 	      const rankEl = document.getElementById('memRankingMode');
+        const divEl = document.getElementById('memDiversify');
+        const mmrEl = document.getElementById('memMmrLambda');
         const routeEl = document.getElementById('memRouteMode');
 	      if (modeEl) modeEl.value = 'smart';
 	      if (depthEl) depthEl.value = String(depth);
 	      if (hopEl) hopEl.value = String(per_hop);
 	      if (rankEl) rankEl.value = ranking;
+        if (divEl) divEl.value = 'true';
+        if (mmrEl) mmrEl.value = '0.72';
         if (routeEl) routeEl.value = 'auto';
 	      const hint = document.getElementById('memRetrieveHint');
 	      if (hint) hint.textContent = `auto: depth=${depth}, per_hop=${per_hop}, ranking=${ranking} (${why})`;
-	      safeSetRetrievePrefs({ mode: 'smart', depth, per_hop, ranking, route: 'auto' });
+	      safeSetRetrievePrefs({ mode: 'smart', depth, per_hop, ranking, route: 'auto', diversify: true, mmr_lambda: 0.72 });
 	    }
 
 	    function loadRetrievePrefs() {
@@ -1914,11 +1955,15 @@ HTML_PAGE = """<!doctype html>
 	      const depthEl = document.getElementById('memRetrieveDepth');
 	      const hopEl = document.getElementById('memRetrievePerHop');
 	      const rankEl = document.getElementById('memRankingMode');
+        const divEl = document.getElementById('memDiversify');
+        const mmrEl = document.getElementById('memMmrLambda');
         const routeEl = document.getElementById('memRouteMode');
 	      if (modeEl) modeEl.value = String(p.mode || 'basic');
 	      if (depthEl) depthEl.value = String(Number.isFinite(p.depth) ? p.depth : 2);
 	      if (hopEl) hopEl.value = String(Number.isFinite(p.per_hop) ? p.per_hop : 6);
 	      if (rankEl) rankEl.value = String(p.ranking || 'hybrid');
+        if (divEl) divEl.value = p.diversify === false ? 'false' : 'true';
+        if (mmrEl) mmrEl.value = String(Number.isFinite(p.mmr_lambda) ? p.mmr_lambda : 0.72);
         if (routeEl) routeEl.value = String(p.route || 'auto');
 	    }
 
@@ -1931,12 +1976,16 @@ HTML_PAGE = """<!doctype html>
 	      const depth = Number(document.getElementById('memRetrieveDepth')?.value || 2);
 	      const per_hop = Number(document.getElementById('memRetrievePerHop')?.value || 6);
 	      const ranking_mode = document.getElementById('memRankingMode')?.value?.trim() || 'hybrid';
+        const diversify = (document.getElementById('memDiversify')?.value || 'true') !== 'false';
+        const mmr_lambda = Number(document.getElementById('memMmrLambda')?.value || 0.72);
         const route_mode = document.getElementById('memRouteMode')?.value?.trim() || 'auto';
 	      safeSetRetrievePrefs({
 	        mode,
 	        depth: Number.isFinite(depth) ? Math.max(1, Math.min(4, Math.floor(depth))) : 2,
 	        per_hop: Number.isFinite(per_hop) ? Math.max(1, Math.min(30, Math.floor(per_hop))) : 6,
 	        ranking: ranking_mode || 'hybrid',
+          diversify: !!diversify,
+          mmr_lambda: Number.isFinite(mmr_lambda) ? Math.max(0.05, Math.min(0.95, mmr_lambda)) : 0.72,
           route: route_mode || 'auto',
 	      });
 	      const d = await jget(
@@ -1949,6 +1998,8 @@ HTML_PAGE = """<!doctype html>
 	        + '&depth=' + encodeURIComponent(String(Number.isFinite(depth) ? depth : 2))
 	        + '&per_hop=' + encodeURIComponent(String(Number.isFinite(per_hop) ? per_hop : 6))
 	        + '&ranking_mode=' + encodeURIComponent(ranking_mode)
+          + '&diversify=' + encodeURIComponent(diversify ? '1' : '0')
+          + '&mmr_lambda=' + encodeURIComponent(String(Number.isFinite(mmr_lambda) ? mmr_lambda : 0.72))
           + '&route=' + encodeURIComponent(route_mode)
 	      );
 	      const rh = document.getElementById('memRetrieveHint');
@@ -1958,7 +2009,9 @@ HTML_PAGE = """<!doctype html>
 	          const seedsN = Array.isArray(ex.seeds) ? ex.seeds.length : 0;
 	          const pathsN = ex.paths ? Object.keys(ex.paths).length : 0;
 	          const rm = ex.ranking_mode || ranking_mode;
-	          rh.textContent = `smart: ranking=${rm}, route=${d.route || route_mode}, seeds=${seedsN}, path_hits=${pathsN}`;
+            const dv = (ex.diversify === false) ? 'off' : 'on';
+            const lbd = Number(ex.mmr_lambda || 0.72).toFixed(2);
+	          rh.textContent = `smart: ranking=${rm}, route=${d.route || route_mode}, seeds=${seedsN}, path_hits=${pathsN}, mmr=${dv}(λ=${lbd})`;
 	        } else if (mode !== 'smart') {
 	          rh.textContent = `basic: route=${d.route || route_mode}`;
 	        }
@@ -2188,6 +2241,10 @@ HTML_PAGE = """<!doctype html>
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
         'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
         'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
+        'daemon_maintenance_temporal_tree_enabled','daemon_maintenance_temporal_tree_days',
+        'daemon_maintenance_rehearsal_enabled','daemon_maintenance_rehearsal_days','daemon_maintenance_rehearsal_limit',
+        'daemon_maintenance_reflection_enabled','daemon_maintenance_reflection_days','daemon_maintenance_reflection_limit',
+        'daemon_maintenance_reflection_min_repeats','daemon_maintenance_reflection_max_avg_retrieved',
         'webui_approval_required','webui_maintenance_preview_only_until'
       ]) payload[k] = f.elements[k].value;
       const d = await jpost('/api/config', payload);
@@ -3497,6 +3554,8 @@ HTML_PAGE = """<!doctype html>
 	          document.getElementById('memLayer').onchange = () => loadMem();
           document.getElementById('memRetrieveMode').onchange = () => loadMem();
           document.getElementById('memRankingMode').onchange = () => loadMem();
+          document.getElementById('memDiversify').onchange = () => loadMem();
+          document.getElementById('memMmrLambda').onchange = () => loadMem();
           document.getElementById('memRouteMode').onchange = () => loadMem();
           document.getElementById('memRetrieveDepth').onchange = () => loadMem();
           document.getElementById('memRetrievePerHop').onchange = () => loadMem();
@@ -4055,6 +4114,16 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "daemon_maintenance_consolidate_limit": dm.get("maintenance_consolidate_limit", 80),
         "daemon_maintenance_compress_sessions": dm.get("maintenance_compress_sessions", 2),
         "daemon_maintenance_compress_min_items": dm.get("maintenance_compress_min_items", 8),
+        "daemon_maintenance_temporal_tree_enabled": dm.get("maintenance_temporal_tree_enabled", True),
+        "daemon_maintenance_temporal_tree_days": dm.get("maintenance_temporal_tree_days", 30),
+        "daemon_maintenance_rehearsal_enabled": dm.get("maintenance_rehearsal_enabled", True),
+        "daemon_maintenance_rehearsal_days": dm.get("maintenance_rehearsal_days", 45),
+        "daemon_maintenance_rehearsal_limit": dm.get("maintenance_rehearsal_limit", 16),
+        "daemon_maintenance_reflection_enabled": dm.get("maintenance_reflection_enabled", True),
+        "daemon_maintenance_reflection_days": dm.get("maintenance_reflection_days", 14),
+        "daemon_maintenance_reflection_limit": dm.get("maintenance_reflection_limit", 4),
+        "daemon_maintenance_reflection_min_repeats": dm.get("maintenance_reflection_min_repeats", 2),
+        "daemon_maintenance_reflection_max_avg_retrieved": dm.get("maintenance_reflection_max_avg_retrieved", 2.0),
         "webui_approval_required": bool(wu.get("approval_required", False)),
         "webui_maintenance_preview_only_until": str(wu.get("maintenance_preview_only_until", "")),
     }
@@ -4683,6 +4752,16 @@ def run_webui(
     daemon_maintenance_consolidate_limit: int = 80,
     daemon_maintenance_compress_sessions: int = 2,
     daemon_maintenance_compress_min_items: int = 8,
+    daemon_maintenance_temporal_tree_enabled: bool = True,
+    daemon_maintenance_temporal_tree_days: int = 30,
+    daemon_maintenance_rehearsal_enabled: bool = True,
+    daemon_maintenance_rehearsal_days: int = 45,
+    daemon_maintenance_rehearsal_limit: int = 16,
+    daemon_maintenance_reflection_enabled: bool = True,
+    daemon_maintenance_reflection_days: int = 14,
+    daemon_maintenance_reflection_limit: int = 4,
+    daemon_maintenance_reflection_min_repeats: int = 2,
+    daemon_maintenance_reflection_max_avg_retrieved: float = 2.0,
     auth_token: str | None = None,
     allow_non_localhost: bool = False,
 ) -> None:
@@ -4759,6 +4838,16 @@ def run_webui(
         "maintenance_consolidate_limit": max(1, int(daemon_maintenance_consolidate_limit)),
         "maintenance_compress_sessions": max(1, int(daemon_maintenance_compress_sessions)),
         "maintenance_compress_min_items": max(2, int(daemon_maintenance_compress_min_items)),
+        "maintenance_temporal_tree_enabled": bool(daemon_maintenance_temporal_tree_enabled),
+        "maintenance_temporal_tree_days": max(1, int(daemon_maintenance_temporal_tree_days)),
+        "maintenance_rehearsal_enabled": bool(daemon_maintenance_rehearsal_enabled),
+        "maintenance_rehearsal_days": max(1, int(daemon_maintenance_rehearsal_days)),
+        "maintenance_rehearsal_limit": max(1, int(daemon_maintenance_rehearsal_limit)),
+        "maintenance_reflection_enabled": bool(daemon_maintenance_reflection_enabled),
+        "maintenance_reflection_days": max(1, int(daemon_maintenance_reflection_days)),
+        "maintenance_reflection_limit": max(1, int(daemon_maintenance_reflection_limit)),
+        "maintenance_reflection_min_repeats": max(1, int(daemon_maintenance_reflection_min_repeats)),
+        "maintenance_reflection_max_avg_retrieved": float(daemon_maintenance_reflection_max_avg_retrieved),
         "cycles": 0,
         "success_count": 0,
         "failure_count": 0,
@@ -4818,6 +4907,18 @@ def run_webui(
                     maintenance_consolidate_limit=int(daemon_state.get("maintenance_consolidate_limit", 80)),
                     maintenance_compress_sessions=int(daemon_state.get("maintenance_compress_sessions", 2)),
                     maintenance_compress_min_items=int(daemon_state.get("maintenance_compress_min_items", 8)),
+                    maintenance_temporal_tree_enabled=bool(daemon_state.get("maintenance_temporal_tree_enabled", True)),
+                    maintenance_temporal_tree_days=int(daemon_state.get("maintenance_temporal_tree_days", 30)),
+                    maintenance_rehearsal_enabled=bool(daemon_state.get("maintenance_rehearsal_enabled", True)),
+                    maintenance_rehearsal_days=int(daemon_state.get("maintenance_rehearsal_days", 45)),
+                    maintenance_rehearsal_limit=int(daemon_state.get("maintenance_rehearsal_limit", 16)),
+                    maintenance_reflection_enabled=bool(daemon_state.get("maintenance_reflection_enabled", True)),
+                    maintenance_reflection_days=int(daemon_state.get("maintenance_reflection_days", 14)),
+                    maintenance_reflection_limit=int(daemon_state.get("maintenance_reflection_limit", 4)),
+                    maintenance_reflection_min_repeats=int(daemon_state.get("maintenance_reflection_min_repeats", 2)),
+                    maintenance_reflection_max_avg_retrieved=float(
+                        daemon_state.get("maintenance_reflection_max_avg_retrieved", 2.0)
+                    ),
                     maintenance_adaptive_q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
                     maintenance_adaptive_q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
                     maintenance_adaptive_q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
@@ -5033,11 +5134,18 @@ def run_webui(
                 depth = int(q.get("depth", ["2"])[0])
                 per_hop = int(q.get("per_hop", ["6"])[0])
                 ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
+                diversify = str(q.get("diversify", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
+                try:
+                    mmr_lambda = float(q.get("mmr_lambda", ["0.72"])[0])
+                except Exception:
+                    mmr_lambda = 0.72
+                mmr_lambda = max(0.05, min(0.95, mmr_lambda))
                 if mode == "smart" and query:
                     depth_i = max(1, min(4, int(depth)))
                     hop_i = max(1, min(30, int(per_hop)))
                     rank_i = ranking_mode if ranking_mode in {"path", "ppr", "hybrid"} else "hybrid"
-                    cache_key = (project_id, session_id, query, depth_i, hop_i, rank_i, max(8, min(30, int(limit))))
+                    limit_i = max(8, min(30, int(limit)))
+                    cache_key = (project_id, session_id, query, depth_i, hop_i, rank_i, bool(diversify), float(mmr_lambda), limit_i)
                     out: dict[str, Any] | None = None
                     with smart_retrieve_lock:
                         hit = smart_retrieve_cache.get(cache_key)
@@ -5050,10 +5158,13 @@ def run_webui(
                             query=query,
                             project_id=project_id,
                             session_id=session_id,
-                            seed_limit=max(8, min(30, int(limit))),
+                            seed_limit=limit_i,
                             depth=depth_i,
                             per_hop=hop_i,
                             ranking_mode=rank_i,
+                            diversify=bool(diversify),
+                            mmr_lambda=float(mmr_lambda),
+                            max_items=limit_i,
                         )
                         with smart_retrieve_lock:
                             smart_retrieve_cache[cache_key] = (time.time(), out)
@@ -6061,6 +6172,20 @@ def run_webui(
                 dm["maintenance_consolidate_limit"] = _to_int("daemon_maintenance_consolidate_limit", int(daemon_state.get("maintenance_consolidate_limit", 80)), 1, 1000)
                 dm["maintenance_compress_sessions"] = _to_int("daemon_maintenance_compress_sessions", int(daemon_state.get("maintenance_compress_sessions", 2)), 1, 20)
                 dm["maintenance_compress_min_items"] = _to_int("daemon_maintenance_compress_min_items", int(daemon_state.get("maintenance_compress_min_items", 8)), 2, 200)
+                dm["maintenance_temporal_tree_enabled"] = _to_bool("daemon_maintenance_temporal_tree_enabled", bool(daemon_state.get("maintenance_temporal_tree_enabled", True)))
+                dm["maintenance_temporal_tree_days"] = _to_int("daemon_maintenance_temporal_tree_days", int(daemon_state.get("maintenance_temporal_tree_days", 30)), 1, 365)
+                dm["maintenance_rehearsal_enabled"] = _to_bool("daemon_maintenance_rehearsal_enabled", bool(daemon_state.get("maintenance_rehearsal_enabled", True)))
+                dm["maintenance_rehearsal_days"] = _to_int("daemon_maintenance_rehearsal_days", int(daemon_state.get("maintenance_rehearsal_days", 45)), 1, 365)
+                dm["maintenance_rehearsal_limit"] = _to_int("daemon_maintenance_rehearsal_limit", int(daemon_state.get("maintenance_rehearsal_limit", 16)), 1, 200)
+                dm["maintenance_reflection_enabled"] = _to_bool("daemon_maintenance_reflection_enabled", bool(daemon_state.get("maintenance_reflection_enabled", True)))
+                dm["maintenance_reflection_days"] = _to_int("daemon_maintenance_reflection_days", int(daemon_state.get("maintenance_reflection_days", 14)), 1, 365)
+                dm["maintenance_reflection_limit"] = _to_int("daemon_maintenance_reflection_limit", int(daemon_state.get("maintenance_reflection_limit", 4)), 1, 20)
+                dm["maintenance_reflection_min_repeats"] = _to_int("daemon_maintenance_reflection_min_repeats", int(daemon_state.get("maintenance_reflection_min_repeats", 2)), 1, 12)
+                mrar = data.get("daemon_maintenance_reflection_max_avg_retrieved", dm.get("maintenance_reflection_max_avg_retrieved", 2.0))
+                try:
+                    dm["maintenance_reflection_max_avg_retrieved"] = max(0.0, min(20.0, float(mrar)))
+                except Exception:
+                    dm["maintenance_reflection_max_avg_retrieved"] = float(daemon_state.get("maintenance_reflection_max_avg_retrieved", 2.0))
                 cfg.setdefault("webui", {})
                 cfg["webui"]["approval_required"] = _to_bool("webui_approval_required", bool(cfg.get("webui", {}).get("approval_required", False)))
                 cfg["webui"]["maintenance_preview_only_until"] = str(data.get("webui_maintenance_preview_only_until", cfg.get("webui", {}).get("maintenance_preview_only_until", ""))).strip()
@@ -6081,6 +6206,16 @@ def run_webui(
                     daemon_state["maintenance_consolidate_limit"] = int(dm["maintenance_consolidate_limit"])
                     daemon_state["maintenance_compress_sessions"] = int(dm["maintenance_compress_sessions"])
                     daemon_state["maintenance_compress_min_items"] = int(dm["maintenance_compress_min_items"])
+                    daemon_state["maintenance_temporal_tree_enabled"] = bool(dm["maintenance_temporal_tree_enabled"])
+                    daemon_state["maintenance_temporal_tree_days"] = int(dm["maintenance_temporal_tree_days"])
+                    daemon_state["maintenance_rehearsal_enabled"] = bool(dm["maintenance_rehearsal_enabled"])
+                    daemon_state["maintenance_rehearsal_days"] = int(dm["maintenance_rehearsal_days"])
+                    daemon_state["maintenance_rehearsal_limit"] = int(dm["maintenance_rehearsal_limit"])
+                    daemon_state["maintenance_reflection_enabled"] = bool(dm["maintenance_reflection_enabled"])
+                    daemon_state["maintenance_reflection_days"] = int(dm["maintenance_reflection_days"])
+                    daemon_state["maintenance_reflection_limit"] = int(dm["maintenance_reflection_limit"])
+                    daemon_state["maintenance_reflection_min_repeats"] = int(dm["maintenance_reflection_min_repeats"])
+                    daemon_state["maintenance_reflection_max_avg_retrieved"] = float(dm["maintenance_reflection_max_avg_retrieved"])
                     was_initialized = daemon_state.get("initialized", False)
                     daemon_state["initialized"] = True
                     if not was_initialized and enable_daemon:

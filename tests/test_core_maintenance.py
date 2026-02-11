@@ -14,6 +14,7 @@ from omnimem.core import (
     infer_adaptive_governance_thresholds,
     rehearse_memory_traces,
     retrieve_thread,
+    trigger_reflective_summaries,
     weave_links,
     write_memory,
 )
@@ -342,10 +343,88 @@ class CoreMaintenanceTest(unittest.TestCase):
             ranking_mode="ppr",
             depth=2,
             per_hop=4,
+            diversify=True,
+            mmr_lambda=0.72,
+            max_items=6,
         )
         self.assertTrue(out.get("ok"))
         self.assertEqual(out.get("explain", {}).get("ranking_mode"), "ppr")
+        self.assertTrue(bool(out.get("explain", {}).get("diversify")))
         self.assertTrue(len(out.get("items") or []) >= 1)
+        self.assertLessEqual(len(out.get("items") or []), 6)
+        self.assertTrue(any("score=" in " | ".join(x.get("why_recalled") or []) for x in (out.get("items") or [])))
+
+    def test_trigger_reflective_summaries_preview_and_apply(self) -> None:
+        for i in range(4):
+            write_memory(
+                paths=self.paths,
+                schema_sql_path=self.schema,
+                layer="instant",
+                kind="retrieve",
+                summary=f"Retrieved 0 memories for context #{i}",
+                body=(
+                    "Automatic retrieval trace created by test.\n\n"
+                    "- project_id: OM\n"
+                    "- session_id: s-reflect\n"
+                    "- query: how to rollback bad migration\n"
+                    "- retrieved_count: 0\n"
+                ),
+                tags=["auto:retrieve", "project:OM"],
+                refs=[],
+                cred_refs=[],
+                tool="test",
+                account="test",
+                device="local",
+                session_id="s-reflect",
+                project_id="OM",
+                workspace=str(self.root),
+                importance=0.2,
+                confidence=0.9,
+                stability=0.2,
+                reuse_count=0,
+                volatility=0.8,
+                event_type="memory.retrieve",
+            )
+
+        pre = trigger_reflective_summaries(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            days=14,
+            limit=4,
+            min_repeats=2,
+            max_avg_retrieved=1.0,
+            dry_run=True,
+        )
+        self.assertTrue(pre.get("ok"))
+        self.assertGreaterEqual(len(pre.get("selected") or []), 1)
+
+        ap = trigger_reflective_summaries(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            days=14,
+            limit=4,
+            min_repeats=2,
+            max_avg_retrieved=1.0,
+            dry_run=False,
+            tool="test",
+            actor_session_id="s-reflect",
+        )
+        self.assertTrue(ap.get("ok"))
+        self.assertGreaterEqual(int(ap.get("created_count", 0)), 1)
+        with sqlite3.connect(self.paths.sqlite_path) as conn:
+            cnt = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM memories
+                    WHERE kind='task'
+                      AND EXISTS (SELECT 1 FROM json_each(memories.tags_json) WHERE value='auto:reflection')
+                    """
+                ).fetchone()[0]
+                or 0
+            )
+        self.assertGreaterEqual(cnt, 1)
 
     def test_adaptive_threshold_inference(self) -> None:
         for i in range(12):

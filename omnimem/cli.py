@@ -267,6 +267,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         ranking_mode=str(getattr(args, "ranking_mode", "hybrid") or "hybrid"),
         ppr_alpha=float(getattr(args, "ppr_alpha", 0.85)),
         ppr_iters=int(getattr(args, "ppr_iters", 16)),
+        diversify=bool(getattr(args, "diversify", True)),
+        mmr_lambda=float(getattr(args, "mmr_lambda", 0.72)),
+        max_items=int(getattr(args, "max_items", 12)),
     )
     if not getattr(args, "explain", False):
         out.pop("explain", None)
@@ -432,6 +435,29 @@ def cmd_webui(args: argparse.Namespace) -> int:
         daemon_maintenance_consolidate_limit=_pick_int("maintenance_consolidate_limit", getattr(args, "daemon_maintenance_consolidate_limit", None), 80, 1, 1000),
         daemon_maintenance_compress_sessions=_pick_int("maintenance_compress_sessions", getattr(args, "daemon_maintenance_compress_sessions", None), 2, 1, 20),
         daemon_maintenance_compress_min_items=_pick_int("maintenance_compress_min_items", getattr(args, "daemon_maintenance_compress_min_items", None), 8, 2, 200),
+        daemon_maintenance_temporal_tree_enabled=_pick_bool("maintenance_temporal_tree_enabled", getattr(args, "daemon_maintenance_temporal_tree_enabled", None), True),
+        daemon_maintenance_temporal_tree_days=_pick_int("maintenance_temporal_tree_days", getattr(args, "daemon_maintenance_temporal_tree_days", None), 30, 1, 365),
+        daemon_maintenance_rehearsal_enabled=_pick_bool("maintenance_rehearsal_enabled", getattr(args, "daemon_maintenance_rehearsal_enabled", None), True),
+        daemon_maintenance_rehearsal_days=_pick_int("maintenance_rehearsal_days", getattr(args, "daemon_maintenance_rehearsal_days", None), 45, 1, 365),
+        daemon_maintenance_rehearsal_limit=_pick_int("maintenance_rehearsal_limit", getattr(args, "daemon_maintenance_rehearsal_limit", None), 16, 1, 200),
+        daemon_maintenance_reflection_enabled=_pick_bool("maintenance_reflection_enabled", getattr(args, "daemon_maintenance_reflection_enabled", None), True),
+        daemon_maintenance_reflection_days=_pick_int("maintenance_reflection_days", getattr(args, "daemon_maintenance_reflection_days", None), 14, 1, 365),
+        daemon_maintenance_reflection_limit=_pick_int("maintenance_reflection_limit", getattr(args, "daemon_maintenance_reflection_limit", None), 4, 1, 20),
+        daemon_maintenance_reflection_min_repeats=_pick_int("maintenance_reflection_min_repeats", getattr(args, "daemon_maintenance_reflection_min_repeats", None), 2, 1, 12),
+        daemon_maintenance_reflection_max_avg_retrieved=max(
+            0.0,
+            min(
+                20.0,
+                float(
+                    (
+                        getattr(args, "daemon_maintenance_reflection_max_avg_retrieved", None)
+                        if getattr(args, "daemon_maintenance_reflection_max_avg_retrieved", None) is not None
+                        else dm.get("maintenance_reflection_max_avg_retrieved", 2.0)
+                    )
+                    or 2.0
+                ),
+            ),
+        ),
         auth_token=args.webui_token,
         allow_non_localhost=args.allow_non_localhost,
     )
@@ -1240,6 +1266,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_retrieve.add_argument("--ranking-mode", choices=["path", "ppr", "hybrid"], default="hybrid")
     p_retrieve.add_argument("--ppr-alpha", type=float, default=0.85)
     p_retrieve.add_argument("--ppr-iters", type=int, default=16)
+    p_retrieve.add_argument(
+        "--diversify",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable MMR result diversification",
+    )
+    p_retrieve.add_argument("--mmr-lambda", type=float, default=0.72, help="MMR relevance/diversity tradeoff (0..1)")
+    p_retrieve.add_argument("--max-items", type=int, default=12, help="maximum retrieval results")
     p_retrieve.add_argument("--explain", action="store_true", help="include seed/paths explanation")
     p_retrieve.set_defaults(func=cmd_retrieve)
 
@@ -1325,11 +1359,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_webui.add_argument("--daemon-maintenance-consolidate-limit", type=int, default=None)
     p_webui.add_argument("--daemon-maintenance-compress-sessions", type=int, default=None)
     p_webui.add_argument("--daemon-maintenance-compress-min-items", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-temporal-tree-days", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-rehearsal-days", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-rehearsal-limit", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-reflection-days", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-reflection-limit", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-reflection-min-repeats", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-reflection-max-avg-retrieved", type=float, default=None)
     p_webui.add_argument(
         "--daemon-maintenance-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="enable/disable daemon maintenance passes",
+    )
+    p_webui.add_argument(
+        "--daemon-maintenance-temporal-tree-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable temporal memory tree maintenance",
+    )
+    p_webui.add_argument(
+        "--daemon-maintenance-rehearsal-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable rehearsal maintenance",
+    )
+    p_webui.add_argument(
+        "--daemon-maintenance-reflection-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable reflective gap maintenance",
     )
     p_webui.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
     p_webui.add_argument(
@@ -1355,11 +1414,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--daemon-maintenance-consolidate-limit", type=int, default=None)
     p_start.add_argument("--daemon-maintenance-compress-sessions", type=int, default=None)
     p_start.add_argument("--daemon-maintenance-compress-min-items", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-temporal-tree-days", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-rehearsal-days", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-rehearsal-limit", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-reflection-days", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-reflection-limit", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-reflection-min-repeats", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-reflection-max-avg-retrieved", type=float, default=None)
     p_start.add_argument(
         "--daemon-maintenance-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="enable/disable daemon maintenance passes",
+    )
+    p_start.add_argument(
+        "--daemon-maintenance-temporal-tree-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable temporal memory tree maintenance",
+    )
+    p_start.add_argument(
+        "--daemon-maintenance-rehearsal-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable rehearsal maintenance",
+    )
+    p_start.add_argument(
+        "--daemon-maintenance-reflection-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable reflective gap maintenance",
     )
     p_start.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
     p_start.add_argument(
