@@ -153,6 +153,12 @@ Offline LoCoMo-style retrieval eval:
 python3 scripts/eval_locomo_style.py --dataset eval/locomo_style.sample.jsonl
 ```
 
+Retrieval A/B eval (basic vs smart vs smart+drift-aware):
+
+```bash
+python3 scripts/eval_retrieval.py --dataset eval/retrieval.sample.json --with-drift-ab --drift-weight 0.4
+```
+
 Single turn:
 
 ```bash
