@@ -29,6 +29,8 @@ from .core import (
     LAYER_SET,
     apply_decay,
     build_brief,
+    compress_session_context,
+    consolidate_memories,
     find_memories,
     load_config,
     load_config_with_path,
@@ -100,6 +102,12 @@ def cli_error_hint(msg: str) -> str:
         return "Set OMNIMEM_HOME to a writable directory, e.g. `OMNIMEM_HOME=$PWD/.omnimem_local`."
     if "permission denied" in m and ".npm" in m:
         return "Set npm cache to a writable dir, e.g. `NPM_CONFIG_CACHE=$PWD/.npm-cache`."
+    if "operation not permitted" in m or "errno 1" in m:
+        # Common in restricted sandboxes that disallow binding local ports (WebUI can't listen).
+        return (
+            "Your environment may forbid binding local ports (WebUI can't start). "
+            "Try running without the WebUI sidecar (`--no-webui`) or run `omnimem start` in a less restricted environment."
+        )
     return ""
 
 
@@ -253,6 +261,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         depth=int(args.depth),
         per_hop=int(args.per_hop),
         min_weight=float(args.min_weight),
+        ranking_mode=str(getattr(args, "ranking_mode", "hybrid") or "hybrid"),
+        ppr_alpha=float(getattr(args, "ppr_alpha", 0.85)),
+        ppr_iters=int(getattr(args, "ppr_iters", 16)),
     )
     if not getattr(args, "explain", False):
         out.pop("explain", None)
@@ -304,6 +315,49 @@ def cmd_decay(args: argparse.Namespace) -> int:
         dry_run=not bool(args.apply),
         tool="cli",
         session_id=str(args.session_id or "system"),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_consolidate(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = consolidate_memories(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        limit=int(args.limit),
+        dry_run=not bool(args.apply),
+        p_imp=float(args.p_imp),
+        p_conf=float(args.p_conf),
+        p_stab=float(args.p_stab),
+        p_vol=float(args.p_vol),
+        d_vol=float(args.d_vol),
+        d_stab=float(args.d_stab),
+        d_reuse=int(args.d_reuse),
+        tool="cli",
+        actor_session_id=str(args.actor_session_id or "system"),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_compress(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = compress_session_context(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        limit=int(args.limit),
+        min_items=int(args.min_items),
+        target_layer=str(args.layer or "short").strip(),
+        dry_run=not bool(args.apply),
+        tool="cli",
+        actor_session_id=str(args.actor_session_id or "system"),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -841,7 +895,9 @@ def webui_alive(host: str, port: int) -> bool:
     # Older WebUIs may not implement newer /api/* endpoints, but "/" should always exist.
     url = f"http://{host}:{port}/"
     try:
-        with urllib.request.urlopen(url, timeout=0.6) as resp:
+        # Keep this reasonably short so wrapper startup isn't slow, but not so short that
+        # transient load makes the wrapper think a healthy WebUI is down.
+        with urllib.request.urlopen(url, timeout=1.2) as resp:
             return 200 <= resp.status < 500
     except urllib.error.HTTPError:
         # HTTP errors still mean the server is alive and responding.
@@ -856,6 +912,20 @@ def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon:
 
     cfg = load_config(cfg_path)
     paths = resolve_paths(cfg)
+    # Avoid repeatedly spawning `omnimem start` when the WebUI is already running but
+    # liveness probing is flaky/slow: if a pidfile exists and the pid is alive, do not
+    # attempt another bind on the same port.
+    pid_fp = paths.root / "runtime" / "webui.pid"
+    if pid_fp.exists():
+        try:
+            obj = json.loads(pid_fp.read_text(encoding="utf-8"))
+            pid = int(obj.get("pid") or 0)
+            pid_port = int(obj.get("port") or 0)
+            pid_host = str(obj.get("host") or "")
+            if pid > 0 and _pid_alive(pid) and pid_port == int(port) and (not pid_host or pid_host == str(host)):
+                return False
+        except Exception:
+            pass
     log_dir = paths.root / "runtime"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_fp = log_dir / "webui.log"
@@ -873,7 +943,23 @@ def ensure_webui_running(cfg_path: Path | None, host: str, port: int, no_daemon:
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
-    return True
+    # Best-effort: give the background server a brief moment to bind and serve.
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if webui_alive(host, port):
+            return True
+        time.sleep(0.12)
+
+    # If it didn't come up, surface a minimal hint to the wrapper user; details are in the log file.
+    try:
+        sys.stderr.write(
+            f"[omnimem] WebUI did not become reachable at http://{host}:{port}/. "
+            f"Check {str(log_fp)} (or disable auto-start with --no-webui).\n"
+        )
+        sys.stderr.flush()
+    except Exception:
+        pass
+    return False
 
 
 def _pid_alive(pid: int) -> bool:
@@ -1084,6 +1170,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_retrieve.add_argument("--depth", type=int, default=2, help="max hops to expand via links")
     p_retrieve.add_argument("--per-hop", type=int, default=6, help="fan-out per hop")
     p_retrieve.add_argument("--min-weight", type=float, default=0.18, help="minimum link weight to traverse")
+    p_retrieve.add_argument("--ranking-mode", choices=["path", "ppr", "hybrid"], default="hybrid")
+    p_retrieve.add_argument("--ppr-alpha", type=float, default=0.85)
+    p_retrieve.add_argument("--ppr-iters", type=int, default=16)
     p_retrieve.add_argument("--explain", action="store_true", help="include seed/paths explanation")
     p_retrieve.set_defaults(func=cmd_retrieve)
 
@@ -1113,6 +1202,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_decay.add_argument("--limit", type=int, default=200)
     p_decay.add_argument("--apply", action="store_true", help="apply decay (default is preview/dry-run)")
     p_decay.set_defaults(func=cmd_decay)
+
+    p_consolidate = sub.add_parser("consolidate", help="preview/apply adaptive memory consolidation (promote/demote)")
+    p_consolidate.add_argument("--config", help="path to omnimem config json")
+    p_consolidate.add_argument("--project-id", default="")
+    p_consolidate.add_argument("--session-id", default="")
+    p_consolidate.add_argument("--actor-session-id", default="system")
+    p_consolidate.add_argument("--limit", type=int, default=80)
+    p_consolidate.add_argument("--p-imp", type=float, default=0.75)
+    p_consolidate.add_argument("--p-conf", type=float, default=0.65)
+    p_consolidate.add_argument("--p-stab", type=float, default=0.65)
+    p_consolidate.add_argument("--p-vol", type=float, default=0.65)
+    p_consolidate.add_argument("--d-vol", type=float, default=0.75)
+    p_consolidate.add_argument("--d-stab", type=float, default=0.45)
+    p_consolidate.add_argument("--d-reuse", type=int, default=1)
+    p_consolidate.add_argument("--apply", action="store_true", help="apply actions (default preview)")
+    p_consolidate.set_defaults(func=cmd_consolidate)
+
+    p_compress = sub.add_parser("compress", help="preview/apply session memory compression digest")
+    p_compress.add_argument("--config", help="path to omnimem config json")
+    p_compress.add_argument("--project-id", default="")
+    p_compress.add_argument("--session-id", required=True)
+    p_compress.add_argument("--actor-session-id", default="system")
+    p_compress.add_argument("--limit", type=int, default=120)
+    p_compress.add_argument("--min-items", type=int, default=8)
+    p_compress.add_argument("--layer", choices=sorted(LAYER_SET), default="short")
+    p_compress.add_argument("--apply", action="store_true", help="write summary memory (default preview)")
+    p_compress.set_defaults(func=cmd_compress)
 
     p_webui = sub.add_parser("webui", help="start local web ui")
     p_webui.add_argument("--config", help="path to omnimem config json")

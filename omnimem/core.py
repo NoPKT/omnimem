@@ -105,9 +105,26 @@ def repo_lock(root: Path, timeout_s: float = 12.0):
 
 
 _REPO_LOCK_DEPTH: dict[str, int] = {}
+_SCHEMA_SQL_TEXT_CACHE: dict[str, str] = {}
+_SYSTEM_MEMORY_READY: set[str] = set()
 
 # Per-home guard for best-effort auto-weave triggers.
 _AUTO_WEAVE_LAST_TRY: dict[str, float] = {}
+
+@contextmanager
+def _sqlite_connect(db_path: Path, *, timeout: float | None = None):
+    kwargs: dict[str, Any] = {}
+    if timeout is not None:
+        kwargs["timeout"] = float(timeout)
+    conn = sqlite3.connect(db_path, **kwargs)
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 def parse_list_csv(raw: str | None) -> list[str]:
     if not raw:
@@ -213,6 +230,20 @@ def resolve_paths(cfg: dict[str, Any]) -> MemoryPaths:
     return MemoryPaths(root=home, markdown_root=markdown_root, jsonl_root=jsonl_root, sqlite_path=sqlite_path)
 
 
+def _cache_key_for_paths(paths: MemoryPaths) -> str:
+    return str(paths.sqlite_path.expanduser().resolve())
+
+
+def _schema_sql_text(schema_sql_path: Path) -> str:
+    key = str(schema_sql_path.expanduser().resolve())
+    txt = _SCHEMA_SQL_TEXT_CACHE.get(key)
+    if txt is not None:
+        return txt
+    txt = schema_sql_path.read_text(encoding="utf-8")
+    _SCHEMA_SQL_TEXT_CACHE[key] = txt
+    return txt
+
+
 def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
     for layer in sorted(LAYER_SET):
         (paths.markdown_root / layer).mkdir(parents=True, exist_ok=True)
@@ -231,12 +262,12 @@ def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
         required = {"memories", "memory_refs", "memory_events", "memories_fts"}
         return required.issubset(names)
 
-    schema_sql = schema_sql_path.read_text(encoding="utf-8")
+    schema_sql = _schema_sql_text(schema_sql_path)
     # Avoid re-applying DDL on every call. This also reduces cross-process startup races
     # when WebUI and CLI hit ensure_storage concurrently.
     for attempt in range(2):
         try:
-            with sqlite3.connect(paths.sqlite_path, timeout=2.0) as conn:
+            with _sqlite_connect(paths.sqlite_path, timeout=2.0) as conn:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("PRAGMA busy_timeout = 1500")
                 try:
@@ -254,7 +285,7 @@ def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
                 continue
             raise
 
-    with sqlite3.connect(paths.sqlite_path, timeout=2.0) as conn:
+    with _sqlite_connect(paths.sqlite_path, timeout=2.0) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 1500")
         try:
@@ -500,8 +531,11 @@ def _rebuild_memories_table(conn: sqlite3.Connection) -> None:
 
 
 def ensure_system_memory(paths: MemoryPaths, schema_sql_path: Path) -> str:
-    ensure_storage(paths, schema_sql_path)
+    key = _cache_key_for_paths(paths)
     system_id = "system000"
+    if key in _SYSTEM_MEMORY_READY:
+        return system_id
+    ensure_storage(paths, schema_sql_path)
     rel_path = "archive/system/system000.md"
     md_path = paths.markdown_root / rel_path
     if not md_path.exists():
@@ -511,7 +545,7 @@ def ensure_system_memory(paths: MemoryPaths, schema_sql_path: Path) -> str:
     else:
         body = md_path.read_text(encoding="utf-8")
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
+    with _sqlite_connect(paths.sqlite_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
             """
@@ -545,6 +579,7 @@ def ensure_system_memory(paths: MemoryPaths, schema_sql_path: Path) -> str:
         )
         conn.commit()
 
+    _SYSTEM_MEMORY_READY.add(key)
     return system_id
 
 
@@ -631,7 +666,7 @@ def bump_reuse_counts(
         return {"ok": True, "updated": 0}
     when = utc_now()
     try:
-        with sqlite3.connect(paths.sqlite_path) as conn:
+        with _sqlite_connect(paths.sqlite_path) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             n = 0
             for mid in ids:
@@ -693,7 +728,7 @@ def apply_decay(
     cutoff = (now - timedelta(days=days)).isoformat()
     placeholders = ",".join(["?"] * len(layers))
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
+    with _sqlite_connect(paths.sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"""
@@ -808,6 +843,335 @@ def apply_decay(
     }
 
 
+def consolidate_memories(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    limit: int = 80,
+    dry_run: bool = True,
+    p_imp: float = 0.75,
+    p_conf: float = 0.65,
+    p_stab: float = 0.65,
+    p_vol: float = 0.65,
+    d_vol: float = 0.75,
+    d_stab: float = 0.45,
+    d_reuse: int = 1,
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Adaptive consolidation pass: promote stable/high-value memories and demote noisy stale ones."""
+    ensure_storage(paths, schema_sql_path)
+    limit = max(1, min(500, int(limit)))
+    sid_where = ""
+    sid_args: list[Any] = []
+    if session_id:
+        sid_where = "AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?"
+        sid_args.append(session_id)
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        promote = conn.execute(
+            f"""
+            SELECT id, layer, kind, summary, updated_at,
+                   importance_score, confidence_score, stability_score, reuse_count, volatility_score
+            FROM memories
+            WHERE layer IN ('instant','short')
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              {sid_where}
+              AND importance_score >= ?
+              AND confidence_score >= ?
+              AND stability_score >= ?
+              AND volatility_score <= ?
+            ORDER BY importance_score DESC, stability_score DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, *sid_args, p_imp, p_conf, p_stab, p_vol, limit),
+        ).fetchall()
+        demote = conn.execute(
+            f"""
+            SELECT id, layer, kind, summary, updated_at,
+                   importance_score, confidence_score, stability_score, reuse_count, volatility_score
+            FROM memories
+            WHERE layer IN ('long')
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              {sid_where}
+              AND (volatility_score >= ? OR stability_score <= ?)
+              AND reuse_count <= ?
+            ORDER BY volatility_score DESC, stability_score ASC, updated_at ASC
+            LIMIT ?
+            """,
+            (project_id, project_id, *sid_args, d_vol, d_stab, int(d_reuse), limit),
+        ).fetchall()
+
+    pro_items = [dict(r) for r in promote]
+    de_items = [dict(r) for r in demote]
+    applied_promote: list[dict[str, Any]] = []
+    applied_demote: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    if not dry_run:
+        for r in pro_items:
+            mid = str(r.get("id") or "")
+            layer = str(r.get("layer") or "")
+            to_layer = "short" if layer == "instant" else "long"
+            try:
+                out = move_memory_layer(
+                    paths=paths,
+                    schema_sql_path=schema_sql_path,
+                    memory_id=mid,
+                    new_layer=to_layer,
+                    tool=tool,
+                    session_id=actor_session_id,
+                    event_type="memory.promote",
+                )
+                if out.get("ok") and out.get("changed"):
+                    applied_promote.append({"id": mid, "from_layer": layer, "to_layer": to_layer})
+            except Exception as exc:
+                errors.append(f"promote:{mid}:{exc}")
+
+        for r in de_items:
+            mid = str(r.get("id") or "")
+            layer = str(r.get("layer") or "")
+            to_layer = "short"
+            try:
+                out = move_memory_layer(
+                    paths=paths,
+                    schema_sql_path=schema_sql_path,
+                    memory_id=mid,
+                    new_layer=to_layer,
+                    tool=tool,
+                    session_id=actor_session_id,
+                    event_type="memory.promote",
+                )
+                if out.get("ok") and out.get("changed"):
+                    applied_demote.append({"id": mid, "from_layer": layer, "to_layer": to_layer})
+            except Exception as exc:
+                errors.append(f"demote:{mid}:{exc}")
+
+        log_system_event(
+            paths,
+            schema_sql_path,
+            "memory.update",
+            {
+                "action": "consolidate",
+                "project_id": project_id,
+                "session_id": session_id,
+                "promote_candidates": len(pro_items),
+                "demote_candidates": len(de_items),
+                "promoted": len(applied_promote),
+                "demoted": len(applied_demote),
+                "errors": errors[:30],
+            },
+            portable=False,
+        )
+
+    return {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "project_id": project_id,
+        "session_id": session_id,
+        "promote": pro_items[:limit],
+        "demote": de_items[:limit],
+        "promoted": applied_promote,
+        "demoted": applied_demote,
+        "errors": errors,
+    }
+
+
+def compress_session_context(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str,
+    limit: int = 120,
+    min_items: int = 8,
+    target_layer: str = "short",
+    dry_run: bool = True,
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    """Create a compact, reusable session memory summary (ICAE-style context compression, deterministic)."""
+    ensure_storage(paths, schema_sql_path)
+    if target_layer not in LAYER_SET:
+        raise ValueError(f"invalid target_layer: {target_layer}")
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise ValueError("session_id is required")
+    limit = max(10, min(500, int(limit)))
+    min_items = max(2, min(200, int(min_items)))
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, layer, kind, summary, updated_at, tags_json
+            FROM memories
+            WHERE (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?
+              AND kind NOT IN ('retrieve')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, sid, limit),
+        ).fetchall()
+
+    items = [dict(r) for r in rows]
+    if len(items) < min_items:
+        return {
+            "ok": True,
+            "dry_run": bool(dry_run),
+            "session_id": sid,
+            "project_id": project_id,
+            "compressed": False,
+            "reason": f"insufficient items ({len(items)} < {min_items})",
+            "items": items,
+        }
+
+    layer_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    tag_counts: dict[str, int] = {}
+    for x in items:
+        layer = str(x.get("layer") or "")
+        kind = str(x.get("kind") or "")
+        layer_counts[layer] = layer_counts.get(layer, 0) + 1
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        try:
+            tags = json.loads(x.get("tags_json") or "[]")
+        except Exception:
+            tags = []
+        for t in tags[:10]:
+            tt = str(t).strip()
+            if not tt:
+                continue
+            tag_counts[tt] = tag_counts.get(tt, 0) + 1
+
+    top_tags = [k for k, _ in sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]]
+    top_kinds = [f"{k}:{v}" for k, v in sorted(kind_counts.items(), key=lambda kv: kv[1], reverse=True)]
+    top_layers = [f"{k}:{v}" for k, v in sorted(layer_counts.items(), key=lambda kv: kv[1], reverse=True)]
+    highlights = items[: min(12, len(items))]
+
+    summary = f"Session digest: {sid[:12]}… ({len(items)} memories)"
+    lines = [
+        "## Session Compression Digest",
+        "",
+        f"- project_id: {project_id or '(all)'}",
+        f"- session_id: {sid}",
+        f"- source_items: {len(items)}",
+        f"- layers: {', '.join(top_layers) if top_layers else '(none)'}",
+        f"- kinds: {', '.join(top_kinds) if top_kinds else '(none)'}",
+        f"- top_tags: {', '.join(top_tags) if top_tags else '(none)'}",
+        "",
+        "### Highlights",
+    ]
+    for x in highlights:
+        lines.append(f"- [{x.get('updated_at','')}] ({x.get('layer','')}/{x.get('kind','')}) {x.get('summary','')}")
+    body = "\n".join(lines).strip() + "\n"
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "session_id": sid,
+            "project_id": project_id,
+            "compressed": False,
+            "summary_preview": summary,
+            "body_preview": body,
+            "source_count": len(items),
+        }
+
+    out = write_memory(
+        paths=paths,
+        schema_sql_path=schema_sql_path,
+        layer=target_layer,
+        kind="summary",
+        summary=summary,
+        body=body,
+        tags=[
+            "auto:session-compress",
+            f"session:{sid}",
+            *(["project:" + project_id] if project_id else []),
+        ],
+        refs=[],
+        cred_refs=[],
+        tool=tool,
+        account="default",
+        device="local",
+        session_id=actor_session_id,
+        project_id=project_id or "global",
+        workspace=str(paths.root),
+        importance=0.76,
+        confidence=0.72,
+        stability=0.78,
+        reuse_count=0,
+        volatility=0.22,
+        event_type="memory.write",
+    )
+    return {
+        "ok": True,
+        "dry_run": False,
+        "session_id": sid,
+        "project_id": project_id,
+        "compressed": True,
+        "memory_id": out["memory"]["id"],
+        "body_md_path": out["memory"]["body_md_path"],
+        "source_count": len(items),
+    }
+
+
+def compress_hot_sessions(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    max_sessions: int = 2,
+    per_session_limit: int = 120,
+    min_items: int = 8,
+    dry_run: bool = True,
+    tool: str = "omnimem",
+    actor_session_id: str = "system",
+) -> dict[str, Any]:
+    ensure_storage(paths, schema_sql_path)
+    max_sessions = max(1, min(10, int(max_sessions)))
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT COALESCE(json_extract(source_json, '$.session_id'), '') AS sid, COUNT(*) AS c
+            FROM memories
+            WHERE (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND COALESCE(json_extract(source_json, '$.session_id'), '') != ''
+              AND kind NOT IN ('retrieve')
+            GROUP BY sid
+            ORDER BY c DESC
+            LIMIT ?
+            """,
+            (project_id, project_id, max_sessions * 3),
+        ).fetchall()
+
+    sessions = [str(r["sid"]) for r in rows if str(r["sid"]).strip() and str(r["sid"]) not in {"system", "webui-session"}][:max_sessions]
+    items: list[dict[str, Any]] = []
+    for sid in sessions:
+        try:
+            out = compress_session_context(
+                paths=paths,
+                schema_sql_path=schema_sql_path,
+                project_id=project_id,
+                session_id=sid,
+                limit=per_session_limit,
+                min_items=min_items,
+                dry_run=dry_run,
+                tool=tool,
+                actor_session_id=actor_session_id,
+            )
+            items.append(out)
+        except Exception as exc:
+            items.append({"ok": False, "session_id": sid, "error": str(exc)})
+    return {"ok": True, "project_id": project_id, "sessions": sessions, "items": items}
+
+
 def insert_event(conn: sqlite3.Connection, evt: dict[str, Any]) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO memory_events(event_id, event_type, event_time, memory_id, payload_json) VALUES (?, ?, ?, ?, ?)",
@@ -841,7 +1205,10 @@ def log_system_event(
     portable: bool = True,
 ) -> None:
     with repo_lock(paths.root, timeout_s=30.0):
-        system_id = ensure_system_memory(paths, schema_sql_path)
+        key = _cache_key_for_paths(paths)
+        system_id = "system000"
+        if key not in _SYSTEM_MEMORY_READY:
+            system_id = ensure_system_memory(paths, schema_sql_path)
         evt = {
             "event_id": make_id(),
             "event_type": event_type,
@@ -853,9 +1220,16 @@ def log_system_event(
         # Some operational events (notably sync) are device-local and create unnecessary Git churn/conflicts.
         if portable:
             append_jsonl(event_file_path(paths, datetime.now(timezone.utc)), evt)
-        with sqlite3.connect(paths.sqlite_path) as conn:
+        with _sqlite_connect(paths.sqlite_path) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
-            insert_event(conn, evt)
+            try:
+                insert_event(conn, evt)
+            except sqlite3.IntegrityError:
+                # If system memory was externally reset/reindexed while process cache says "ready",
+                # recover once by recreating system memory and retrying this event.
+                _SYSTEM_MEMORY_READY.discard(key)
+                evt["memory_id"] = ensure_system_memory(paths, schema_sql_path)
+                insert_event(conn, evt)
             conn.commit()
 
 
@@ -867,7 +1241,7 @@ def reindex_from_jsonl(paths: MemoryPaths, schema_sql_path: Path, reset: bool = 
     indexed_memories = 0
     skipped_events = 0
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
+    with _sqlite_connect(paths.sqlite_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         if reset:
             conn.execute("DELETE FROM memory_events")
@@ -1091,7 +1465,7 @@ def write_memory(
 
         append_jsonl(event_file_path(paths, when_dt), evt)
 
-        with sqlite3.connect(paths.sqlite_path) as conn:
+        with _sqlite_connect(paths.sqlite_path) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             insert_memory(conn, env, body_md)
             insert_event(conn, evt)
@@ -1130,7 +1504,7 @@ def move_memory_layer(
         when_dt = datetime.now(timezone.utc)
         when_iso = when_dt.replace(microsecond=0).isoformat()
 
-        with sqlite3.connect(paths.sqlite_path) as conn:
+        with _sqlite_connect(paths.sqlite_path) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys = ON")
             row = conn.execute(
@@ -1277,7 +1651,7 @@ def update_memory_content(
         body = str(body or "").strip()
         tags = [str(x).strip() for x in (tags or []) if str(x).strip()]
 
-        with sqlite3.connect(paths.sqlite_path) as conn:
+        with _sqlite_connect(paths.sqlite_path) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys = ON")
             row = conn.execute(
@@ -1437,6 +1811,117 @@ def _signals_from_row(d: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+def _parse_iso_dt(raw: str) -> datetime:
+    s = str(raw or "").strip()
+    if not s:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except Exception:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _recency_score(updated_at: str, now_dt: datetime, *, half_life_days: float = 14.0) -> float:
+    try:
+        age_days = max(0.0, (now_dt - _parse_iso_dt(updated_at)).total_seconds() / 86400.0)
+    except Exception:
+        age_days = 3650.0
+    # Ebbinghaus-inspired forgetting curve: score halves every `half_life_days`.
+    v = 2.0 ** (-(age_days / max(1e-6, half_life_days)))
+    return max(0.0, min(1.0, float(v)))
+
+
+def _reuse_norm(reuse_count: int) -> float:
+    # Saturating normalization so early reuse increments matter most.
+    rc = max(0, int(reuse_count or 0))
+    v = 1.0 - (2.718281828459045 ** (-rc / 4.0))
+    return max(0.0, min(1.0, float(v)))
+
+
+def _fts_rank_to_relevance(fts_rank: Any) -> float:
+    if fts_rank is None:
+        return 0.0
+    try:
+        r = float(fts_rank)
+    except Exception:
+        return 0.0
+    # SQLite FTS bm25: lower is better, often near zero and can be negative.
+    # Convert to [0,1] with a smooth inverse mapping.
+    z = max(0.0, r)
+    v = 1.0 / (1.0 + z)
+    return max(0.0, min(1.0, float(v)))
+
+
+def _token_overlap_score(summary: str, query_tokens: list[str]) -> float:
+    if not query_tokens:
+        return 0.0
+    qt = set(t.lower() for t in query_tokens if t.strip())
+    if not qt:
+        return 0.0
+    st = _mem_text_tokens(summary or "")
+    if not st:
+        return 0.0
+    return _jaccard(qt, st)
+
+
+def _attach_cognitive_retrieval(
+    items: list[dict[str, Any]],
+    *,
+    strategy: str,
+    query_tokens: list[str],
+) -> list[dict[str, Any]]:
+    now_dt = datetime.now(timezone.utc)
+    out: list[dict[str, Any]] = []
+    for it in items:
+        sig = it.get("signals") or {}
+        importance = max(0.0, min(1.0, float(sig.get("importance_score", 0.0) or 0.0)))
+        confidence = max(0.0, min(1.0, float(sig.get("confidence_score", 0.0) or 0.0)))
+        stability = max(0.0, min(1.0, float(sig.get("stability_score", 0.0) or 0.0)))
+        volatility = max(0.0, min(1.0, float(sig.get("volatility_score", 0.0) or 0.0)))
+        reuse = _reuse_norm(int(sig.get("reuse_count", 0) or 0))
+        recency = _recency_score(str(it.get("updated_at", "")), now_dt)
+        lexical = _token_overlap_score(str(it.get("summary", "")), query_tokens)
+        fts_rel = _fts_rank_to_relevance(it.pop("fts_rank", None))
+        relevance = max(lexical, fts_rel)
+
+        # Inspired by generative-memory retrieval (relevance + recency + importance)
+        # and long-term-memory stabilization signals used by OmniMem.
+        score = (
+            0.38 * relevance
+            + 0.18 * importance
+            + 0.12 * recency
+            + 0.11 * stability
+            + 0.08 * confidence
+            + 0.08 * reuse
+            - 0.05 * volatility
+        )
+        score = max(0.0, min(1.0, float(score)))
+        it["retrieval"] = {
+            "strategy": strategy,
+            "score": score,
+            "components": {
+                "relevance": relevance,
+                "lexical_overlap": lexical,
+                "fts_relevance": fts_rel,
+                "recency": recency,
+                "importance": importance,
+                "confidence": confidence,
+                "stability": stability,
+                "reuse": reuse,
+                "volatility_penalty": volatility,
+            },
+        }
+        out.append(it)
+
+    out.sort(key=lambda x: (float((x.get("retrieval") or {}).get("score", 0.0)), str(x.get("updated_at", ""))), reverse=True)
+    return out
+
+
 def _fts_rows(
     conn: sqlite3.Connection,
     *,
@@ -1452,7 +1937,8 @@ def _fts_rows(
             SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
                    COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
                    COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
-                   m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
+                   m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score,
+                   bm25(memories_fts) AS fts_rank
             FROM memories_fts f
             JOIN memories m ON m.id = f.id
             WHERE f.memories_fts MATCH ? AND m.layer = ?
@@ -1468,7 +1954,8 @@ def _fts_rows(
         SELECT m.id, m.layer, m.kind, m.summary, m.updated_at, m.body_md_path,
                COALESCE(json_extract(m.scope_json, '$.project_id'), '') AS project_id,
                COALESCE(json_extract(m.source_json, '$.session_id'), '') AS session_id,
-               m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score
+               m.importance_score, m.confidence_score, m.stability_score, m.reuse_count, m.volatility_score,
+               bm25(memories_fts) AS fts_rank
         FROM memories_fts f
         JOIN memories m ON m.id = f.id
         WHERE f.memories_fts MATCH ?
@@ -1533,7 +2020,7 @@ def find_memories_ex(
     limit = max(1, min(200, int(limit)))
     tried: list[dict[str, str]] = []
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
+    with _sqlite_connect(paths.sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
 
         if not query:
@@ -1592,14 +2079,16 @@ def find_memories_ex(
                 continue
             if rows:
                 items = [_signals_from_row(dict(r)) for r in rows]
-                return {"ok": True, "strategy": strat, "query_used": qq, "tried": tried, "items": items}
+                reranked = _attach_cognitive_retrieval(items, strategy=strat, query_tokens=tokens)
+                return {"ok": True, "strategy": strat, "query_used": qq, "tried": tried, "items": reranked}
 
         # Resilient fallback.
         ltoks = tokens or _query_tokens(normalized)
         tried.append({"strategy": "like_fallback", "query_used": " OR ".join(ltoks)})
         rows2 = _like_rows(conn, tokens=ltoks, layer=layer, limit=limit, project_id=project_id, session_id=session_id)
         items2 = [_signals_from_row(dict(r)) for r in rows2]
-        return {"ok": True, "strategy": "like_fallback", "query_used": " OR ".join(ltoks), "tried": tried, "items": items2}
+        reranked2 = _attach_cognitive_retrieval(items2, strategy="like_fallback", query_tokens=ltoks)
+        return {"ok": True, "strategy": "like_fallback", "query_used": " OR ".join(ltoks), "tried": tried, "items": reranked2}
 
 
 def _mem_text_tokens(text: str) -> set[str]:
@@ -1659,7 +2148,7 @@ def weave_links(
         # Read phase (can run even if link writes are busy).
         items = []
         try:
-            with sqlite3.connect(paths.sqlite_path, timeout=6.0) as conn_r:
+            with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn_r:
                 conn_r.row_factory = sqlite3.Row
                 conn_r.execute("PRAGMA foreign_keys = ON")
                 conn_r.execute("PRAGMA busy_timeout = 6000")
@@ -1735,7 +2224,7 @@ def weave_links(
         while True:
             attempt += 1
             try:
-                with sqlite3.connect(paths.sqlite_path, timeout=8.0) as conn_w:
+                with _sqlite_connect(paths.sqlite_path, timeout=8.0) as conn_w:
                     conn_w.row_factory = sqlite3.Row
                     conn_w.execute("PRAGMA foreign_keys = ON")
                     conn_w.execute("PRAGMA busy_timeout = 8000")
@@ -1799,6 +2288,9 @@ def retrieve_thread(
     auto_weave: bool = True,
     auto_weave_limit: int = 220,
     auto_weave_max_wait_s: float = 2.5,
+    ranking_mode: str = "hybrid",
+    ppr_alpha: float = 0.85,
+    ppr_iters: int = 16,
 ) -> dict[str, Any]:
     """Progressive, graph-aware retrieval.
 
@@ -1811,6 +2303,11 @@ def retrieve_thread(
     per_hop = max(1, min(30, int(per_hop)))
     min_weight = max(0.0, min(1.0, float(min_weight)))
     auto_weave = bool(auto_weave)
+    ranking_mode = str(ranking_mode or "hybrid").strip().lower()
+    if ranking_mode not in {"path", "ppr", "hybrid"}:
+        ranking_mode = "hybrid"
+    ppr_alpha = max(0.10, min(0.98, float(ppr_alpha)))
+    ppr_iters = max(4, min(64, int(ppr_iters)))
 
     # Best-effort: keep the link graph from being perpetually empty when running without a daemon.
     # Guard per home so repeated retrieves don't constantly try to weave while DB is busy.
@@ -1820,7 +2317,7 @@ def retrieve_thread(
         if (time.time() - last_try) >= 45.0:
             _AUTO_WEAVE_LAST_TRY[key] = time.time()
             try:
-                with sqlite3.connect(paths.sqlite_path, timeout=1.5) as conn0:
+                with _sqlite_connect(paths.sqlite_path, timeout=1.5) as conn0:
                     conn0.execute("PRAGMA busy_timeout = 1500")
                     n = int(conn0.execute("SELECT COUNT(*) FROM memory_links").fetchone()[0] or 0)
                 if n == 0:
@@ -1867,6 +2364,7 @@ def retrieve_thread(
     scored: dict[str, float] = {}
     paths_explain: dict[str, list[dict[str, Any]]] = {}
     frontier: list[str] = []
+    graph_edges: list[tuple[str, str, float]] = []
     for i, s in enumerate(seeds):
         mid = str(s.get("id") or "")
         if not mid:
@@ -1876,7 +2374,7 @@ def retrieve_thread(
         paths_explain[mid] = [{"hop": 0, "via": "seed", "id": mid}]
         frontier.append(mid)
 
-    with sqlite3.connect(paths.sqlite_path, timeout=6.0) as conn:
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 6000")
         for hop in range(1, depth + 1):
@@ -1902,6 +2400,8 @@ def retrieve_thread(
                 w = float(r["weight"] or 0.0)
                 src_id = str(r["src_id"] or "")
                 dst_id = str(r["dst_id"] or "")
+                if src_id and dst_id:
+                    graph_edges.append((src_id, dst_id, w))
                 a = src_id
                 b = dst_id
                 if a in frontier:
@@ -1938,6 +2438,48 @@ def retrieve_thread(
                 next_frontier.append(to_id)
             frontier = next_frontier
 
+        # HippoRAG-style graph propagation over the observed subgraph.
+        if seeds and graph_edges and ranking_mode in {"ppr", "hybrid"}:
+            seed_ids = [str(s.get("id") or "") for s in seeds if str(s.get("id") or "")]
+            tp: dict[str, float] = {}
+            for i, sid in enumerate(seed_ids):
+                tp[sid] = tp.get(sid, 0.0) + max(0.0, 1.0 - (i * 0.03))
+            z = sum(tp.values()) or 1.0
+            for k in list(tp.keys()):
+                tp[k] = tp[k] / z
+
+            adj: dict[str, list[tuple[str, float]]] = {}
+            out_sum: dict[str, float] = {}
+            for a, b, w in graph_edges:
+                ww = max(0.0, float(w))
+                if ww <= 0.0:
+                    continue
+                adj.setdefault(a, []).append((b, ww))
+                adj.setdefault(b, []).append((a, ww))
+                out_sum[a] = out_sum.get(a, 0.0) + ww
+                out_sum[b] = out_sum.get(b, 0.0) + ww
+
+            p = dict(tp)
+            for _ in range(ppr_iters):
+                nxt: dict[str, float] = {k: (1.0 - ppr_alpha) * v for k, v in tp.items()}
+                for src, outs in adj.items():
+                    ps = p.get(src, 0.0)
+                    if ps <= 0.0:
+                        continue
+                    denom = out_sum.get(src, 0.0) or 1.0
+                    for dst, w in outs:
+                        nxt[dst] = nxt.get(dst, 0.0) + (ppr_alpha * ps * (w / denom))
+                p = nxt
+
+            max_p = max([float(v) for v in p.values()] + [1e-9])
+            for mid, pv in p.items():
+                ppr = float(pv) / max_p
+                base = float(scored.get(mid, 0.0))
+                if ranking_mode == "ppr":
+                    scored[mid] = ppr
+                elif ranking_mode == "hybrid":
+                    scored[mid] = (0.62 * base) + (0.38 * ppr)
+
         # Materialize items.
         ids = sorted(scored.keys(), key=lambda k: scored[k], reverse=True)[: max(seed_limit, 12)]
         if not ids:
@@ -1966,6 +2508,9 @@ def retrieve_thread(
         "query": query,
         "items": out_items,
         "explain": {
+            "ranking_mode": ranking_mode,
+            "ppr_alpha": ppr_alpha,
+            "ppr_iters": ppr_iters,
             "seeds": seeds,
             "paths": {k: v for k, v in paths_explain.items() if k in {x.get("id") for x in out_items}},
         },
@@ -1974,7 +2519,7 @@ def retrieve_thread(
 
 def build_brief(paths: MemoryPaths, schema_sql_path: Path, project_id: str, limit: int) -> dict[str, Any]:
     ensure_storage(paths, schema_sql_path)
-    with sqlite3.connect(paths.sqlite_path) as conn:
+    with _sqlite_connect(paths.sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
         recent = conn.execute(
             """
@@ -2010,7 +2555,7 @@ def verify_storage(paths: MemoryPaths, schema_sql_path: Path) -> dict[str, Any]:
     ensure_system_memory(paths, schema_sql_path)
     issues: list[str] = []
 
-    with sqlite3.connect(paths.sqlite_path) as conn:
+    with _sqlite_connect(paths.sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
         table_count = conn.execute("SELECT count(*) FROM sqlite_master WHERE type IN ('table','view')").fetchone()[0]
         rows = conn.execute("SELECT id, body_md_path, integrity_json FROM memories ORDER BY updated_at DESC").fetchall()
@@ -2566,6 +3111,13 @@ def run_sync_daemon(
     weave_max_per_src: int = 6,
     weave_max_wait_s: float = 12.0,
     weave_include_archive: bool = False,
+    maintenance_enabled: bool = True,
+    maintenance_interval: int = 300,
+    maintenance_decay_days: int = 14,
+    maintenance_decay_limit: int = 120,
+    maintenance_consolidate_limit: int = 80,
+    maintenance_compress_sessions: int = 2,
+    maintenance_compress_min_items: int = 8,
     retry_max_attempts: int = 3,
     retry_initial_backoff: int = 1,
     retry_max_backoff: int = 8,
@@ -2587,6 +3139,10 @@ def run_sync_daemon(
     last_weave = 0.0
     last_weave_seen = last_seen
     last_weave_result: dict[str, Any] = {}
+    maintenance_runs = 0
+    maintenance_failures = 0
+    last_maintenance = 0.0
+    last_maintenance_result: dict[str, Any] = {}
     last_error_kind = "none"
 
     while True:
@@ -2668,6 +3224,59 @@ def run_sync_daemon(
                     weave_failures += 1
                     last_weave_result = {"ok": False, "error": str(exc)}
 
+        if maintenance_enabled and ((now - last_maintenance) >= max(60, int(maintenance_interval))):
+            try:
+                decay_out = apply_decay(
+                    paths=paths,
+                    schema_sql_path=schema_sql_path,
+                    days=int(maintenance_decay_days),
+                    limit=int(maintenance_decay_limit),
+                    project_id="",
+                    layers=["instant", "short", "long"],
+                    dry_run=False,
+                    tool="daemon",
+                    session_id="system",
+                )
+                cons_out = consolidate_memories(
+                    paths=paths,
+                    schema_sql_path=schema_sql_path,
+                    project_id="",
+                    session_id="",
+                    limit=int(maintenance_consolidate_limit),
+                    dry_run=False,
+                    tool="daemon",
+                    actor_session_id="system",
+                )
+                comp_out = compress_hot_sessions(
+                    paths=paths,
+                    schema_sql_path=schema_sql_path,
+                    project_id="",
+                    max_sessions=int(maintenance_compress_sessions),
+                    per_session_limit=120,
+                    min_items=int(maintenance_compress_min_items),
+                    dry_run=False,
+                    tool="daemon",
+                    actor_session_id="system",
+                )
+                last_maintenance_result = {
+                    "ok": bool(decay_out.get("ok") and cons_out.get("ok") and comp_out.get("ok")),
+                    "decay": decay_out,
+                    "consolidate": {
+                        "promoted": len(cons_out.get("promoted") or []),
+                        "demoted": len(cons_out.get("demoted") or []),
+                        "errors": len(cons_out.get("errors") or []),
+                    },
+                    "compress": {
+                        "sessions": len(comp_out.get("sessions") or []),
+                        "compressed": len([x for x in (comp_out.get("items") or []) if x.get("compressed")]),
+                    },
+                }
+                maintenance_runs += 1
+                last_maintenance = time.time()
+            except Exception as exc:  # pragma: no cover
+                maintenance_failures += 1
+                last_maintenance_result = {"ok": False, "error": str(exc)}
+
         if once:
             break
         time.sleep(max(1, scan_interval))
@@ -2690,6 +3299,14 @@ def run_sync_daemon(
             "failures": weave_failures,
             "last_weave_at": last_weave,
             "last_result": last_weave_result,
+        },
+        "maintenance": {
+            "enabled": bool(maintenance_enabled),
+            "interval": int(maintenance_interval),
+            "runs": maintenance_runs,
+            "failures": maintenance_failures,
+            "last_run_at": last_maintenance,
+            "last_result": last_maintenance_result,
         },
         "last_error_kind": last_error_kind,
         "remediation_hint": sync_error_hint(last_error_kind),

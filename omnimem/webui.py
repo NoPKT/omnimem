@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import re
+import signal
 import sqlite3
+import sys
 import threading
+import traceback
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +19,8 @@ from . import __version__ as OMNIMEM_VERSION
 from .core import (
     LAYER_SET,
     apply_decay,
+    compress_session_context,
+    consolidate_memories,
     ensure_storage,
     find_memories,
     move_memory_layer,
@@ -579,6 +585,27 @@ HTML_PAGE = """<!doctype html>
 	            <span id=\"decayHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
 	          <div id=\"decayOut\" class=\"muted-box\" style=\"margin-top:10px\"></div>
+	          <div class=\"divider\"></div>
+	          <div class=\"row-btn\">
+	            <label style=\"margin-top:0\">consolidate limit
+	              <input id=\"consLimit\" type=\"number\" min=\"1\" max=\"500\" value=\"80\" style=\"max-width:140px\" />
+	            </label>
+	            <button id=\"btnConsPreview\" class=\"secondary\" style=\"margin-top:0\">Consolidate Preview</button>
+	            <button id=\"btnConsApply\" class=\"danger\" style=\"margin-top:0\">Apply Consolidate</button>
+	            <span id=\"consHint\" class=\"small\" style=\"align-self:center\"></span>
+	          </div>
+	          <div class=\"row-btn\">
+	            <label style=\"margin-top:0\">compress session
+	              <input id=\"compressSessionId\" placeholder=\"session_id\" style=\"max-width:260px\" />
+	            </label>
+	            <label style=\"margin-top:0\">min items
+	              <input id=\"compressMinItems\" type=\"number\" min=\"2\" max=\"200\" value=\"8\" style=\"max-width:120px\" />
+	            </label>
+	            <button id=\"btnCompressPreview\" class=\"secondary\" style=\"margin-top:0\">Compress Preview</button>
+	            <button id=\"btnCompressApply\" class=\"danger\" style=\"margin-top:0\">Apply Compress</button>
+	            <span id=\"compressHint\" class=\"small\" style=\"align-self:center\"></span>
+	          </div>
+	          <div id=\"maintOut\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	        </div>
 	        <div class=\"card wide\">
 	          <h3>Governance Log</h3>
@@ -1441,6 +1468,18 @@ HTML_PAGE = """<!doctype html>
       renderInitState(Boolean(d.initialized));
     }
 
+	    function retrievalHintHtml(x) {
+	      const r = x && x.retrieval ? x.retrieval : null;
+	      if (!r || typeof r !== 'object') return '';
+	      const c = (r.components && typeof r.components === 'object') ? r.components : {};
+	      const score = Number(r.score || 0);
+	      const rel = Number(c.relevance || 0);
+	      const rec = Number(c.recency || 0);
+	      const imp = Number(c.importance || 0);
+	      const strat = String(r.strategy || '');
+	      return `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(imp.toFixed(2))} ${escHtml(strat)}</div>`;
+	    }
+
 	    async function loadMem() {
 	      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
 	      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
@@ -1451,7 +1490,7 @@ HTML_PAGE = """<!doctype html>
 	      b.innerHTML = '';
 	      (d.items || []).forEach(x => {
 	        const tr = document.createElement('tr');
-	        tr.innerHTML = `<td><a href=\"#\" data-id=\"${escHtml(x.id)}\">${escHtml(String(x.id).slice(0,10))}...</a></td><td>${escHtml(x.project_id || '')}</td><td>${escHtml(x.layer || '')}</td><td>${escHtml(x.kind || '')}</td><td>${escHtml(x.summary || '')}</td><td>${escHtml(x.updated_at || '')}</td>`;
+	        tr.innerHTML = `<td><a href=\"#\" data-id=\"${escHtml(x.id)}\">${escHtml(String(x.id).slice(0,10))}...</a></td><td>${escHtml(x.project_id || '')}</td><td>${escHtml(x.layer || '')}</td><td>${escHtml(x.kind || '')}</td><td>${escHtml(x.summary || '')}${retrievalHintHtml(x)}</td><td>${escHtml(x.updated_at || '')}</td>`;
 	        tr.querySelector('a').onclick = async (e) => {
 	          e.preventDefault();
 	          await openMemory(x.id);
@@ -2138,6 +2177,79 @@ HTML_PAGE = """<!doctype html>
 	        await loadMem();
 	        await loadLayerStats();
 	        await loadEventStats(opts.project_id || '', (document.getElementById('insSessionId')?.value || '').trim());
+	      }
+	    }
+
+	    function readConsolidateOpts() {
+	      const pid = (document.getElementById('insProjectId')?.value || '').trim();
+	      const sid = (document.getElementById('insSessionId')?.value || '').trim();
+	      const limit = parseInt(document.getElementById('consLimit')?.value || '80', 10) || 80;
+	      return { project_id: pid, session_id: sid, limit };
+	    }
+
+	    function renderMaintOut(title, d) {
+	      const out = document.getElementById('maintOut');
+	      if (!out) return;
+	      if (!d || !d.ok) {
+	        out.innerHTML = `<span class="err">${escHtml((d && d.error) || (title + ' failed'))}</span>`;
+	        return;
+	      }
+	      out.innerHTML = `<div class="small"><b>${escHtml(title)}</b></div><pre class="mono" style="white-space:pre-wrap">${escHtml(JSON.stringify(d, null, 2))}</pre>`;
+	    }
+
+	    async function runConsolidate(dry_run) {
+	      const opts = readConsolidateOpts();
+	      if (!dry_run) {
+	        if (!confirm(`Apply consolidate? limit=${opts.limit}, project=${opts.project_id || '(all)'}, session=${opts.session_id || '(all)'}`)) return;
+	      }
+	      const d = await jpost('/api/maintenance/consolidate', Object.assign({}, opts, { dry_run: !!dry_run }));
+	      const hint = document.getElementById('consHint');
+	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
+	      renderMaintOut('Consolidate', d);
+	      if (!d.ok) {
+	        toast('Maintenance', d.error || 'consolidate failed', false);
+	        return;
+	      }
+	      toast('Maintenance', dry_run ? 'consolidate previewed' : 'consolidate applied', true);
+	      if (!dry_run) {
+	        await loadInsights();
+	        await loadMem();
+	        await loadLayerStats();
+	      }
+	    }
+
+	    function readCompressOpts() {
+	      const pid = (document.getElementById('insProjectId')?.value || '').trim();
+	      const activeSid = (document.getElementById('insSessionId')?.value || '').trim();
+	      const sid = (document.getElementById('compressSessionId')?.value || '').trim() || activeSid;
+	      const min_items = parseInt(document.getElementById('compressMinItems')?.value || '8', 10) || 8;
+	      return { project_id: pid, session_id: sid, min_items };
+	    }
+
+	    async function runCompress(dry_run) {
+	      const opts = readCompressOpts();
+	      if (!opts.session_id) {
+	        toast('Maintenance', 'session_id is required', false);
+	        return;
+	      }
+	      if (!dry_run) {
+	        if (!confirm(`Apply session compress? session=${opts.session_id.slice(0,12)}... min_items=${opts.min_items}`)) return;
+	      }
+	      const d = await jpost('/api/maintenance/compress', Object.assign({}, opts, { dry_run: !!dry_run }));
+	      const hint = document.getElementById('compressHint');
+	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
+	      renderMaintOut('Session Compress', d);
+	      if (!d.ok) {
+	        toast('Maintenance', d.error || 'compress failed', false);
+	        return;
+	      }
+	      if (!dry_run && d.compressed) {
+	        toast('Maintenance', `compressed into ${String(d.memory_id || '').slice(0,10)}...`, true);
+	        await loadMem();
+	        await loadLayerStats();
+	        await loadInsights();
+	      } else {
+	        toast('Maintenance', dry_run ? 'compress previewed' : 'compress skipped', true);
 	      }
 	    }
 
@@ -2889,6 +3001,14 @@ HTML_PAGE = """<!doctype html>
 	      if (dp) dp.onclick = () => runDecay(true);
 	      const da = document.getElementById('btnDecayApply');
 	      if (da) da.onclick = () => runDecay(false);
+	      const cp = document.getElementById('btnConsPreview');
+	      if (cp) cp.onclick = () => runConsolidate(true);
+	      const ca = document.getElementById('btnConsApply');
+	      if (ca) ca.onclick = () => runConsolidate(false);
+	      const sp = document.getElementById('btnCompressPreview');
+	      if (sp) sp.onclick = () => runCompress(true);
+	      const sa = document.getElementById('btnCompressApply');
+	      if (sa) sa.onclick = () => runCompress(false);
 	      const evType = document.getElementById('evtType');
 	      if (evType) evType.onchange = () => loadEvents(
 	        document.getElementById('insProjectId')?.value?.trim() || '',
@@ -3479,6 +3599,52 @@ def run_webui(
     )
     paths = resolve_paths(cfg)
     ensure_storage(paths, schema_sql_path)
+    runtime_dir = paths.root / "runtime"
+    try:
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    error_log_fp = runtime_dir / "webui.error.log"
+
+    def _elog(line: str) -> None:
+        try:
+            with error_log_fp.open("ab") as f:
+                f.write((line.rstrip("\n") + "\n").encode("utf-8", errors="replace"))
+        except Exception:
+            pass
+
+    def _fd_count() -> int:
+        # macOS/Linux best-effort open-fd counter.
+        for p in ("/dev/fd", "/proc/self/fd"):
+            try:
+                return len(os.listdir(p))
+            except Exception:
+                continue
+        return -1
+
+    def _dump_threads(reason: str) -> None:
+        # Useful when the server is "listening but dead": dump all thread stacks.
+        try:
+            _elog(f"[{utc_now()}] THREAD_DUMP reason={reason}")
+            frames = sys._current_frames()
+            by_tid = {t.ident: t for t in threading.enumerate()}
+            for tid, frame in frames.items():
+                t = by_tid.get(tid)
+                tname = t.name if t else "unknown"
+                _elog(f"\n--- thread {tname} tid={tid} ---")
+                _elog("".join(traceback.format_stack(frame)))
+        except Exception:
+            _elog(f"[{utc_now()}] THREAD_DUMP failed:\n{traceback.format_exc()}")
+
+    def _sigusr1_handler(signum, _frame) -> None:  # noqa: ANN001
+        _dump_threads(f"signal:{signum}")
+
+    # Best-effort: on macOS/Linux you can `kill -USR1 <pid>` to get a thread dump.
+    try:
+        if hasattr(signal, "SIGUSR1"):
+            signal.signal(signal.SIGUSR1, _sigusr1_handler)
+    except Exception:
+        pass
     daemon_state: dict[str, Any] = {
         "schema_version": "1.1.0",
         "initialized": cfg_path.exists(),
@@ -3507,6 +3673,9 @@ def run_webui(
         if daemon_runner is None:
             return
         daemon_state["running"] = True
+        # `daemon_runner(..., once=True)` resets its internal timers each call.
+        # So we must enforce pull cadence here; otherwise we'd run a full sync every scan tick.
+        last_full_run_ts = 0.0
         while not stop_event.is_set():
             if not daemon_state.get("initialized", False):
                 time.sleep(1)
@@ -3514,7 +3683,20 @@ def run_webui(
             if not daemon_state.get("enabled", True):
                 time.sleep(1)
                 continue
+            now_ts = time.time()
+            pull_every = max(5, int(daemon_pull_interval))
+            if last_full_run_ts > 0 and (now_ts - last_full_run_ts) < pull_every:
+                time.sleep(max(1, daemon_scan_interval))
+                continue
             try:
+                # Operational telemetry for diagnosing long-running instability.
+                try:
+                    _elog(
+                        f"[{utc_now()}] daemon_loop begin "
+                        f"threads={len(threading.enumerate())} fds={_fd_count()}"
+                    )
+                except Exception:
+                    pass
                 daemon_state["cycles"] = int(daemon_state.get("cycles", 0)) + 1
                 daemon_state["last_run_at"] = utc_now()
                 gh = cfg.get("sync", {}).get("github", {})
@@ -3531,6 +3713,7 @@ def run_webui(
                     retry_max_backoff=daemon_retry_max_backoff,
                     once=True,
                 )
+                last_full_run_ts = time.time()
                 daemon_state["last_result"] = result
                 if result.get("ok"):
                     daemon_state["success_count"] = int(daemon_state.get("success_count", 0)) + 1
@@ -3546,6 +3729,13 @@ def run_webui(
                     daemon_state["remediation_hint"] = str(
                         result.get("remediation_hint", sync_error_hint(daemon_state["last_error_kind"]))
                     )
+                try:
+                    _elog(
+                        f"[{utc_now()}] daemon_loop end ok={bool(result.get('ok'))} "
+                        f"threads={len(threading.enumerate())} fds={_fd_count()}"
+                    )
+                except Exception:
+                    pass
             except Exception as exc:  # pragma: no cover
                 daemon_state["last_result"] = {"ok": False, "error": str(exc)}
                 daemon_state["failure_count"] = int(daemon_state.get("failure_count", 0)) + 1
@@ -3553,6 +3743,7 @@ def run_webui(
                 daemon_state["last_error"] = str(exc)
                 daemon_state["last_error_kind"] = "unknown"
                 daemon_state["remediation_hint"] = sync_error_hint("unknown")
+                _elog(f"[{utc_now()}] daemon_loop exception: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
             time.sleep(max(1, daemon_scan_interval))
         daemon_state["running"] = False
 
@@ -3561,6 +3752,24 @@ def run_webui(
         daemon_thread = threading.Thread(target=daemon_loop, name="omnimem-daemon", daemon=True)
         daemon_thread.start()
 
+    @contextmanager
+    def _db_connect():
+        # Keep DB waits short so the WebUI stays responsive even if the daemon is doing a heavy write
+        # (reindex/weave). Longer waits can cause request threads to pile up.
+        conn = sqlite3.connect(paths.sqlite_path, timeout=1.2)
+        try:
+            conn.execute('PRAGMA busy_timeout = 1200')
+        except Exception:
+            pass
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     # Micro-cache for expensive aggregations (ThreadingHTTPServer may call handlers concurrently).
     event_stats_cache: dict[tuple[str, str, int], tuple[float, dict[str, Any]]] = {}
     event_stats_lock = threading.Lock()
@@ -3568,6 +3777,14 @@ def run_webui(
     events_cache_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args: object) -> None:  # noqa: A002
+            # Default writes to stderr; persist errors for debugging.
+            try:
+                msg = fmt % args
+            except Exception:
+                msg = fmt
+            _elog(f"[{utc_now()}] access {self.client_address} {msg}")
+
         def _authorized(self, parsed) -> bool:
             if parsed.path == "/api/health":
                 return True
@@ -3693,7 +3910,7 @@ def run_webui(
                 project_id = q.get("project_id", [""])[0].strip()
                 session_id = q.get("session_id", [""])[0].strip()
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         where = ""
                         args: list[Any] = []
                         if project_id:
@@ -3731,7 +3948,7 @@ def run_webui(
                 d_stab = float(q.get("d_stab", ["0.45"])[0])
                 d_reuse = int(float(q.get("d_reuse", ["1"])[0]))
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         pid_where = ""
                         sid_where = ""
@@ -3836,7 +4053,7 @@ def run_webui(
                         return None
 
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         rows = conn.execute(
                             """
@@ -3885,7 +4102,7 @@ def run_webui(
                     self._send_json({"ok": False, "error": "missing id"}, 400)
                     return
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         row = conn.execute(
                             """
@@ -3952,7 +4169,7 @@ def run_webui(
                         self._send_json(hit[1])
                         return
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         args: list[Any] = []
                         where = ""
@@ -4041,7 +4258,7 @@ def run_webui(
                     self._send_json({"ok": False, "error": "missing event_id"}, 400)
                     return
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         r = conn.execute(
                             """
@@ -4090,7 +4307,7 @@ def run_webui(
                         self._send_json(hit[1])
                         return
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         rows = conn.execute(
                             """
@@ -4180,7 +4397,7 @@ def run_webui(
                         return None
 
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         rows = conn.execute(
                             """
@@ -4256,7 +4473,7 @@ def run_webui(
                 project_id = q.get("project_id", [""])[0].strip()
                 session_id = q.get("session_id", [""])[0].strip()
                 try:
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         where = ""
                         args: list[Any] = []
@@ -4438,6 +4655,50 @@ def run_webui(
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
 
+            if parsed.path == "/api/maintenance/consolidate":
+                try:
+                    project_id = str(data.get("project_id", "")).strip()
+                    session_id = str(data.get("session_id", "")).strip()
+                    limit = int(data.get("limit", 80))
+                    dry_run = bool(data.get("dry_run", True))
+                    out = consolidate_memories(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id=project_id,
+                        session_id=session_id,
+                        limit=limit,
+                        dry_run=dry_run,
+                        tool="webui",
+                        actor_session_id="webui-session",
+                    )
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/maintenance/compress":
+                try:
+                    project_id = str(data.get("project_id", "")).strip()
+                    session_id = str(data.get("session_id", "")).strip()
+                    min_items = int(data.get("min_items", 8))
+                    dry_run = bool(data.get("dry_run", True))
+                    out = compress_session_context(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id=project_id,
+                        session_id=session_id,
+                        limit=120,
+                        min_items=min_items,
+                        target_layer="short",
+                        dry_run=dry_run,
+                        tool="webui",
+                        actor_session_id="webui-session",
+                    )
+                    self._send_json(out, 200 if out.get("ok") else 400)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
             if parsed.path == "/api/project/attach":
                 try:
                     project_path = str(data.get("project_path", "")).strip()
@@ -4573,7 +4834,7 @@ def run_webui(
 
                     placeholders = ",".join(["?"] * len(from_layers))
                     ids: list[str] = []
-                    with sqlite3.connect(paths.sqlite_path) as conn:
+                    with _db_connect() as conn:
                         conn.row_factory = sqlite3.Row
                         ids = [
                             str(r["id"])
@@ -4668,7 +4929,39 @@ def run_webui(
 
             self._send_json({"ok": False, "error": "not found"}, 404)
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    class _Server(ThreadingHTTPServer):
+        daemon_threads = True
+        request_queue_size = 64
+
+        def __init__(self, server_address, RequestHandlerClass):  # noqa: N803
+            super().__init__(server_address, RequestHandlerClass)
+            self._slots = threading.BoundedSemaphore(value=48)
+
+        def process_request(self, request, client_address):  # noqa: ANN001
+            # Cap concurrent handlers to avoid unbounded thread/socket growth under load.
+            if not self._slots.acquire(blocking=False):
+                try:
+                    _elog(f"[{utc_now()}] overload: drop client={client_address} threads={len(threading.enumerate())} fds={_fd_count()}")
+                    request.close()
+                except Exception:
+                    pass
+                return
+
+            def _run():
+                try:
+                    super(_Server, self).process_request_thread(request, client_address)
+                finally:
+                    self._slots.release()
+
+            t = threading.Thread(target=_run, daemon=self.daemon_threads)
+            t.start()
+
+        def handle_error(self, request, client_address) -> None:  # noqa: ANN001
+            # Exceptions inside request handler threads end up here; capture to a file so
+            # "connection reset by peer" has a root cause.
+            _elog(f"[{utc_now()}] handle_error client={client_address}\n{traceback.format_exc()}")
+
+    server = _Server((host, port), Handler)
     print(
         f"WebUI running on http://{host}:{port} "
         f"(daemon={'on' if enable_daemon else 'off'}, auth={'on' if resolved_auth_token else 'off'})"
