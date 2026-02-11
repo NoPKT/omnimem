@@ -3596,6 +3596,78 @@ def _extract_preference_phrases(text: str, *, max_items: int = 8) -> list[str]:
     return out
 
 
+_PROFILE_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "have",
+    "has",
+    "into",
+    "then",
+    "your",
+    "about",
+    "what",
+    "when",
+    "where",
+    "which",
+    "will",
+    "shall",
+    "would",
+    "could",
+    "should",
+    "are",
+    "was",
+    "were",
+    "been",
+    "being",
+    "you",
+    "not",
+    "but",
+    "use",
+    "using",
+    "used",
+    "task",
+    "note",
+    "summary",
+    "decision",
+}
+
+
+def _profile_term_tag_counts(rows: list[sqlite3.Row]) -> tuple[dict[str, int], dict[str, int]]:
+    term_counts: dict[str, int] = {}
+    tag_counts: dict[str, int] = {}
+    for r in rows:
+        try:
+            tags = [str(t).strip().lower() for t in (json.loads(r["tags_json"] or "[]") or []) if str(t).strip()]
+        except Exception:
+            tags = []
+        for t in tags:
+            if t.startswith("auto:"):
+                continue
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        summary = str(r["summary"] or "").strip()
+        body = str(r["body_text"] or "").strip()
+        txt = f"{summary}\n{body[:320]}"
+        toks = re.findall(r"[\w]+|[\u4e00-\u9fff]+", txt.lower(), flags=re.UNICODE)
+        for tk in toks:
+            t = tk.strip()
+            if not t:
+                continue
+            if t in _PROFILE_STOPWORDS:
+                continue
+            if t.isascii() and len(t) < 3:
+                continue
+            if t.isascii() and t.isdigit():
+                continue
+            term_counts[t] = term_counts.get(t, 0) + 1
+    return term_counts, tag_counts
+
+
 def build_user_profile(
     *,
     paths: MemoryPaths,
@@ -3628,46 +3700,6 @@ def build_user_profile(
     hour_counts: dict[int, int] = {}
     goals: list[str] = []
     preferences: list[str] = []
-
-    stopwords = {
-        "the",
-        "and",
-        "for",
-        "with",
-        "from",
-        "that",
-        "this",
-        "have",
-        "has",
-        "into",
-        "then",
-        "your",
-        "about",
-        "what",
-        "when",
-        "where",
-        "which",
-        "will",
-        "shall",
-        "would",
-        "could",
-        "should",
-        "are",
-        "was",
-        "were",
-        "been",
-        "being",
-        "you",
-        "not",
-        "but",
-        "use",
-        "using",
-        "used",
-        "task",
-        "note",
-        "summary",
-        "decision",
-    }
 
     for r in rows:
         kind = str(r["kind"] or "").strip().lower() or "unknown"
@@ -3707,7 +3739,7 @@ def build_user_profile(
             t = tk.strip()
             if not t:
                 continue
-            if t in stopwords:
+            if t in _PROFILE_STOPWORDS:
                 continue
             if t.isascii() and len(t) < 3:
                 continue
@@ -3746,6 +3778,115 @@ def build_user_profile(
             "preferences": preferences[:8],
             "goals": goals[:8],
             "active_hours_utc": active_hours,
+        },
+    }
+
+
+def analyze_profile_drift(
+    *,
+    paths: MemoryPaths,
+    schema_sql_path: Path,
+    project_id: str = "",
+    session_id: str = "",
+    recent_days: int = 14,
+    baseline_days: int = 120,
+    limit: int = 800,
+) -> dict[str, Any]:
+    """Estimate profile drift by comparing recent and baseline memory traces."""
+    ensure_storage(paths, schema_sql_path)
+    recent_days = max(1, min(60, int(recent_days)))
+    baseline_days = max(recent_days + 1, min(720, int(baseline_days)))
+    limit = max(80, min(4000, int(limit)))
+    now = datetime.now(timezone.utc)
+    recent_cutoff = now - timedelta(days=recent_days)
+    baseline_cutoff = now - timedelta(days=baseline_days)
+    baseline_cutoff_iso = baseline_cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    with _sqlite_connect(paths.sqlite_path, timeout=6.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT summary, body_text, tags_json, updated_at
+            FROM memories
+            WHERE kind NOT IN ('retrieve')
+              AND updated_at >= ?
+              AND (json_extract(scope_json, '$.project_id') = ? OR ? = '')
+              AND (COALESCE(json_extract(source_json, '$.session_id'), '') = ? OR ? = '')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (baseline_cutoff_iso, project_id, project_id, session_id, session_id, limit),
+        ).fetchall()
+
+    recent_rows: list[sqlite3.Row] = []
+    baseline_rows: list[sqlite3.Row] = []
+    for r in rows:
+        dt = _parse_iso_dt(str(r["updated_at"] or ""))
+        if dt >= recent_cutoff:
+            recent_rows.append(r)
+        else:
+            baseline_rows.append(r)
+
+    recent_terms_counts, recent_tags_counts = _profile_term_tag_counts(recent_rows)
+    baseline_terms_counts, baseline_tags_counts = _profile_term_tag_counts(baseline_rows)
+
+    top_recent_terms = sorted(recent_terms_counts.items(), key=lambda x: x[1], reverse=True)[:20]
+    top_baseline_terms = sorted(baseline_terms_counts.items(), key=lambda x: x[1], reverse=True)[:20]
+    top_recent_tags = sorted(recent_tags_counts.items(), key=lambda x: x[1], reverse=True)[:14]
+    top_baseline_tags = sorted(baseline_tags_counts.items(), key=lambda x: x[1], reverse=True)[:14]
+
+    set_recent_terms = {k for k, _ in top_recent_terms}
+    set_baseline_terms = {k for k, _ in top_baseline_terms}
+    set_recent_tags = {k for k, _ in top_recent_tags}
+    set_baseline_tags = {k for k, _ in top_baseline_tags}
+
+    term_overlap = _jaccard(set_recent_terms, set_baseline_terms)
+    tag_overlap = _jaccard(set_recent_tags, set_baseline_tags)
+    drift_score = max(0.0, min(1.0, 1.0 - ((0.65 * term_overlap) + (0.35 * tag_overlap))))
+
+    if not baseline_rows or len(recent_rows) < 3:
+        status = "insufficient"
+        summary = "insufficient data to estimate stable profile drift yet"
+    elif drift_score >= 0.55:
+        status = "high"
+        summary = "high profile drift: recent focus differs strongly from historical baseline"
+    elif drift_score >= 0.32:
+        status = "moderate"
+        summary = "moderate profile drift: recent focus partially diverges from baseline"
+    else:
+        status = "low"
+        summary = "low profile drift: recent focus remains largely consistent"
+
+    emerged_terms = [{"term": k, "count": int(v)} for k, v in top_recent_terms if k not in set_baseline_terms][:8]
+    emerged_tags = [{"tag": k, "count": int(v)} for k, v in top_recent_tags if k not in set_baseline_tags][:8]
+
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "session_id": session_id,
+        "window": {
+            "recent_days": int(recent_days),
+            "baseline_days": int(baseline_days),
+            "recent_cutoff_utc": recent_cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "baseline_cutoff_utc": baseline_cutoff_iso,
+        },
+        "counts": {
+            "recent": int(len(recent_rows)),
+            "baseline": int(len(baseline_rows)),
+            "total": int(len(rows)),
+        },
+        "drift": {
+            "status": status,
+            "score": round(float(drift_score), 4),
+            "term_overlap": round(float(term_overlap), 4),
+            "tag_overlap": round(float(tag_overlap), 4),
+            "summary": summary,
+            "emerged_terms": emerged_terms,
+            "emerged_tags": emerged_tags,
+            "top_recent_terms": [{"term": k, "count": int(v)} for k, v in top_recent_terms[:10]],
+            "top_recent_tags": [{"tag": k, "count": int(v)} for k, v in top_recent_tags[:10]],
+            "top_baseline_terms": [{"term": k, "count": int(v)} for k, v in top_baseline_terms[:10]],
+            "top_baseline_tags": [{"tag": k, "count": int(v)} for k, v in top_baseline_tags[:10]],
         },
     }
 

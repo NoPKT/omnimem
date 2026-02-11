@@ -8,6 +8,8 @@
 - Feedback loop: add explicit memory feedback operation (`omnimem feedback` / `POST /api/memory/feedback`) supporting positive/negative/forget/correct signals with deterministic score updates.
 - Retrieval upgrade: add profile-aware re-ranking (`retrieve --profile-aware`) and expose profile settings in retrieval explain output; WebUI smart retrieval now enables profile bias by default.
 - Governance upgrade: adaptive threshold inference now incorporates explicit memory feedback distribution (`memory.feedback`) so negative/forget-heavy periods make demotion easier and promotion stricter.
+- Profile analytics: add profile drift detection (`omnimem profile-drift` / `GET /api/profile/drift`) to compare recent focus against baseline and surface emerged terms/tags.
+- WebUI cleanup: unify repeated boolean query parsing with shared `_parse_bool_param` helper.
 
 ## 0.2.21 - 2026-02-11
 

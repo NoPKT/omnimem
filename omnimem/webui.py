@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__ as OMNIMEM_VERSION
 from .core import (
     LAYER_SET,
+    analyze_profile_drift,
     apply_decay,
     apply_memory_feedback,
     build_user_profile,
@@ -4835,6 +4836,17 @@ def _parse_float_param(raw: Any, *, default: float, lo: float, hi: float) -> flo
     return max(float(lo), min(float(hi), v))
 
 
+def _parse_bool_param(raw: Any, *, default: bool = False) -> bool:
+    s = str(raw if raw is not None else "").strip().lower()
+    if not s:
+        return bool(default)
+    if s in {"1", "true", "on", "yes", "y"}:
+        return True
+    if s in {"0", "false", "off", "no", "n"}:
+        return False
+    return bool(default)
+
+
 def _cache_get(
     cache: dict[Any, tuple[float, dict[str, Any]]],
     key: Any,
@@ -5734,8 +5746,8 @@ def run_webui(
                 depth = _parse_int_param(q.get("depth", ["2"])[0], default=2, lo=1, hi=4)
                 per_hop = _parse_int_param(q.get("per_hop", ["6"])[0], default=6, lo=1, hi=30)
                 ranking_mode = q.get("ranking_mode", ["hybrid"])[0].strip().lower() or "hybrid"
-                diversify = str(q.get("diversify", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
-                profile_aware = str(q.get("profile_aware", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
+                diversify = _parse_bool_param(q.get("diversify", ["1"])[0], default=True)
+                profile_aware = _parse_bool_param(q.get("profile_aware", ["1"])[0], default=True)
                 profile_weight = _parse_float_param(q.get("profile_weight", ["0.35"])[0], default=0.35, lo=0.0, hi=1.0)
                 dedup_mode = _normalize_dedup_mode(q.get("dedup", ["off"])[0])
                 mmr_lambda = _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95)
@@ -5997,7 +6009,7 @@ def run_webui(
             if parsed.path == "/api/governance/explain":
                 q = parse_qs(parsed.query)
                 mem_id = q.get("id", [""])[0].strip()
-                adaptive = str(q.get("adaptive", ["1"])[0]).strip().lower() not in {"0", "false", "off", "no"}
+                adaptive = _parse_bool_param(q.get("adaptive", ["1"])[0], default=True)
                 days = max(1, min(60, int(float(q.get("days", ["14"])[0]))))
                 if not mem_id:
                     self._send_json({"ok": False, "error": "missing id"}, 400)
@@ -6206,6 +6218,28 @@ def run_webui(
                         schema_sql_path=schema_sql_path,
                         project_id=project_id,
                         session_id=session_id,
+                        limit=limit,
+                    )
+                    self._send_json(out)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/profile/drift":
+                q = parse_qs(parsed.query)
+                project_id = q.get("project_id", [""])[0].strip()
+                session_id = q.get("session_id", [""])[0].strip()
+                recent_days = _parse_int_param(q.get("recent_days", ["14"])[0], default=14, lo=1, hi=60)
+                baseline_days = _parse_int_param(q.get("baseline_days", ["120"])[0], default=120, lo=2, hi=720)
+                limit = _parse_int_param(q.get("limit", ["800"])[0], default=800, lo=80, hi=4000)
+                try:
+                    out = analyze_profile_drift(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        project_id=project_id,
+                        session_id=session_id,
+                        recent_days=recent_days,
+                        baseline_days=baseline_days,
                         limit=limit,
                     )
                     self._send_json(out)

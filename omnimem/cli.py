@@ -29,6 +29,7 @@ from .adapters import (
 from .core import (
     KIND_SET,
     LAYER_SET,
+    analyze_profile_drift,
     apply_decay,
     build_user_profile,
     build_raptor_digest,
@@ -330,6 +331,22 @@ def cmd_profile(args: argparse.Namespace) -> int:
         project_id=str(args.project_id or "").strip(),
         session_id=str(args.session_id or "").strip(),
         limit=int(args.limit),
+    )
+    print_json(out)
+    return 0 if out.get("ok") else 1
+
+
+def cmd_profile_drift(args: argparse.Namespace) -> int:
+    cfg = load_config(cfg_path_arg(args))
+    paths = resolve_paths(cfg)
+    out = analyze_profile_drift(
+        paths=paths,
+        schema_sql_path=schema_sql_path(),
+        project_id=str(args.project_id or "").strip(),
+        session_id=str(args.session_id or "").strip(),
+        recent_days=int(getattr(args, "recent_days", 14)),
+        baseline_days=int(getattr(args, "baseline_days", 120)),
+        limit=int(getattr(args, "limit", 800)),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -1968,6 +1985,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_profile.add_argument("--session-id", default="", help="optional session filter")
     p_profile.add_argument("--limit", type=int, default=240)
     p_profile.set_defaults(func=cmd_profile)
+
+    p_profile_drift = sub.add_parser("profile-drift", help="analyze recent-vs-baseline profile drift")
+    p_profile_drift.add_argument("--config", help="path to omnimem config json")
+    p_profile_drift.add_argument("--project-id", default="", help="optional project filter")
+    p_profile_drift.add_argument("--session-id", default="", help="optional session filter")
+    p_profile_drift.add_argument("--recent-days", type=int, default=14)
+    p_profile_drift.add_argument("--baseline-days", type=int, default=120)
+    p_profile_drift.add_argument("--limit", type=int, default=800)
+    p_profile_drift.set_defaults(func=cmd_profile_drift)
 
     p_feedback = sub.add_parser("feedback", help="apply explicit feedback to one memory")
     p_feedback.add_argument("--config", help="path to omnimem config json")
