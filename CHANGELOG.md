@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.17
+
+- WebUI: add maintenance impact forecast + progressive disclosure UX (`risk_level`, expected touches, and collapsible explain details) and fix Guided Check preview counters to consume forecast output consistently.
+- Wrapper lifecycle: `omnimem codex/claude` now default to on-demand sidecar lifecycle and emit daemon sync-status hints on startup when auto-sync is disabled or unhealthy.
+- Runtime coordination: move sidecar pid/lease/marker coordination to a per-user global runtime directory (keyed by `host:port`), decoupling parallel wrapper safety from `OMNIMEM_HOME` and reducing `address already in use` issues across projects.
+- CLI: add `omnimem stop` / `omnimem stop --all` for explicit sidecar cleanup and endpoint-level troubleshooting.
+- Versioning: align Python runtime version and npm package version to `0.2.17`.
+
 ## 0.2.14
 
 - WebUI: add on-demand sidecar lifecycle for `omnimem codex/claude` via `--webui-on-demand` (or `OMNIMEM_WEBUI_ON_DEMAND=1`). WebUI auto-stops when the last active wrapper session exits.
