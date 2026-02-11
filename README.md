@@ -82,7 +82,13 @@ bash scripts/detach_project.sh /path/to/project
 Pre-check before npm publish:
 
 ```bash
-omnimem preflight --path .
+npm run release:gate
+```
+
+Optional (partial gate):
+
+```bash
+bash scripts/release_gate.sh --skip-doctor --project-id OM --home ./.omnimem_gate
 ```
 
 After publishing to npm, end users can run:

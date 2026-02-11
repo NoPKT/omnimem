@@ -22,12 +22,14 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Frontier retrieval smoke
+      - name: Release gate smoke
         run: |
-          export OMNIMEM_HOME="$RUNNER_TEMP/omnimem-home"
-          python -m omnimem.cli raptor --project-id OM
-          python -m omnimem.cli enhance --project-id OM
-          python scripts/eval_locomo_style.py --dataset eval/locomo_style.sample.jsonl --out "$RUNNER_TEMP/locomo-report.json"
+          bash scripts/release_gate.sh \
+            --allow-clean \
+            --skip-doctor \
+            --skip-pack \
+            --project-id OM \
+            --home "$RUNNER_TEMP/omnimem-home"
 
   pack:
     runs-on: ubuntu-latest

@@ -3,9 +3,13 @@
 ## Pre-check
 
 ```bash
-omnimem preflight --path .
-npm_config_cache=/tmp/omnimem-npm-cache npm run pack:check
-bash scripts/verify_phase_d.sh
+npm run release:gate
+```
+
+If needed, you can run a partial gate:
+
+```bash
+bash scripts/release_gate.sh --skip-doctor --project-id OM --home ./.omnimem_gate
 ```
 
 ## Publish
