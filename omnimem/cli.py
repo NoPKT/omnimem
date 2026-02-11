@@ -1271,6 +1271,120 @@ def cmd_webui_guard(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stop(args: argparse.Namespace) -> int:
+    fallback_home: Path | None = None
+    cfgp = cfg_path_arg(args)
+    if cfgp:
+        try:
+            cfg = load_config(cfgp)
+            fallback_home = resolve_paths(cfg).root
+        except Exception:
+            fallback_home = None
+    if fallback_home is None:
+        raw_home = os.getenv("OMNIMEM_HOME", "").strip()
+        if raw_home:
+            fallback_home = Path(raw_home).expanduser()
+
+    runtime_dir = _resolve_shared_runtime_dir(fallback_home=fallback_home)
+    if bool(getattr(args, "all", False)):
+        stopped: list[dict[str, Any]] = []
+        for fp in sorted(runtime_dir.glob("webui-*.pid")):
+            pid = 0
+            host = ""
+            port = 0
+            try:
+                obj = json.loads(fp.read_text(encoding="utf-8"))
+                pid = int(obj.get("pid") or 0)
+                host = str(obj.get("host") or "")
+                port = int(obj.get("port") or 0)
+            except Exception:
+                pid = 0
+            alive_before = _pid_alive(pid) if pid > 0 else False
+            _kill_webui(pid)
+            alive_after = _pid_alive(pid) if pid > 0 else False
+            try:
+                fp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            stopped.append(
+                {
+                    "pid": pid,
+                    "host": host,
+                    "port": port,
+                    "alive_before": alive_before,
+                    "alive_after": alive_after,
+                    "stopped": bool(alive_before and not alive_after),
+                }
+            )
+
+        for m in runtime_dir.glob("webui-*.managed.json"):
+            try:
+                m.unlink(missing_ok=True)
+            except Exception:
+                pass
+        leases_root = runtime_dir / "webui_leases"
+        if leases_root.exists():
+            for fp in leases_root.rglob("*.json"):
+                try:
+                    fp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            for d in sorted(leases_root.rglob("*"), reverse=True):
+                if d.is_dir():
+                    try:
+                        d.rmdir()
+                    except Exception:
+                        pass
+            try:
+                leases_root.rmdir()
+            except Exception:
+                pass
+        print_json({"ok": True, "all": True, "runtime_dir": str(runtime_dir), "stopped": stopped})
+        return 0
+
+    host = str(getattr(args, "host", "127.0.0.1"))
+    port = int(getattr(args, "port", 8765))
+    pid = _read_webui_pid(runtime_dir, host=host, port=port)
+    alive_before = _pid_alive(pid) if pid > 0 else False
+    _kill_webui(pid)
+    alive_after = _pid_alive(pid) if pid > 0 else False
+
+    try:
+        _webui_pid_file(runtime_dir, host=host, port=port).unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        _webui_managed_marker(runtime_dir, host=host, port=port).unlink(missing_ok=True)
+    except Exception:
+        pass
+    lease_dir = _webui_leases_dir(runtime_dir, host=host, port=port)
+    if lease_dir.exists():
+        for fp in lease_dir.glob("lease-*.json"):
+            try:
+                fp.unlink(missing_ok=True)
+            except Exception:
+                pass
+        try:
+            lease_dir.rmdir()
+        except Exception:
+            pass
+
+    print_json(
+        {
+            "ok": True,
+            "all": False,
+            "runtime_dir": str(runtime_dir),
+            "host": host,
+            "port": port,
+            "pid": pid,
+            "alive_before": alive_before,
+            "alive_after": alive_after,
+            "stopped": bool(alive_before and not alive_after),
+        }
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omnimem")
     p.add_argument("--config", dest="global_config", help="path to omnimem config json")
@@ -1540,6 +1654,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_guard.add_argument("--lease", required=True)
     p_guard.add_argument("--stop-when-idle", action="store_true")
     p_guard.set_defaults(func=cmd_webui_guard)
+
+    p_stop = sub.add_parser("stop", help="stop wrapper-managed webui sidecar")
+    p_stop.add_argument("--config", help="path to omnimem config json")
+    p_stop.add_argument("--host", default="127.0.0.1")
+    p_stop.add_argument("--port", type=int, default=8765)
+    p_stop.add_argument("--all", action="store_true", help="stop all known sidecar endpoints and cleanup runtime leases")
+    p_stop.set_defaults(func=cmd_stop)
 
     p_cfg_path = sub.add_parser("config-path", help="print active config path")
     p_cfg_path.add_argument("--config", help="path to omnimem config json")

@@ -101,6 +101,13 @@ omnimem codex
 omnimem claude
 ```
 
+Stop sidecar explicitly (for troubleshooting):
+
+```bash
+omnimem stop
+omnimem stop --all
+```
+
 Single turn:
 
 ```bash

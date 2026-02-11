@@ -45,6 +45,16 @@ class CLIDemandWebUITest(unittest.TestCase):
         )
         self.assertEqual(args.cmd, "webui-guard")
 
+    def test_stop_command_is_registered(self) -> None:
+        p = build_parser()
+        args = p.parse_args(["stop", "--host", "127.0.0.1", "--port", "8765"])
+        self.assertEqual(args.cmd, "stop")
+
+    def test_stop_all_flag_is_parsable(self) -> None:
+        p = build_parser()
+        args = p.parse_args(["stop", "--all"])
+        self.assertTrue(getattr(args, "all", False))
+
 
 if __name__ == "__main__":
     unittest.main()
