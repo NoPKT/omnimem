@@ -1702,7 +1702,7 @@ HTML_PAGE = """<!doctype html>
         lines.push(`- ${x.event_time || ''} ${x.to_layer || '?'} -> ${x.from_layer || '?'}`);
       }
       if ((d.items || []).length > 12) lines.push(`... and ${(d.items || []).length - 12} more`);
-      if (pv) pv.textContent = lines.join('\n');
+      if (pv) pv.textContent = lines.join('\\n');
     }
 
     async function loadGovernanceExplain(memoryId) {
@@ -1732,7 +1732,7 @@ HTML_PAGE = """<!doctype html>
         `demote checks: layer=${!!dm.layer_ok} vol_or_stab=${!!dm.volatility_or_stability_ok} reuse=${!!dm.reuse_ok}`,
         `adaptive: ${d.adaptive ? 'on' : 'off'} (${d.days || 14}d window)`,
       ];
-      if (recoExplain) recoExplain.textContent = lines.join('\n');
+      if (recoExplain) recoExplain.textContent = lines.join('\\n');
     }
 
     async function runHealthCheck() {
@@ -1756,7 +1756,7 @@ HTML_PAGE = """<!doctype html>
         `daemon running=${!!daemon.running} enabled=${!!daemon.enabled} success=${daemon.success_count || 0} failure=${daemon.failure_count || 0} error_kind=${daemon.last_error_kind || 'none'}`,
         `issues: ${(diag.issues || []).join(' | ') || '(none)'}`,
         `actions: ${(diag.actions || []).join(' | ') || '(none)'}`,
-      ].join('\n');
+      ].join('\\n');
     }
 
     async function runGuidedCheck() {
@@ -1775,7 +1775,7 @@ HTML_PAGE = """<!doctype html>
         '1) health check done',
         `2) preview: decay=${d.decay?.count || 0} promote=${d.consolidate?.promote?.length || 0} demote=${d.consolidate?.demote?.length || 0} compressed=${d.compress?.compressed ? 1 : 0}`,
         '3) open Insights tab and review Governance/Events before apply',
-      ].join('\n');
+      ].join('\\n');
       setActiveTab('insightsTab');
       await loadInsights();
     }
