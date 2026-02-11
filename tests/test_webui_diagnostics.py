@@ -3,12 +3,15 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+import sqlite3
 
-from omnimem.core import MemoryPaths, ensure_storage
+from omnimem.core import MemoryPaths, ensure_storage, write_memory
 from omnimem.webui import (
     _evaluate_governance_action,
     _infer_memory_route,
     _normalize_memory_route,
+    _quality_window_summary,
     _run_health_check,
 )
 
@@ -86,6 +89,54 @@ class WebUIDiagnosticsTest(unittest.TestCase):
             self.assertTrue(out.get("ok"))
             self.assertTrue(out.get("storage", {}).get("sqlite_ok"))
             self.assertIn(out.get("health_level"), {"ok", "warn", "error"})
+
+    def test_quality_window_summary_counts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="om-webui-quality.") as d:
+            root = Path(d)
+            paths = MemoryPaths(
+                root=root,
+                markdown_root=root / "data" / "markdown",
+                jsonl_root=root / "data" / "jsonl",
+                sqlite_path=root / "data" / "omnimem.db",
+            )
+            ensure_storage(paths, _schema_sql_path())
+            write_memory(
+                paths=paths,
+                schema_sql_path=_schema_sql_path(),
+                layer="short",
+                kind="note",
+                summary="quality window write",
+                body="b",
+                tags=[],
+                refs=[],
+                cred_refs=[],
+                tool="test",
+                account="default",
+                device="local",
+                session_id="s-q",
+                project_id="OM",
+                workspace=str(root),
+                importance=0.8,
+                confidence=0.7,
+                stability=0.6,
+                reuse_count=0,
+                volatility=0.2,
+                event_type="memory.write",
+            )
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            start = (now - timedelta(days=1)).isoformat()
+            end = (now + timedelta(days=1)).isoformat()
+            with sqlite3.connect(paths.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                out = _quality_window_summary(
+                    conn,
+                    start_iso=start,
+                    end_iso=end,
+                    project_id="OM",
+                    session_id="s-q",
+                )
+            self.assertGreaterEqual(int(out.get("writes", 0)), 1)
+            self.assertGreater(float(out.get("avg_importance", 0.0)), 0.0)
 
 
 if __name__ == "__main__":

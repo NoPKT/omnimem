@@ -478,6 +478,9 @@ HTML_PAGE = """<!doctype html>
 	            <button id=\"btnBoardPromote\" style=\"margin-top:0\" disabled>Promote → long</button>
 	            <button id=\"btnBoardDemote\" class=\"secondary\" style=\"margin-top:0\" disabled>Demote → short</button>
 	            <button id=\"btnBoardArchive\" class=\"secondary\" style=\"margin-top:0\" disabled>Archive</button>
+              <button id=\"btnBoardTagEpisodic\" class=\"secondary\" style=\"margin-top:0\" disabled>Tag episodic</button>
+              <button id=\"btnBoardTagSemantic\" class=\"secondary\" style=\"margin-top:0\" disabled>Tag semantic</button>
+              <button id=\"btnBoardTagProcedural\" class=\"secondary\" style=\"margin-top:0\" disabled>Tag procedural</button>
 	            <button id=\"btnBoardClear\" class=\"secondary\" style=\"margin-top:0\" disabled>Clear</button>
 	            <span id=\"boardSelInfo\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
@@ -492,6 +495,11 @@ HTML_PAGE = """<!doctype html>
         <div class=\"card\">
           <h3 data-i18n=\"ins_activity\">Activity (14d)</h3>
           <div id=\"insActivity\" class=\"small\"></div>
+        </div>
+        <div class=\"card\">
+          <h3>Memory Quality (Week)</h3>
+          <div class=\"small\">Conflict/reuse/decay and freshness metrics with week-over-week delta.</div>
+          <div id=\"insQuality\" class=\"small\"></div>
         </div>
         <div class=\"card\">
           <h3 data-i18n=\"ins_govern\">Governance</h3>
@@ -937,6 +945,9 @@ HTML_PAGE = """<!doctype html>
       <div class=\"divider\"></div>
       <div class=\"small\"><b>Refs</b></div>
 	      <div id=\"dRefs\" class=\"small\"></div>
+      <div class=\"divider\"></div>
+      <div class=\"small\"><b>Move History</b></div>
+      <div id=\"dMoveHistory\" class=\"small\"></div>
 	      <div class=\"divider\"></div>
 	      <div class=\"small\"><b>Body</b></div>
 	      <div id=\"dEditBox\" style=\"margin-top:8px; display:none\">
@@ -1454,6 +1465,8 @@ HTML_PAGE = """<!doctype html>
 	      document.getElementById('dRefs').innerHTML = refs.length
 	        ? refs.map(r => `<div class="mono">${escHtml(r.type || '')}:${escHtml(r.target || '')}${r.note ? ' ' + escHtml(r.note) : ''}</div>`).join('')
 	        : '<span class="small">(none)</span>';
+      const mh = document.getElementById('dMoveHistory');
+      if (mh) mh.innerHTML = '<span class="small">loading...</span>';
 
 	      document.getElementById('dBodyView').textContent = d.body || '';
 	      const edS = document.getElementById('dEditSummary');
@@ -1479,9 +1492,48 @@ HTML_PAGE = """<!doctype html>
       btnArchive.onclick = () => moveLayer(m.id, 'archive');
       if (reco) reco.textContent = 'Recommendation: analyzing...';
       if (recoExplain) recoExplain.textContent = '';
-      await loadGovernanceExplain(m.id);
+	      await loadGovernanceExplain(m.id);
+      await loadMoveHistory(m.id);
 
-      showDrawer(true);
+	      showDrawer(true);
+	    }
+
+    async function loadMoveHistory(memoryId) {
+      const el = document.getElementById('dMoveHistory');
+      if (!el) return;
+      const d = await jget('/api/memory/move-history?id=' + encodeURIComponent(memoryId) + '&limit=8');
+      if (!d.ok) {
+        el.innerHTML = `<span class="err">${escHtml(d.error || 'move history failed')}</span>`;
+        return;
+      }
+      const items = d.items || [];
+      if (!items.length) {
+        el.innerHTML = '<span class="small">(no move history)</span>';
+        return;
+      }
+      el.innerHTML = items.map(x => {
+        const evt = String(x.event_id || '');
+        return `<div style="display:flex; justify-content:space-between; gap:8px; margin:6px 0; padding:6px; border:1px solid var(--line); border-radius:10px">
+          <div class="small mono">${escHtml(x.event_time || '')} ${escHtml(x.from_layer || '?')} -> ${escHtml(x.to_layer || '?')}</div>
+          <button data-undo-evt="${escHtml(evt)}" class="secondary" style="margin-top:0">Undo</button>
+        </div>`;
+      }).join('');
+      el.querySelectorAll('button[data-undo-evt]').forEach(btn => {
+        btn.onclick = async () => {
+          const event_id = btn.dataset.undoEvt || '';
+          if (!event_id) return;
+          const r = await jpost('/api/memory/undo-move-event', { id: memoryId, event_id });
+          if (!r.ok) {
+            toast('Memory', r.error || 'undo event failed', false);
+            return;
+          }
+          toast('Memory', `undone by event ${event_id.slice(0,8)}...`, true);
+          await loadInsights();
+          await loadMem();
+          await loadLayerStats();
+          await openMemory(memoryId);
+        };
+      });
     }
 
     async function loadGovernanceExplain(memoryId) {
@@ -1819,12 +1871,18 @@ HTML_PAGE = """<!doctype html>
 	      const btnP = document.getElementById('btnBoardPromote');
 	      const btnD = document.getElementById('btnBoardDemote');
 	      const btnA = document.getElementById('btnBoardArchive');
+        const btnTE = document.getElementById('btnBoardTagEpisodic');
+        const btnTS = document.getElementById('btnBoardTagSemantic');
+        const btnTP = document.getElementById('btnBoardTagProcedural');
 	      const btnC = document.getElementById('btnBoardClear');
 	      const info = document.getElementById('boardSelInfo');
 	      if (btnSel) btnSel.textContent = boardSelectMode ? 'Select: on' : 'Select: off';
 	      if (btnP) btnP.disabled = n === 0;
 	      if (btnD) btnD.disabled = n === 0;
 	      if (btnA) btnA.disabled = n === 0;
+        if (btnTE) btnTE.disabled = n === 0;
+        if (btnTS) btnTS.disabled = n === 0;
+        if (btnTP) btnTP.disabled = n === 0;
 	      if (btnC) btnC.disabled = n === 0;
 	      if (info) info.textContent = n ? `${n} selected` : '';
 	    }
@@ -1868,6 +1926,20 @@ HTML_PAGE = """<!doctype html>
 	      await loadLayerStats();
 	      toast('Batch', `${ok} moved → ${toLayer}${fail ? `, ${fail} failed` : ''}`, fail === 0);
 	    }
+
+    async function batchTagSelected(route) {
+      const uniq = Array.from(new Set(Array.from(selectedBoardIds).filter(Boolean)));
+      if (!uniq.length) return;
+      const d = await jpost('/api/memory/tag-batch', { ids: uniq, route });
+      if (!d.ok) {
+        toast('Batch', d.error || 'batch tag failed', false);
+        return;
+      }
+      clearBoardSelection();
+      await loadInsights();
+      await loadMem();
+      toast('Batch', `tagged ${d.updated || 0} as mem:${route}`, true);
+    }
 
 	    function readSessionArchiveOpts() {
 	      const fromRaw = (document.getElementById('sessArchiveFrom')?.value || 'instant,short').trim();
@@ -2088,6 +2160,7 @@ HTML_PAGE = """<!doctype html>
 	      await loadEvents(project_id, session_id);
 	      await loadEventStats(project_id, session_id);
 	      await loadMaintenanceSummary(project_id, session_id);
+        await loadQualitySummary(project_id, session_id);
 	    }
 	
 	    function boardColHtml(layer, count) {
@@ -2620,6 +2693,38 @@ HTML_PAGE = """<!doctype html>
 	        `<span class="pill"><b>event.update</b><span class="mono">${escHtml(String(ec['memory.update'] || 0))}</span></span>` +
 	        `</div>`;
 	    }
+
+    function deltaText(cur, prev) {
+      const c = Number(cur || 0);
+      const p = Number(prev || 0);
+      const d = c - p;
+      const sign = d > 0 ? '+' : '';
+      return `${c} (${sign}${d})`;
+    }
+
+    async function loadQualitySummary(project_id, session_id) {
+      const pid = String(project_id || '').trim();
+      const sid = String(session_id || '').trim();
+      const d = await jget('/api/quality/summary?days=7&project_id=' + encodeURIComponent(pid) + '&session_id=' + encodeURIComponent(sid));
+      const el = document.getElementById('insQuality');
+      if (!el) return;
+      if (!d.ok) {
+        el.innerHTML = `<span class="err">${escHtml(d.error || 'quality summary failed')}</span>`;
+        return;
+      }
+      const cur = d.current || {};
+      const prev = d.previous || {};
+      el.innerHTML = [
+        `<div class="pill"><b>conflicts</b><span class="mono">${escHtml(deltaText(cur.conflicts, prev.conflicts))}</span></div>`,
+        `<div class="pill"><b>reuse events</b><span class="mono">${escHtml(deltaText(cur.reuse_events, prev.reuse_events))}</span></div>`,
+        `<div class="pill"><b>decay events</b><span class="mono">${escHtml(deltaText(cur.decay_events, prev.decay_events))}</span></div>`,
+        `<div class="pill"><b>writes</b><span class="mono">${escHtml(deltaText(cur.writes, prev.writes))}</span></div>`,
+        `<div class="pill"><b>avg importance</b><span class="mono">${escHtml(String(Number(cur.avg_importance || 0).toFixed(3)))}</span></div>`,
+        `<div class="pill"><b>avg confidence</b><span class="mono">${escHtml(String(Number(cur.avg_confidence || 0).toFixed(3)))}</span></div>`,
+        `<div class="pill"><b>avg stability</b><span class="mono">${escHtml(String(Number(cur.avg_stability || 0).toFixed(3)))}</span></div>`,
+        `<div class="pill"><b>avg volatility</b><span class="mono">${escHtml(String(Number(cur.avg_volatility || 0).toFixed(3)))}</span></div>`,
+      ].join(' ');
+    }
 
 	    async function renderEventsTable() {
 	      selectedEventIdx = -1;
@@ -3618,6 +3723,12 @@ HTML_PAGE = """<!doctype html>
 	      if (bD) bD.onclick = () => batchMove(Array.from(selectedBoardIds), 'short');
 	      const bA = document.getElementById('btnBoardArchive');
 	      if (bA) bA.onclick = () => batchMove(Array.from(selectedBoardIds), 'archive');
+        const bTE = document.getElementById('btnBoardTagEpisodic');
+        if (bTE) bTE.onclick = () => batchTagSelected('episodic');
+        const bTS = document.getElementById('btnBoardTagSemantic');
+        if (bTS) bTS.onclick = () => batchTagSelected('semantic');
+        const bTP = document.getElementById('btnBoardTagProcedural');
+        if (bTP) bTP.onclick = () => batchTagSelected('procedural');
 	      const bC = document.getElementById('btnBoardClear');
 	      if (bC) bC.onclick = () => clearBoardSelection();
 	      const liveBtn = document.getElementById('btnLiveToggle');
@@ -4163,6 +4274,97 @@ def _run_health_check(paths, daemon_state: dict[str, Any]) -> dict[str, Any]:
             "issues": issues,
             "actions": actions,
         },
+    }
+
+
+def _quality_window_summary(conn: sqlite3.Connection, *, start_iso: str, end_iso: str, project_id: str, session_id: str) -> dict[str, Any]:
+    where_scope = ""
+    args_scope: list[Any] = []
+    if project_id:
+        where_scope += " AND json_extract(scope_json, '$.project_id') = ?"
+        args_scope.append(project_id)
+    if session_id:
+        where_scope += " AND COALESCE(json_extract(source_json, '$.session_id'), '') = ?"
+        args_scope.append(session_id)
+
+    mem_row = conn.execute(
+        f"""
+        SELECT
+          COALESCE(AVG(importance_score), 0.0) AS avg_importance,
+          COALESCE(AVG(confidence_score), 0.0) AS avg_confidence,
+          COALESCE(AVG(stability_score), 0.0) AS avg_stability,
+          COALESCE(AVG(volatility_score), 0.0) AS avg_volatility
+        FROM memories
+        WHERE updated_at >= ? AND updated_at < ?
+        {where_scope}
+        """,
+        (start_iso, end_iso, *args_scope),
+    ).fetchone()
+
+    if project_id or session_id:
+        # Project/session are stored in payload envelope; use a join to filter robustly.
+        ev_rows = conn.execute(
+            """
+            SELECT event_type, payload_json
+            FROM memory_events
+            WHERE event_time >= ? AND event_time < ?
+            ORDER BY event_time DESC
+            LIMIT 20000
+            """,
+            (start_iso, end_iso),
+        ).fetchall()
+    else:
+        ev_rows = conn.execute(
+            """
+            SELECT event_type, payload_json
+            FROM memory_events
+            WHERE event_time >= ? AND event_time < ?
+            ORDER BY event_time DESC
+            LIMIT 20000
+            """,
+            (start_iso, end_iso),
+        ).fetchall()
+
+    counts = {
+        "conflicts": 0,
+        "reuse_events": 0,
+        "decay_events": 0,
+        "writes": 0,
+    }
+    for r in ev_rows:
+        et = str(r["event_type"] or "")
+        payload = {}
+        try:
+            payload = json.loads(r["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        env = payload.get("envelope") if isinstance(payload, dict) else {}
+        env = env if isinstance(env, dict) else {}
+        scope = env.get("scope") if isinstance(env.get("scope"), dict) else {}
+        source = env.get("source") if isinstance(env.get("source"), dict) else {}
+        pid = str(scope.get("project_id") or payload.get("project_id") or "").strip()
+        sid = str(source.get("session_id") or payload.get("session_id") or "").strip()
+        if project_id and pid != project_id:
+            continue
+        if session_id and sid != session_id:
+            continue
+        if et == "memory.sync":
+            kind = str((payload.get("daemon") or {}).get("last_error_kind", ""))
+            if kind == "conflict":
+                counts["conflicts"] += 1
+        elif et == "memory.reuse":
+            counts["reuse_events"] += 1
+        elif et == "memory.decay":
+            counts["decay_events"] += 1
+        elif et == "memory.write":
+            counts["writes"] += 1
+
+    return {
+        **counts,
+        "avg_importance": float(mem_row["avg_importance"] or 0.0),
+        "avg_confidence": float(mem_row["avg_confidence"] or 0.0),
+        "avg_stability": float(mem_row["avg_stability"] or 0.0),
+        "avg_volatility": float(mem_row["avg_volatility"] or 0.0),
     }
 
 
@@ -4947,6 +5149,46 @@ def run_webui(
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
 
+            if parsed.path == "/api/memory/move-history":
+                q = parse_qs(parsed.query)
+                mem_id = q.get("id", [""])[0].strip()
+                limit = max(1, min(50, int(float(q.get("limit", ["8"])[0]))))
+                if not mem_id:
+                    self._send_json({"ok": False, "error": "missing id"}, 400)
+                    return
+                try:
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute(
+                            """
+                            SELECT event_id, event_time, payload_json
+                            FROM memory_events
+                            WHERE memory_id = ? AND event_type = 'memory.promote'
+                            ORDER BY event_time DESC
+                            LIMIT ?
+                            """,
+                            (mem_id, limit),
+                        ).fetchall()
+                    items = []
+                    for r in rows:
+                        payload = {}
+                        try:
+                            payload = json.loads(r["payload_json"] or "{}")
+                        except Exception:
+                            payload = {}
+                        items.append(
+                            {
+                                "event_id": str(r["event_id"]),
+                                "event_time": str(r["event_time"]),
+                                "from_layer": str(payload.get("from_layer", "")),
+                                "to_layer": str(payload.get("to_layer", "")),
+                            }
+                        )
+                    self._send_json({"ok": True, "memory_id": mem_id, "items": items})
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
             if parsed.path == "/api/events":
                 q = parse_qs(parsed.query)
                 project_id = q.get("project_id", [""])[0].strip()
@@ -5241,6 +5483,48 @@ def run_webui(
                                 "demoted_total": demoted_total,
                             },
                             "event_counts": event_counts,
+                        }
+                    )
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/quality/summary":
+                q = parse_qs(parsed.query)
+                project_id = q.get("project_id", [""])[0].strip()
+                session_id = q.get("session_id", [""])[0].strip()
+                days = max(3, min(60, int(float(q.get("days", ["7"])[0]))))
+                now = datetime.now(timezone.utc).replace(microsecond=0)
+                cur_start = (now - timedelta(days=days)).isoformat()
+                prev_start = (now - timedelta(days=(2 * days))).isoformat()
+                cur_end = now.isoformat()
+                try:
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        cur = _quality_window_summary(
+                            conn,
+                            start_iso=cur_start,
+                            end_iso=cur_end,
+                            project_id=project_id,
+                            session_id=session_id,
+                        )
+                        prev = _quality_window_summary(
+                            conn,
+                            start_iso=prev_start,
+                            end_iso=cur_start,
+                            project_id=project_id,
+                            session_id=session_id,
+                        )
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "project_id": project_id,
+                            "session_id": session_id,
+                            "days": days,
+                            "current_window": {"start": cur_start, "end": cur_end},
+                            "previous_window": {"start": prev_start, "end": cur_start},
+                            "current": cur,
+                            "previous": prev,
                         }
                     )
                 except Exception as exc:  # pragma: no cover
@@ -5884,6 +6168,129 @@ def run_webui(
                             "undo_of_event_time": str(ev["event_time"]),
                             "from_layer": from_layer,
                             "to_layer": to_layer,
+                        }
+                    )
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/memory/undo-move-event":
+                try:
+                    mem_id = str(data.get("id", "")).strip()
+                    event_id = str(data.get("event_id", "")).strip()
+                    if not mem_id or not event_id:
+                        self._send_json({"ok": False, "error": "id and event_id are required"}, 400)
+                        return
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        ev = conn.execute(
+                            """
+                            SELECT event_id, payload_json, event_time
+                            FROM memory_events
+                            WHERE memory_id = ? AND event_id = ? AND event_type = 'memory.promote'
+                            LIMIT 1
+                            """,
+                            (mem_id, event_id),
+                        ).fetchone()
+                    if not ev:
+                        self._send_json({"ok": False, "error": "event not found"}, 404)
+                        return
+                    payload = json.loads(ev["payload_json"] or "{}")
+                    from_layer = str(payload.get("from_layer", "")).strip()
+                    to_layer = str(payload.get("to_layer", "")).strip()
+                    if not from_layer or not to_layer or from_layer == to_layer:
+                        self._send_json({"ok": False, "error": "invalid layer-move payload"}, 400)
+                        return
+                    out = move_memory_layer(
+                        paths=paths,
+                        schema_sql_path=schema_sql_path,
+                        memory_id=mem_id,
+                        new_layer=from_layer,
+                        tool="webui",
+                        account="default",
+                        device="local",
+                        session_id="webui-session",
+                    )
+                    self._send_json(
+                        {
+                            **out,
+                            "undo_of_event_id": str(ev["event_id"]),
+                            "undo_of_event_time": str(ev["event_time"]),
+                            "from_layer": from_layer,
+                            "to_layer": to_layer,
+                        },
+                        200 if out.get("ok") else 400,
+                    )
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/memory/tag-batch":
+                try:
+                    raw_ids = data.get("ids")
+                    route = _normalize_memory_route(str(data.get("route", "auto")))
+                    if route not in {"episodic", "semantic", "procedural"}:
+                        self._send_json({"ok": False, "error": "route must be episodic|semantic|procedural"}, 400)
+                        return
+                    if not isinstance(raw_ids, list):
+                        self._send_json({"ok": False, "error": "ids must be a list"}, 400)
+                        return
+                    ids = [str(x).strip() for x in raw_ids if str(x).strip()]
+                    ids = list(dict.fromkeys(ids))[:200]
+                    if not ids:
+                        self._send_json({"ok": False, "error": "no ids"}, 400)
+                        return
+                    updated = 0
+                    failed: list[str] = []
+                    placeholders = ",".join(["?"] * len(ids))
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute(
+                            f"""
+                            SELECT id, summary, body_text, tags_json
+                            FROM memories
+                            WHERE id IN ({placeholders})
+                            """,
+                            tuple(ids),
+                        ).fetchall()
+                    row_by_id = {str(r["id"]): r for r in rows}
+                    for mid in ids:
+                        r = row_by_id.get(mid)
+                        if not r:
+                            failed.append(mid)
+                            continue
+                        summary = str(r["summary"] or "").strip()
+                        body_text = str(r["body_text"] or "")
+                        m = re.match(r"^# .*\n\n([\s\S]*)$", body_text)
+                        body_plain = m.group(1) if m else body_text
+                        try:
+                            old_tags = [str(t).strip() for t in (json.loads(r["tags_json"] or "[]") or []) if str(t).strip()]
+                        except Exception:
+                            old_tags = []
+                        kept = [t for t in old_tags if not re.match(r"^mem:(episodic|semantic|procedural)$", t, flags=re.IGNORECASE)]
+                        next_tags = kept + [_route_tag(route)]
+                        out = update_memory_content(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            memory_id=mid,
+                            summary=summary,
+                            body=body_plain,
+                            tags=next_tags,
+                            tool="webui",
+                            account="default",
+                            device="local",
+                            session_id="webui-session",
+                        )
+                        if out.get("ok"):
+                            updated += 1
+                        else:
+                            failed.append(mid)
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "route": route,
+                            "updated": updated,
+                            "failed": failed,
                         }
                     )
                 except Exception as exc:  # pragma: no cover
