@@ -45,3 +45,14 @@ WebUI provides:
 - Failure kind classification in daemon metrics: `auth`, `network`, `conflict`, `unknown`
 - Remediation guidance is returned as `remediation_hint` in `/api/daemon`
 - When `last_error_kind=conflict`, WebUI shows a one-click recovery flow (`status -> pull -> push`)
+- Maintenance dashboard summary via `/api/maintenance/summary` (recent runs/decay/promote/demote and event counts)
+- Optional approval gate for apply actions: `webui.approval_required=true`
+- Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
+
+Recommended safe rollout:
+
+```bash
+PYTHONPATH=. python3 scripts/enable_governance_preview.py --days 7
+```
+
+After preview period, disable or clear `webui.maintenance_preview_only_until` in config and keep `approval_required=true`.

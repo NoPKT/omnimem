@@ -10,6 +10,7 @@ import sys
 import threading
 import traceback
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -616,6 +617,7 @@ HTML_PAGE = """<!doctype html>
 	            </label>
 	            <span id=\"autoMaintHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
+	          <div id=\"maintStats\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	        </div>
 	        <div class=\"card wide\">
 	          <h3>Governance Log</h3>
@@ -707,6 +709,7 @@ HTML_PAGE = """<!doctype html>
             <label><span>Maintenance Compress Sessions</span><input name=\"daemon_maintenance_compress_sessions\" type=\"number\" min=\"1\" max=\"20\" /></label>
             <label><span>Maintenance Compress Min Items</span><input name=\"daemon_maintenance_compress_min_items\" type=\"number\" min=\"2\" max=\"200\" /></label>
             <label><span>Approval Required For Apply</span><select name=\"webui_approval_required\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
+            <label><span>Preview-Only Until (ISO UTC)</span><input name=\"webui_maintenance_preview_only_until\" placeholder=\"2026-02-18T00:00:00+00:00\" /></label>
             <button type=\"submit\" data-i18n=\"btn_save\">Save Configuration</button>
           </form>
         </div>
@@ -1536,7 +1539,7 @@ HTML_PAGE = """<!doctype html>
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
         'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
         'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
-        'webui_approval_required'
+        'webui_approval_required','webui_maintenance_preview_only_until'
       ]) {
         const v = d[k];
         f.elements[k].value = (typeof v === 'boolean') ? String(v) : (v ?? '');
@@ -1800,7 +1803,7 @@ HTML_PAGE = """<!doctype html>
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
         'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
         'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items',
-        'webui_approval_required'
+        'webui_approval_required','webui_maintenance_preview_only_until'
       ]) payload[k] = f.elements[k].value;
       const d = await jpost('/api/config', payload);
       document.getElementById('status').innerHTML = d.ok ? `<span class="pill"><b class="ok">${t('cfg_saved')}</b></span>` : `<span class="pill"><b class="err">${t('cfg_failed')}</b></span>`;
@@ -1933,6 +1936,7 @@ HTML_PAGE = """<!doctype html>
 	      await loadSessions(project_id);
 	      await loadEvents(project_id, session_id);
 	      await loadEventStats(project_id, session_id);
+	      await loadMaintenanceSummary(project_id, session_id);
 	    }
 	
 	    function boardColHtml(layer, count) {
@@ -2438,7 +2442,32 @@ HTML_PAGE = """<!doctype html>
 	        await loadMem();
 	        await loadLayerStats();
 	        await loadEvents(pid, sid);
+	        await loadMaintenanceSummary(pid, sid);
 	      }
+	    }
+
+	    async function loadMaintenanceSummary(project_id, session_id) {
+	      const pid = String(project_id || '').trim();
+	      const sid = String(session_id || '').trim();
+	      const d = await jget('/api/maintenance/summary?days=7&project_id=' + encodeURIComponent(pid) + '&session_id=' + encodeURIComponent(sid));
+	      const el = document.getElementById('maintStats');
+	      if (!el) return;
+	      if (!d.ok) {
+	        el.innerHTML = `<span class="err">${escHtml(d.error || 'maintenance summary failed')}</span>`;
+	        return;
+	      }
+	      const ac = d.auto_maintenance || {};
+	      const ec = d.event_counts || {};
+	      el.innerHTML =
+	        `<div class="small"><b>Maintenance 7d</b></div>` +
+	        `<div class="row-btn">` +
+	        `<span class="pill"><b>runs</b><span class="mono">${escHtml(String(ac.runs || 0))}</span></span>` +
+	        `<span class="pill"><b>decay</b><span class="mono">${escHtml(String(ac.decay_total || 0))}</span></span>` +
+	        `<span class="pill"><b>promoted</b><span class="mono">${escHtml(String(ac.promoted_total || 0))}</span></span>` +
+	        `<span class="pill"><b>demoted</b><span class="mono">${escHtml(String(ac.demoted_total || 0))}</span></span>` +
+	        `<span class="pill"><b>event.decay</b><span class="mono">${escHtml(String(ec['memory.decay'] || 0))}</span></span>` +
+	        `<span class="pill"><b>event.update</b><span class="mono">${escHtml(String(ec['memory.update'] || 0))}</span></span>` +
+	        `</div>`;
 	    }
 
 	    async function renderEventsTable() {
@@ -3567,6 +3596,7 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "daemon_maintenance_compress_sessions": dm.get("maintenance_compress_sessions", 2),
         "daemon_maintenance_compress_min_items": dm.get("maintenance_compress_min_items", 8),
         "webui_approval_required": bool(wu.get("approval_required", False)),
+        "webui_maintenance_preview_only_until": str(wu.get("maintenance_preview_only_until", "")),
     }
 
 
@@ -3943,6 +3973,13 @@ def run_webui(
                     maintenance_consolidate_limit=int(daemon_state.get("maintenance_consolidate_limit", 80)),
                     maintenance_compress_sessions=int(daemon_state.get("maintenance_compress_sessions", 2)),
                     maintenance_compress_min_items=int(daemon_state.get("maintenance_compress_min_items", 8)),
+                    maintenance_adaptive_q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
+                    maintenance_adaptive_q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
+                    maintenance_adaptive_q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
+                    maintenance_adaptive_q_promote_vol=float(cfg.get("daemon", {}).get("adaptive_q_promote_vol", 0.42)),
+                    maintenance_adaptive_q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
+                    maintenance_adaptive_q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
+                    maintenance_adaptive_q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
                     retry_max_attempts=int(daemon_state.get("retry_max_attempts", daemon_retry_max_attempts)),
                     retry_initial_backoff=int(daemon_state.get("retry_initial_backoff", daemon_retry_initial_backoff)),
                     retry_max_backoff=int(daemon_state.get("retry_max_backoff", daemon_retry_max_backoff)),
@@ -4659,6 +4696,77 @@ def run_webui(
                     self._send_json({"ok": False, "error": str(exc)}, 500)
                 return
 
+            if parsed.path == "/api/maintenance/summary":
+                q = parse_qs(parsed.query)
+                project_id = q.get("project_id", [""])[0].strip()
+                session_id = q.get("session_id", [""])[0].strip()
+                days = max(1, min(60, int(float(q.get("days", ["7"])[0]))))
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat()
+                try:
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute(
+                            """
+                            SELECT body_text, updated_at
+                            FROM memories
+                            WHERE kind='summary'
+                              AND updated_at >= ?
+                              AND EXISTS (SELECT 1 FROM json_each(memories.tags_json) WHERE value='governance:auto-maintenance')
+                              AND (?='' OR json_extract(scope_json, '$.project_id') = ?)
+                            ORDER BY updated_at DESC
+                            LIMIT 300
+                            """,
+                            (cutoff, project_id, project_id),
+                        ).fetchall()
+                        runs = 0
+                        decay_total = 0
+                        promoted_total = 0
+                        demoted_total = 0
+                        for r in rows:
+                            body = str(r["body_text"] or "")
+                            if session_id and f"- session_id: {session_id}" not in body:
+                                continue
+                            runs += 1
+                            m1 = re.search(r"- decay_count: (\d+)", body)
+                            m2 = re.search(r"- promoted: (\d+)", body)
+                            m3 = re.search(r"- demoted: (\d+)", body)
+                            if m1:
+                                decay_total += int(m1.group(1))
+                            if m2:
+                                promoted_total += int(m2.group(1))
+                            if m3:
+                                demoted_total += int(m3.group(1))
+
+                        ev_rows = conn.execute(
+                            """
+                            SELECT event_type, COUNT(*) AS c
+                            FROM memory_events
+                            WHERE event_time >= ?
+                              AND event_type IN ('memory.decay','memory.update')
+                            GROUP BY event_type
+                            """,
+                            (cutoff,),
+                        ).fetchall()
+                        event_counts = {str(x["event_type"]): int(x["c"]) for x in ev_rows}
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "project_id": project_id,
+                            "session_id": session_id,
+                            "days": days,
+                            "auto_maintenance": {
+                                "runs": runs,
+                                "decay_total": decay_total,
+                                "promoted_total": promoted_total,
+                                "demoted_total": demoted_total,
+                            },
+                            "event_counts": event_counts,
+                        }
+                    )
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
             if parsed.path == "/api/sessions":
                 q = parse_qs(parsed.query)
                 project_id = q.get("project_id", [""])[0].strip()
@@ -4887,6 +4995,7 @@ def run_webui(
                 dm["maintenance_compress_min_items"] = _to_int("daemon_maintenance_compress_min_items", int(daemon_state.get("maintenance_compress_min_items", 8)), 2, 200)
                 cfg.setdefault("webui", {})
                 cfg["webui"]["approval_required"] = _to_bool("webui_approval_required", bool(cfg.get("webui", {}).get("approval_required", False)))
+                cfg["webui"]["maintenance_preview_only_until"] = str(data.get("webui_maintenance_preview_only_until", cfg.get("webui", {}).get("maintenance_preview_only_until", ""))).strip()
                 try:
                     save_config(cfg_path, cfg)
                     nonlocal paths
@@ -4996,6 +5105,13 @@ def run_webui(
                         dry_run=dry_run,
                         adaptive=adaptive,
                         adaptive_days=14,
+                        adaptive_q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
+                        adaptive_q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
+                        adaptive_q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
+                        adaptive_q_promote_vol=float(cfg.get("daemon", {}).get("adaptive_q_promote_vol", 0.42)),
+                        adaptive_q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
+                        adaptive_q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
+                        adaptive_q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
                         tool="webui",
                         actor_session_id="webui-session",
                     )
@@ -5034,6 +5150,18 @@ def run_webui(
                     dry_run = bool(data.get("dry_run", True))
                     ack_token = str(data.get("ack_token", "")).strip()
                     approval_required = bool(cfg.get("webui", {}).get("approval_required", False))
+                    preview_until = str(cfg.get("webui", {}).get("maintenance_preview_only_until", "") or "").strip()
+                    if not dry_run and preview_until:
+                        try:
+                            ptxt = preview_until[:-1] + "+00:00" if preview_until.endswith("Z") else preview_until
+                            pdt = datetime.fromisoformat(ptxt)
+                            if pdt.tzinfo is None:
+                                pdt = pdt.replace(tzinfo=timezone.utc)
+                            if datetime.now(timezone.utc) < pdt.astimezone(timezone.utc):
+                                self._send_json({"ok": False, "error": f"preview-only window active until {preview_until}"}, 403)
+                                return
+                        except Exception:
+                            pass
                     if not dry_run and approval_required and ack_token != "APPLY":
                         self._send_json({"ok": False, "error": "approval required: set ack_token=APPLY"}, 403)
                         return
@@ -5057,6 +5185,13 @@ def run_webui(
                         dry_run=dry_run,
                         adaptive=True,
                         adaptive_days=14,
+                        adaptive_q_promote_imp=float(cfg.get("daemon", {}).get("adaptive_q_promote_imp", 0.68)),
+                        adaptive_q_promote_conf=float(cfg.get("daemon", {}).get("adaptive_q_promote_conf", 0.60)),
+                        adaptive_q_promote_stab=float(cfg.get("daemon", {}).get("adaptive_q_promote_stab", 0.62)),
+                        adaptive_q_promote_vol=float(cfg.get("daemon", {}).get("adaptive_q_promote_vol", 0.42)),
+                        adaptive_q_demote_vol=float(cfg.get("daemon", {}).get("adaptive_q_demote_vol", 0.78)),
+                        adaptive_q_demote_stab=float(cfg.get("daemon", {}).get("adaptive_q_demote_stab", 0.28)),
+                        adaptive_q_demote_reuse=float(cfg.get("daemon", {}).get("adaptive_q_demote_reuse", 0.30)),
                         tool="webui",
                         actor_session_id="webui-session",
                     )

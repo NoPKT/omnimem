@@ -859,6 +859,13 @@ def infer_adaptive_governance_thresholds(
     project_id: str = "",
     session_id: str = "",
     days: int = 14,
+    q_promote_imp: float = 0.68,
+    q_promote_conf: float = 0.60,
+    q_promote_stab: float = 0.62,
+    q_promote_vol: float = 0.42,
+    q_demote_vol: float = 0.78,
+    q_demote_stab: float = 0.28,
+    q_demote_reuse: float = 0.30,
 ) -> dict[str, Any]:
     """Infer consolidation thresholds from recent signal distributions."""
     ensure_storage(paths, schema_sql_path)
@@ -892,13 +899,13 @@ def infer_adaptive_governance_thresholds(
     all_vol = sorted(float(r["volatility_score"] or 0.0) for r in rows)
     all_reuse = sorted(int(r["reuse_count"] or 0) for r in rows)
 
-    p_imp = max(0.55, min(0.92, _quantile(all_imp, 0.68, 0.75)))
-    p_conf = max(0.50, min(0.90, _quantile(all_conf, 0.60, 0.65)))
-    p_stab = max(0.50, min(0.95, _quantile(all_stab, 0.62, 0.65)))
-    p_vol = max(0.25, min(0.80, _quantile(all_vol, 0.42, 0.65)))
-    d_vol = max(0.55, min(0.98, _quantile(all_vol, 0.78, 0.75)))
-    d_stab = max(0.10, min(0.70, _quantile(all_stab, 0.28, 0.45)))
-    d_reuse = max(0, min(8, int(_quantile([float(x) for x in all_reuse], 0.30, 1.0))))
+    p_imp = max(0.55, min(0.92, _quantile(all_imp, q_promote_imp, 0.75)))
+    p_conf = max(0.50, min(0.90, _quantile(all_conf, q_promote_conf, 0.65)))
+    p_stab = max(0.50, min(0.95, _quantile(all_stab, q_promote_stab, 0.65)))
+    p_vol = max(0.25, min(0.80, _quantile(all_vol, q_promote_vol, 0.65)))
+    d_vol = max(0.55, min(0.98, _quantile(all_vol, q_demote_vol, 0.75)))
+    d_stab = max(0.10, min(0.70, _quantile(all_stab, q_demote_stab, 0.45)))
+    d_reuse = max(0, min(8, int(_quantile([float(x) for x in all_reuse], q_demote_reuse, 1.0))))
 
     return {
         "ok": True,
@@ -914,6 +921,15 @@ def infer_adaptive_governance_thresholds(
             "d_vol": float(round(d_vol, 3)),
             "d_stab": float(round(d_stab, 3)),
             "d_reuse": int(d_reuse),
+        },
+        "quantiles": {
+            "q_promote_imp": float(q_promote_imp),
+            "q_promote_conf": float(q_promote_conf),
+            "q_promote_stab": float(q_promote_stab),
+            "q_promote_vol": float(q_promote_vol),
+            "q_demote_vol": float(q_demote_vol),
+            "q_demote_stab": float(q_demote_stab),
+            "q_demote_reuse": float(q_demote_reuse),
         },
     }
 
@@ -935,6 +951,13 @@ def consolidate_memories(
     d_reuse: int = 1,
     adaptive: bool = False,
     adaptive_days: int = 14,
+    adaptive_q_promote_imp: float = 0.68,
+    adaptive_q_promote_conf: float = 0.60,
+    adaptive_q_promote_stab: float = 0.62,
+    adaptive_q_promote_vol: float = 0.42,
+    adaptive_q_demote_vol: float = 0.78,
+    adaptive_q_demote_stab: float = 0.28,
+    adaptive_q_demote_reuse: float = 0.30,
     tool: str = "omnimem",
     actor_session_id: str = "system",
 ) -> dict[str, Any]:
@@ -954,6 +977,13 @@ def consolidate_memories(
             project_id=project_id,
             session_id=session_id,
             days=adaptive_days,
+            q_promote_imp=adaptive_q_promote_imp,
+            q_promote_conf=adaptive_q_promote_conf,
+            q_promote_stab=adaptive_q_promote_stab,
+            q_promote_vol=adaptive_q_promote_vol,
+            q_demote_vol=adaptive_q_demote_vol,
+            q_demote_stab=adaptive_q_demote_stab,
+            q_demote_reuse=adaptive_q_demote_reuse,
         )
         th = dict(learned.get("thresholds") or {})
         p_imp = float(th.get("p_imp", p_imp))
@@ -3233,6 +3263,13 @@ def run_sync_daemon(
     maintenance_consolidate_limit: int = 80,
     maintenance_compress_sessions: int = 2,
     maintenance_compress_min_items: int = 8,
+    maintenance_adaptive_q_promote_imp: float = 0.68,
+    maintenance_adaptive_q_promote_conf: float = 0.60,
+    maintenance_adaptive_q_promote_stab: float = 0.62,
+    maintenance_adaptive_q_promote_vol: float = 0.42,
+    maintenance_adaptive_q_demote_vol: float = 0.78,
+    maintenance_adaptive_q_demote_stab: float = 0.28,
+    maintenance_adaptive_q_demote_reuse: float = 0.30,
     retry_max_attempts: int = 3,
     retry_initial_backoff: int = 1,
     retry_max_backoff: int = 8,
@@ -3361,6 +3398,13 @@ def run_sync_daemon(
                     dry_run=False,
                     adaptive=True,
                     adaptive_days=14,
+                    adaptive_q_promote_imp=float(maintenance_adaptive_q_promote_imp),
+                    adaptive_q_promote_conf=float(maintenance_adaptive_q_promote_conf),
+                    adaptive_q_promote_stab=float(maintenance_adaptive_q_promote_stab),
+                    adaptive_q_promote_vol=float(maintenance_adaptive_q_promote_vol),
+                    adaptive_q_demote_vol=float(maintenance_adaptive_q_demote_vol),
+                    adaptive_q_demote_stab=float(maintenance_adaptive_q_demote_stab),
+                    adaptive_q_demote_reuse=float(maintenance_adaptive_q_demote_reuse),
                     tool="daemon",
                     actor_session_id="system",
                 )

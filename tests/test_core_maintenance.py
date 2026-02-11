@@ -207,6 +207,65 @@ class CoreMaintenanceTest(unittest.TestCase):
         th = dict(out.get("thresholds") or {})
         for k in ["p_imp", "p_conf", "p_stab", "p_vol", "d_vol", "d_stab", "d_reuse"]:
             self.assertIn(k, th)
+        q = dict(out.get("quantiles") or {})
+        for k in [
+            "q_promote_imp",
+            "q_promote_conf",
+            "q_promote_stab",
+            "q_promote_vol",
+            "q_demote_vol",
+            "q_demote_stab",
+            "q_demote_reuse",
+        ]:
+            self.assertIn(k, q)
+
+    def test_adaptive_threshold_inference_custom_quantiles(self) -> None:
+        for i in range(16):
+            self._write(
+                layer="short" if i < 8 else "long",
+                summary=f"adaptive custom {i}",
+                session_id="s-adapt-q",
+                importance=min(1.0, 0.20 + (i * 0.05)),
+                confidence=min(1.0, 0.25 + (i * 0.04)),
+                stability=min(1.0, 0.30 + (i * 0.03)),
+                reuse_count=i % 5,
+                volatility=max(0.0, 0.95 - (i * 0.04)),
+            )
+
+        low = infer_adaptive_governance_thresholds(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-adapt-q",
+            days=30,
+            q_promote_imp=0.50,
+            q_promote_conf=0.50,
+            q_promote_stab=0.50,
+            q_promote_vol=0.30,
+            q_demote_vol=0.70,
+            q_demote_stab=0.20,
+            q_demote_reuse=0.20,
+        )
+        high = infer_adaptive_governance_thresholds(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            project_id="OM",
+            session_id="s-adapt-q",
+            days=30,
+            q_promote_imp=0.85,
+            q_promote_conf=0.85,
+            q_promote_stab=0.85,
+            q_promote_vol=0.60,
+            q_demote_vol=0.90,
+            q_demote_stab=0.40,
+            q_demote_reuse=0.40,
+        )
+        self.assertTrue(low.get("ok"))
+        self.assertTrue(high.get("ok"))
+        low_th = dict(low.get("thresholds") or {})
+        high_th = dict(high.get("thresholds") or {})
+        self.assertLessEqual(float(low_th.get("p_imp", 1.0)), float(high_th.get("p_imp", 0.0)))
+        self.assertLessEqual(float(low_th.get("p_conf", 1.0)), float(high_th.get("p_conf", 0.0)))
 
 
 if __name__ == "__main__":

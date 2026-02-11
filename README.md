@@ -121,6 +121,35 @@ Notes:
 - WebUI is auto-started by default at `http://127.0.0.1:8765`.
 - Use `--no-webui` to disable sidecar UI startup.
 - Use `--webui-on-demand` (or `OMNIMEM_WEBUI_ON_DEMAND=1`) to auto-stop the shared WebUI when the last active wrapper session exits.
+- For safer governance rollout in WebUI, you can enable apply approval and a preview-only window in Configuration:
+  - `webui.approval_required=true`
+  - `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
+
+## Retrieval/Governance Evaluation Helpers
+
+Bootstrap a retrieval eval dataset from recent memories:
+
+```bash
+PYTHONPATH=. python3 scripts/build_eval_dataset.py --project-id OM --limit 60 --out eval/retrieval_dataset_om.json
+```
+
+Run retrieval quality evaluation (`basic` vs `smart` ranking):
+
+```bash
+PYTHONPATH=. python3 scripts/eval_retrieval.py --project-id OM --dataset eval/retrieval_dataset_om.json --out eval/retrieval_report_om.json
+```
+
+Tune daemon adaptive governance quantiles from the eval report:
+
+```bash
+PYTHONPATH=. python3 scripts/tune_governance_from_eval.py --report eval/retrieval_report_om.json
+```
+
+Enable a temporary preview-only governance window:
+
+```bash
+PYTHONPATH=. python3 scripts/enable_governance_preview.py --days 7
+```
 
 ## Verification
 
