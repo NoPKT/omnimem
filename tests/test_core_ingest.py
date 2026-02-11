@@ -69,6 +69,40 @@ class CoreIngestTest(unittest.TestCase):
         self.assertEqual(out.get("source_type"), "file")
         self.assertIn("ingest:file", list(out.get("tags") or []))
 
+    def test_ingest_file_heading_chunks(self) -> None:
+        fp = self.root / "doc.md"
+        fp.write_text("# A\nalpha\n\n# B\nbeta\n", encoding="utf-8")
+        out = ingest_source(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            source=str(fp),
+            source_type="file",
+            chunk_mode="heading",
+            max_chunks=8,
+            project_id="OM",
+            session_id="s-ingest",
+        )
+        self.assertTrue(out.get("ok"))
+        self.assertGreaterEqual(int(out.get("chunks_written", 0)), 2)
+        self.assertGreaterEqual(len(out.get("memory_ids") or []), 2)
+
+    def test_ingest_text_fixed_chunks(self) -> None:
+        txt = "x" * 1200 + "\n" + "y" * 1200
+        out = ingest_source(
+            paths=self.paths,
+            schema_sql_path=self.schema,
+            source="",
+            source_type="text",
+            text_body=txt,
+            chunk_mode="fixed",
+            chunk_chars=900,
+            max_chunks=8,
+            project_id="OM",
+            session_id="s-ingest",
+        )
+        self.assertTrue(out.get("ok"))
+        self.assertGreaterEqual(int(out.get("chunks_written", 0)), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

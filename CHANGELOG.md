@@ -4,6 +4,7 @@
 
 - Profile modeling: add deterministic user profile builder (`omnimem profile`) and WebUI API endpoint (`GET /api/profile`) to summarize preferences/goals/focus tags from memory traces.
 - Ingestion: add `omnimem ingest` for URL/file/text sources with safe URL query redaction and structured source refs, improving external knowledge onboarding workflow.
+- Ingestion upgrade: support structured chunking (`--chunk-mode heading|fixed`) with multi-memory writes and chunk metadata for long document ingestion.
 - Feedback loop: add explicit memory feedback operation (`omnimem feedback` / `POST /api/memory/feedback`) supporting positive/negative/forget/correct signals with deterministic score updates.
 - Retrieval upgrade: add profile-aware re-ranking (`retrieve --profile-aware`) and expose profile settings in retrieval explain output; WebUI smart retrieval now enables profile bias by default.
 

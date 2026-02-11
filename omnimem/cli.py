@@ -226,6 +226,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         account=str(getattr(args, "account", "default") or "default"),
         device=str(getattr(args, "device", "local") or "local"),
         max_chars=int(getattr(args, "max_chars", 12000) or 12000),
+        chunk_mode=str(getattr(args, "chunk_mode", "none") or "none"),
+        chunk_chars=int(getattr(args, "chunk_chars", 2000) or 2000),
+        max_chunks=int(getattr(args, "max_chunks", 8) or 8),
     )
     print_json(out)
     return 0 if out.get("ok") else 1
@@ -1871,6 +1874,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--account", default="default")
     p_ingest.add_argument("--device", default="local")
     p_ingest.add_argument("--max-chars", type=int, default=12000)
+    p_ingest.add_argument("--chunk-mode", choices=["none", "heading", "fixed"], default="none")
+    p_ingest.add_argument("--chunk-chars", type=int, default=2000)
+    p_ingest.add_argument("--max-chunks", type=int, default=8)
     p_ingest.set_defaults(func=cmd_ingest)
 
     p_find = sub.add_parser("find", help="find memories")

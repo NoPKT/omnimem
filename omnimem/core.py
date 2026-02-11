@@ -3729,8 +3729,61 @@ def _first_nonempty_line(text: str) -> str:
     for ln in str(text or "").splitlines():
         s = re.sub(r"\s+", " ", ln).strip()
         if s:
+            s = re.sub(r"^\s{0,3}#{1,6}\s+", "", s).strip()
             return s
     return ""
+
+
+def _split_markdown_by_heading(text: str) -> list[tuple[str, str]]:
+    lines = str(text or "").splitlines()
+    if not lines:
+        return []
+    chunks: list[tuple[str, str]] = []
+    cur_title = ""
+    cur_lines: list[str] = []
+    for ln in lines:
+        if re.match(r"^\s{0,3}#{1,6}\s+\S+", ln):
+            if cur_lines:
+                chunks.append((cur_title, "\n".join(cur_lines).strip()))
+                cur_lines = []
+            cur_title = re.sub(r"^\s{0,3}#{1,6}\s+", "", ln).strip()
+            continue
+        cur_lines.append(ln)
+    if cur_lines:
+        chunks.append((cur_title, "\n".join(cur_lines).strip()))
+    out: list[tuple[str, str]] = []
+    for title, body in chunks:
+        b = str(body or "").strip()
+        if not b:
+            continue
+        out.append((str(title or "").strip(), b))
+    return out
+
+
+def _split_text_fixed(text: str, *, chunk_chars: int) -> list[str]:
+    s = str(text or "").strip()
+    if not s:
+        return []
+    chunk_chars = max(300, min(50000, int(chunk_chars)))
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        j = min(n, i + chunk_chars)
+        if j < n:
+            # Prefer split on newline/punctuation near the boundary.
+            window_start = max(i + int(chunk_chars * 0.6), i + 1)
+            cut = -1
+            for k in range(j, window_start - 1, -1):
+                ch = s[k - 1]
+                if ch in "\n。！？.!?;；":
+                    cut = k
+                    break
+            if cut > 0:
+                j = cut
+        out.append(s[i:j].strip())
+        i = j
+    return [x for x in out if x]
 
 
 def ingest_source(
@@ -3751,11 +3804,19 @@ def ingest_source(
     account: str = "default",
     device: str = "local",
     max_chars: int = 12000,
+    chunk_mode: str = "none",
+    chunk_chars: int = 2000,
+    max_chunks: int = 8,
 ) -> dict[str, Any]:
     st = str(source_type or "auto").strip().lower()
     if st not in {"auto", "file", "url", "text"}:
         raise ValueError(f"invalid source_type: {source_type}")
     max_chars = max(300, min(200000, int(max_chars)))
+    chunk_chars = max(300, min(50000, int(chunk_chars)))
+    max_chunks = max(1, min(64, int(max_chunks)))
+    cmode = str(chunk_mode or "none").strip().lower()
+    if cmode not in {"none", "heading", "fixed"}:
+        cmode = "none"
     src = str(source or "").strip()
     text_body = str(text_body or "")
 
@@ -3829,30 +3890,58 @@ def ingest_source(
     if not final_summary:
         final_summary = "ingested memory"
 
-    payload = write_memory(
-        paths=paths,
-        schema_sql_path=schema_sql_path,
-        layer=layer,
-        kind=kind,
-        summary=final_summary[:160],
-        body=body,
-        tags=out_tags,
-        refs=refs,
-        cred_refs=[],
-        tool=tool,
-        account=account,
-        device=device,
-        session_id=session_id,
-        project_id=project_id,
-        workspace=workspace,
-        importance=0.58,
-        confidence=0.66,
-        stability=0.56,
-        reuse_count=0,
-        volatility=0.35,
-        event_type="memory.write",
-    )
-    mem = payload.get("memory") or {}
+    chunked: list[tuple[str, str]] = []
+    if cmode == "heading" and inferred in {"file", "text"}:
+        chunked = _split_markdown_by_heading(body)
+    elif cmode == "fixed" and inferred in {"file", "text"}:
+        chunked = [("", x) for x in _split_text_fixed(body, chunk_chars=chunk_chars)]
+    if chunked:
+        chunked = chunked[:max_chunks]
+    else:
+        chunked = [("", body)]
+
+    written: list[dict[str, Any]] = []
+    n_total = len(chunked)
+    for i, (title, cbody) in enumerate(chunked, start=1):
+        if n_total == 1:
+            s = final_summary[:160]
+        else:
+            t = re.sub(r"\s+", " ", str(title or "").strip())
+            suffix = f" [{i}/{n_total}]"
+            if t:
+                s = f"{final_summary[:120]}{suffix} {t[:30]}".strip()
+            else:
+                s = f"{final_summary[:140]}{suffix}".strip()
+            s = s[:160]
+        refs_i = list(refs)
+        refs_i.append({"type": "ingest", "target": f"chunk:{i}/{n_total}", "note": "chunk-index"})
+        tags_i = list(dict.fromkeys([*out_tags, f"ingest:chunk:{i}"]))
+        payload = write_memory(
+            paths=paths,
+            schema_sql_path=schema_sql_path,
+            layer=layer,
+            kind=kind,
+            summary=s,
+            body=cbody,
+            tags=tags_i,
+            refs=refs_i,
+            cred_refs=[],
+            tool=tool,
+            account=account,
+            device=device,
+            session_id=session_id,
+            project_id=project_id,
+            workspace=workspace,
+            importance=0.58,
+            confidence=0.66,
+            stability=0.56,
+            reuse_count=0,
+            volatility=0.35,
+            event_type="memory.write",
+        )
+        written.append(dict(payload.get("memory") or {}))
+
+    mem = written[0] if written else {}
     return {
         "ok": True,
         "source_type": inferred,
@@ -3861,6 +3950,8 @@ def ingest_source(
         "layer": str(mem.get("layer") or ""),
         "kind": str(mem.get("kind") or ""),
         "tags": list(mem.get("tags") or []),
+        "memory_ids": [str(x.get("id") or "") for x in written if str(x.get("id") or "").strip()],
+        "chunks_written": len(written),
         "meta": meta,
     }
 

@@ -140,6 +140,8 @@ omnimem enhance --project-id OM
 omnimem profile --project-id OM
 omnimem ingest --type url "https://example.com/doc?token=***"
 omnimem ingest --type file ./docs/notes.md
+omnimem ingest --type file ./docs/design.md --chunk-mode heading --max-chunks 12
+omnimem ingest --type text --text "..." --chunk-mode fixed --chunk-chars 1800
 omnimem feedback --id <memory_id> --feedback positive --note "high value"
 ```
 
