@@ -51,8 +51,10 @@ WebUI provides:
 - Memory route retrieval in WebUI (`auto`/`episodic`/`semantic`/`procedural`) for intent-aware filtering
 - Drawer actions: `Undo Last Move` and one-click memory typing tags (`mem:episodic`, `mem:semantic`, `mem:procedural`)
 - Drawer move history with event-level undo (`/api/memory/move-history`, `/api/memory/undo-move-event`)
+- Drawer supports rollback to timestamp (`/api/memory/rollback-to-time`)
 - Insights quality panel (`/api/quality/summary`) with week-over-week deltas for conflicts/reuse/decay/writes and signal averages
 - Layer Board batch typing (`/api/memory/tag-batch`) for selected cards
+- Layer Board supports route templates (save/apply) for faster episodic/semantic/procedural labeling workflows
 - Optional approval gate for apply actions: `webui.approval_required=true`
 - Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
 

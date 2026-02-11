@@ -11,6 +11,7 @@ from omnimem.webui import (
     _evaluate_governance_action,
     _infer_memory_route,
     _normalize_memory_route,
+    _quality_alerts,
     _quality_window_summary,
     _run_health_check,
 )
@@ -27,6 +28,24 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         self.assertEqual(_infer_memory_route("how to run omnimem script"), "procedural")
         self.assertEqual(_infer_memory_route("what is memory graph"), "semantic")
         self.assertEqual(_infer_memory_route("when did we change daemon"), "episodic")
+
+    def test_quality_alerts(self) -> None:
+        alerts = _quality_alerts(
+            cur={
+                "conflicts": 3,
+                "reuse_events": 1,
+                "decay_events": 30,
+                "avg_stability": 0.3,
+                "avg_volatility": 0.8,
+            },
+            prev={
+                "conflicts": 1,
+                "reuse_events": 4,
+                "decay_events": 5,
+            },
+        )
+        self.assertTrue(any("conflicts increased" in x for x in alerts))
+        self.assertTrue(any("avg stability is low" in x for x in alerts))
 
     def test_evaluate_governance_action_promote(self) -> None:
         out = _evaluate_governance_action(

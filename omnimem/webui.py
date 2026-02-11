@@ -481,6 +481,19 @@ HTML_PAGE = """<!doctype html>
               <button id=\"btnBoardTagEpisodic\" class=\"secondary\" style=\"margin-top:0\" disabled>Tag episodic</button>
               <button id=\"btnBoardTagSemantic\" class=\"secondary\" style=\"margin-top:0\" disabled>Tag semantic</button>
               <button id=\"btnBoardTagProcedural\" class=\"secondary\" style=\"margin-top:0\" disabled>Tag procedural</button>
+              <select id=\"boardTemplateSelect\" class=\"lang\" style=\"max-width:220px\">
+                <option value=\"session-task|episodic\">session-task → episodic</option>
+                <option value=\"knowledge-fact|semantic\">knowledge-fact → semantic</option>
+                <option value=\"runbook-op|procedural\">runbook-op → procedural</option>
+              </select>
+              <button id=\"btnBoardApplyTemplate\" class=\"secondary\" style=\"margin-top:0\" disabled>Apply Template</button>
+              <input id=\"boardTemplateName\" placeholder=\"template name\" style=\"max-width:160px\" />
+              <select id=\"boardTemplateRoute\" class=\"lang\" style=\"max-width:150px\">
+                <option value=\"episodic\">episodic</option>
+                <option value=\"semantic\">semantic</option>
+                <option value=\"procedural\">procedural</option>
+              </select>
+              <button id=\"btnBoardSaveTemplate\" class=\"secondary\" style=\"margin-top:0\">Save Template</button>
 	            <button id=\"btnBoardClear\" class=\"secondary\" style=\"margin-top:0\" disabled>Clear</button>
 	            <span id=\"boardSelInfo\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
@@ -948,6 +961,10 @@ HTML_PAGE = """<!doctype html>
       <div class=\"divider\"></div>
       <div class=\"small\"><b>Move History</b></div>
       <div id=\"dMoveHistory\" class=\"small\"></div>
+      <div class=\"row-btn\" style=\"margin-top:8px\">
+        <input id=\"dRollbackTime\" placeholder=\"2026-02-11T12:00:00+00:00\" />
+        <button id=\"btnRollbackToTime\" class=\"danger\" style=\"margin-top:0\">Rollback To Time</button>
+      </div>
 	      <div class=\"divider\"></div>
 	      <div class=\"small\"><b>Body</b></div>
 	      <div id=\"dEditBox\" style=\"margin-top:8px; display:none\">
@@ -1168,9 +1185,38 @@ HTML_PAGE = """<!doctype html>
 	        localStorage.setItem('omnimem.mem_depth', String(p.depth || 2));
 	        localStorage.setItem('omnimem.mem_per_hop', String(p.per_hop || 6));
 	        localStorage.setItem('omnimem.mem_ranking', String(p.ranking || 'hybrid'));
-          localStorage.setItem('omnimem.mem_route', String(p.route || 'auto'));
+	        localStorage.setItem('omnimem.mem_route', String(p.route || 'auto'));
 	      } catch (_) {}
 	    }
+      function safeLoadRouteTemplates() {
+        try {
+          const raw = localStorage.getItem('omnimem.route_templates') || '[]';
+          const arr = JSON.parse(raw);
+          if (!Array.isArray(arr)) return [];
+          return arr
+            .map(x => ({ name: String((x && x.name) || '').trim(), route: String((x && x.route) || '').trim() }))
+            .filter(x => x.name && ['episodic','semantic','procedural'].includes(x.route));
+        } catch (_) {
+          return [];
+        }
+      }
+      function safeSaveRouteTemplates(items) {
+        try {
+          localStorage.setItem('omnimem.route_templates', JSON.stringify(items || []));
+        } catch (_) {}
+      }
+      function refreshRouteTemplateSelect() {
+        const sel = document.getElementById('boardTemplateSelect');
+        if (!sel) return;
+        const base = [
+          { name: 'session-task', route: 'episodic' },
+          { name: 'knowledge-fact', route: 'semantic' },
+          { name: 'runbook-op', route: 'procedural' },
+        ];
+        const custom = safeLoadRouteTemplates();
+        const all = base.concat(custom);
+        sel.innerHTML = all.map(x => `<option value="${escHtml(x.name)}|${escHtml(x.route)}">${escHtml(x.name)} → ${escHtml(x.route)}</option>`).join('');
+      }
 	    function safeGetWorkset() {
 	      try {
 	        return {
@@ -1475,6 +1521,8 @@ HTML_PAGE = """<!doctype html>
 	      if (edS) edS.value = m.summary || '';
 	      if (edT) edT.value = (m.tags || []).join(',');
 	      if (edB) edB.value = stripMdTitle(d.body || '');
+      const rb = document.getElementById('dRollbackTime');
+      if (rb) rb.value = '';
 	      setDrawerEditMode(false);
 
 	      // Wire action buttons based on current layer.
@@ -1534,6 +1582,25 @@ HTML_PAGE = """<!doctype html>
           await openMemory(memoryId);
         };
       });
+    }
+
+    async function rollbackDrawerMemoryToTime() {
+      if (!drawerMem || !drawerMem.id) return;
+      const t = String(document.getElementById('dRollbackTime')?.value || '').trim();
+      if (!t) {
+        toast('Memory', 'rollback time is required', false);
+        return;
+      }
+      const d = await jpost('/api/memory/rollback-to-time', { id: drawerMem.id, to_event_time: t });
+      if (!d.ok) {
+        toast('Memory', d.error || 'rollback failed', false);
+        return;
+      }
+      toast('Memory', `rolled back ${d.rolled_back || 0} move(s)`, true);
+      await loadInsights();
+      await loadMem();
+      await loadLayerStats();
+      await openMemory(drawerMem.id);
     }
 
     async function loadGovernanceExplain(memoryId) {
@@ -1874,6 +1941,7 @@ HTML_PAGE = """<!doctype html>
         const btnTE = document.getElementById('btnBoardTagEpisodic');
         const btnTS = document.getElementById('btnBoardTagSemantic');
         const btnTP = document.getElementById('btnBoardTagProcedural');
+        const btnAT = document.getElementById('btnBoardApplyTemplate');
 	      const btnC = document.getElementById('btnBoardClear');
 	      const info = document.getElementById('boardSelInfo');
 	      if (btnSel) btnSel.textContent = boardSelectMode ? 'Select: on' : 'Select: off';
@@ -1883,6 +1951,7 @@ HTML_PAGE = """<!doctype html>
         if (btnTE) btnTE.disabled = n === 0;
         if (btnTS) btnTS.disabled = n === 0;
         if (btnTP) btnTP.disabled = n === 0;
+        if (btnAT) btnAT.disabled = n === 0;
 	      if (btnC) btnC.disabled = n === 0;
 	      if (info) info.textContent = n ? `${n} selected` : '';
 	    }
@@ -1939,6 +2008,47 @@ HTML_PAGE = """<!doctype html>
       await loadInsights();
       await loadMem();
       toast('Batch', `tagged ${d.updated || 0} as mem:${route}`, true);
+    }
+
+    function readSelectedTemplate() {
+      const sel = document.getElementById('boardTemplateSelect');
+      const raw = String(sel?.value || '').trim();
+      const parts = raw.split('|');
+      const name = String(parts[0] || '').trim();
+      const route = String(parts[1] || '').trim();
+      return { name, route };
+    }
+
+    async function applySelectedTemplate() {
+      const t = readSelectedTemplate();
+      if (!['episodic','semantic','procedural'].includes(t.route)) {
+        toast('Batch', 'invalid template route', false);
+        return;
+      }
+      await batchTagSelected(t.route);
+      toast('Batch', `template applied: ${t.name} -> ${t.route}`, true);
+    }
+
+    function saveRouteTemplate() {
+      const name = String(document.getElementById('boardTemplateName')?.value || '').trim();
+      const route = String(document.getElementById('boardTemplateRoute')?.value || '').trim();
+      if (!name) {
+        toast('Batch', 'template name is required', false);
+        return;
+      }
+      if (!['episodic','semantic','procedural'].includes(route)) {
+        toast('Batch', 'invalid template route', false);
+        return;
+      }
+      const items = safeLoadRouteTemplates();
+      const idx = items.findIndex(x => x.name === name);
+      const next = { name, route };
+      if (idx >= 0) items[idx] = next; else items.push(next);
+      safeSaveRouteTemplates(items);
+      refreshRouteTemplateSelect();
+      const sel = document.getElementById('boardTemplateSelect');
+      if (sel) sel.value = `${name}|${route}`;
+      toast('Batch', `template saved: ${name} -> ${route}`, true);
     }
 
 	    function readSessionArchiveOpts() {
@@ -2714,6 +2824,7 @@ HTML_PAGE = """<!doctype html>
       }
       const cur = d.current || {};
       const prev = d.previous || {};
+      const alerts = Array.isArray(d.alerts) ? d.alerts : [];
       el.innerHTML = [
         `<div class="pill"><b>conflicts</b><span class="mono">${escHtml(deltaText(cur.conflicts, prev.conflicts))}</span></div>`,
         `<div class="pill"><b>reuse events</b><span class="mono">${escHtml(deltaText(cur.reuse_events, prev.reuse_events))}</span></div>`,
@@ -2723,7 +2834,7 @@ HTML_PAGE = """<!doctype html>
         `<div class="pill"><b>avg confidence</b><span class="mono">${escHtml(String(Number(cur.avg_confidence || 0).toFixed(3)))}</span></div>`,
         `<div class="pill"><b>avg stability</b><span class="mono">${escHtml(String(Number(cur.avg_stability || 0).toFixed(3)))}</span></div>`,
         `<div class="pill"><b>avg volatility</b><span class="mono">${escHtml(String(Number(cur.avg_volatility || 0).toFixed(3)))}</span></div>`,
-      ].join(' ');
+      ].join(' ') + (alerts.length ? `<div style="margin-top:8px">${alerts.map(x => `<div class="pill"><b class="err">alert</b><span>${escHtml(x)}</span></div>`).join(' ')}</div>` : '');
     }
 
 	    async function renderEventsTable() {
@@ -3398,6 +3509,7 @@ HTML_PAGE = """<!doctype html>
           const bEpi = document.getElementById('btnClassifyEpisodic');
           const bSem = document.getElementById('btnClassifySemantic');
           const bPro = document.getElementById('btnClassifyProcedural');
+          const bRollback = document.getElementById('btnRollbackToTime');
 		      if (bEdit) bEdit.onclick = () => setDrawerEditMode(true);
 		      if (bCancel) bCancel.onclick = () => setDrawerEditMode(false);
 		      if (bSave) bSave.onclick = () => saveDrawerEdit();
@@ -3406,6 +3518,7 @@ HTML_PAGE = """<!doctype html>
           if (bEpi) bEpi.onclick = () => classifyDrawerMemory('episodic');
           if (bSem) bSem.onclick = () => classifyDrawerMemory('semantic');
           if (bPro) bPro.onclick = () => classifyDrawerMemory('procedural');
+          if (bRollback) bRollback.onclick = () => rollbackDrawerMemoryToTime();
 		      const mo = document.getElementById('modalOverlay');
 	      if (mo) mo.onclick = () => { showWsModal(false); clearWsHash(); };
 	      const mclose = document.getElementById('btnWsModalClose');
@@ -3729,6 +3842,10 @@ HTML_PAGE = """<!doctype html>
         if (bTS) bTS.onclick = () => batchTagSelected('semantic');
         const bTP = document.getElementById('btnBoardTagProcedural');
         if (bTP) bTP.onclick = () => batchTagSelected('procedural');
+        const bAT = document.getElementById('btnBoardApplyTemplate');
+        if (bAT) bAT.onclick = () => applySelectedTemplate();
+        const bST = document.getElementById('btnBoardSaveTemplate');
+        if (bST) bST.onclick = () => saveRouteTemplate();
 	      const bC = document.getElementById('btnBoardClear');
 	      if (bC) bC.onclick = () => clearBoardSelection();
 	      const liveBtn = document.getElementById('btnLiveToggle');
@@ -3785,6 +3902,7 @@ HTML_PAGE = """<!doctype html>
 	    applyI18n();
         loadBuildInfo();
 	    loadRetrievePrefs();
+        refreshRouteTemplateSelect();
 		    loadThrFromStorage();
 	    loadLiveFromStorage();
 	    updateBoardToolbar();
@@ -4366,6 +4484,21 @@ def _quality_window_summary(conn: sqlite3.Connection, *, start_iso: str, end_iso
         "avg_stability": float(mem_row["avg_stability"] or 0.0),
         "avg_volatility": float(mem_row["avg_volatility"] or 0.0),
     }
+
+
+def _quality_alerts(cur: dict[str, Any], prev: dict[str, Any]) -> list[str]:
+    alerts: list[str] = []
+    if int(cur.get("conflicts", 0) or 0) > int(prev.get("conflicts", 0) or 0):
+        alerts.append("conflicts increased week-over-week; run sync conflict recovery and inspect memory.sync events")
+    if int(cur.get("decay_events", 0) or 0) > int(prev.get("decay_events", 0) or 0) + 10:
+        alerts.append("decay pressure increased; reduce volatility and review maintenance thresholds")
+    if float(cur.get("avg_stability", 0.0) or 0.0) < 0.45:
+        alerts.append("avg stability is low (<0.45); consider promoting fewer volatile items")
+    if float(cur.get("avg_volatility", 0.0) or 0.0) > 0.65:
+        alerts.append("avg volatility is high (>0.65); run consolidate preview and demote noisy long memories")
+    if int(cur.get("reuse_events", 0) or 0) < int(prev.get("reuse_events", 0) or 0):
+        alerts.append("reuse decreased week-over-week; tune retrieval route/ranking and refresh links")
+    return alerts
 
 
 def _is_local_bind_host(host: str) -> bool:
@@ -5525,6 +5658,7 @@ def run_webui(
                             "previous_window": {"start": prev_start, "end": cur_start},
                             "current": cur,
                             "previous": prev,
+                            "alerts": _quality_alerts(cur, prev),
                         }
                     )
                 except Exception as exc:  # pragma: no cover
@@ -6220,6 +6354,108 @@ def run_webui(
                             "to_layer": to_layer,
                         },
                         200 if out.get("ok") else 400,
+                    )
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            if parsed.path == "/api/memory/rollback-to-time":
+                try:
+                    mem_id = str(data.get("id", "")).strip()
+                    to_event_time = str(data.get("to_event_time", "")).strip()
+                    if not mem_id or not to_event_time:
+                        self._send_json({"ok": False, "error": "id and to_event_time are required"}, 400)
+                        return
+                    ttxt = to_event_time[:-1] + "+00:00" if to_event_time.endswith("Z") else to_event_time
+                    try:
+                        tdt = datetime.fromisoformat(ttxt)
+                        if tdt.tzinfo is None:
+                            tdt = tdt.replace(tzinfo=timezone.utc)
+                        cutoff = tdt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+                    except Exception:
+                        self._send_json({"ok": False, "error": "invalid to_event_time (ISO-8601 required)"}, 400)
+                        return
+                    with _db_connect() as conn:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute(
+                            """
+                            SELECT event_id, event_time, payload_json
+                            FROM memory_events
+                            WHERE memory_id = ?
+                              AND event_type = 'memory.promote'
+                              AND event_time > ?
+                            ORDER BY event_time DESC, event_id DESC
+                            LIMIT 200
+                            """,
+                            (mem_id, cutoff),
+                        ).fetchall()
+                    if not rows:
+                        self._send_json(
+                            {
+                                "ok": True,
+                                "memory_id": mem_id,
+                                "to_event_time": cutoff,
+                                "rolled_back": 0,
+                                "steps": [],
+                            }
+                        )
+                        return
+                    steps: list[dict[str, Any]] = []
+                    failed: list[dict[str, Any]] = []
+                    for r in rows:
+                        payload = {}
+                        try:
+                            payload = json.loads(r["payload_json"] or "{}")
+                        except Exception:
+                            payload = {}
+                        from_layer = str(payload.get("from_layer", "")).strip()
+                        to_layer = str(payload.get("to_layer", "")).strip()
+                        if not from_layer or not to_layer or from_layer == to_layer:
+                            failed.append(
+                                {
+                                    "event_id": str(r["event_id"]),
+                                    "event_time": str(r["event_time"]),
+                                    "error": "invalid payload",
+                                }
+                            )
+                            continue
+                        out = move_memory_layer(
+                            paths=paths,
+                            schema_sql_path=schema_sql_path,
+                            memory_id=mem_id,
+                            new_layer=from_layer,
+                            tool="webui",
+                            account="default",
+                            device="local",
+                            session_id="webui-session",
+                        )
+                        if out.get("ok"):
+                            steps.append(
+                                {
+                                    "event_id": str(r["event_id"]),
+                                    "event_time": str(r["event_time"]),
+                                    "undo_to_layer": from_layer,
+                                    "undo_from_layer": to_layer,
+                                }
+                            )
+                        else:
+                            failed.append(
+                                {
+                                    "event_id": str(r["event_id"]),
+                                    "event_time": str(r["event_time"]),
+                                    "error": str(out.get("error", "move failed")),
+                                }
+                            )
+                    self._send_json(
+                        {
+                            "ok": len(failed) == 0,
+                            "memory_id": mem_id,
+                            "to_event_time": cutoff,
+                            "rolled_back": len(steps),
+                            "steps": steps,
+                            "failed": failed,
+                        },
+                        200 if len(failed) == 0 else 400,
                     )
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 500)
