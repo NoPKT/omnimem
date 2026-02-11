@@ -365,6 +365,29 @@ def cmd_compress(args: argparse.Namespace) -> int:
 
 def cmd_webui(args: argparse.Namespace) -> int:
     cfg, cfg_path = load_config_with_path(cfg_path_arg(args))
+    dm = cfg.get("daemon", {})
+
+    def _pick_int(name: str, arg_value: int | None, default: int, mn: int, mx: int) -> int:
+        raw = arg_value if arg_value is not None else dm.get(name, default)
+        try:
+            v = int(raw)
+        except Exception:
+            v = default
+        return max(mn, min(mx, v))
+
+    def _pick_bool(name: str, arg_value: bool | None, default: bool) -> bool:
+        if arg_value is not None:
+            return bool(arg_value)
+        raw = dm.get(name, default)
+        if isinstance(raw, bool):
+            return raw
+        s = str(raw).strip().lower()
+        if s in {"1", "true", "yes", "on"}:
+            return True
+        if s in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+
     run_webui(
         host=args.host,
         port=args.port,
@@ -374,11 +397,18 @@ def cmd_webui(args: argparse.Namespace) -> int:
         sync_runner=sync_git,
         daemon_runner=run_sync_daemon,
         enable_daemon=not args.no_daemon,
-        daemon_scan_interval=args.daemon_scan_interval,
-        daemon_pull_interval=args.daemon_pull_interval,
-        daemon_retry_max_attempts=args.daemon_retry_max_attempts,
-        daemon_retry_initial_backoff=args.daemon_retry_initial_backoff,
-        daemon_retry_max_backoff=args.daemon_retry_max_backoff,
+        daemon_scan_interval=_pick_int("scan_interval", getattr(args, "daemon_scan_interval", None), 8, 1, 3600),
+        daemon_pull_interval=_pick_int("pull_interval", getattr(args, "daemon_pull_interval", None), 30, 5, 86400),
+        daemon_retry_max_attempts=_pick_int("retry_max_attempts", getattr(args, "daemon_retry_max_attempts", None), 3, 1, 20),
+        daemon_retry_initial_backoff=_pick_int("retry_initial_backoff", getattr(args, "daemon_retry_initial_backoff", None), 1, 1, 120),
+        daemon_retry_max_backoff=_pick_int("retry_max_backoff", getattr(args, "daemon_retry_max_backoff", None), 8, 1, 600),
+        daemon_maintenance_enabled=_pick_bool("maintenance_enabled", getattr(args, "daemon_maintenance_enabled", None), True),
+        daemon_maintenance_interval=_pick_int("maintenance_interval", getattr(args, "daemon_maintenance_interval", None), 300, 60, 86400),
+        daemon_maintenance_decay_days=_pick_int("maintenance_decay_days", getattr(args, "daemon_maintenance_decay_days", None), 14, 1, 365),
+        daemon_maintenance_decay_limit=_pick_int("maintenance_decay_limit", getattr(args, "daemon_maintenance_decay_limit", None), 120, 1, 2000),
+        daemon_maintenance_consolidate_limit=_pick_int("maintenance_consolidate_limit", getattr(args, "daemon_maintenance_consolidate_limit", None), 80, 1, 1000),
+        daemon_maintenance_compress_sessions=_pick_int("maintenance_compress_sessions", getattr(args, "daemon_maintenance_compress_sessions", None), 2, 1, 20),
+        daemon_maintenance_compress_min_items=_pick_int("maintenance_compress_min_items", getattr(args, "daemon_maintenance_compress_min_items", None), 8, 2, 200),
         auth_token=args.webui_token,
         allow_non_localhost=args.allow_non_localhost,
     )
@@ -1235,11 +1265,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_webui.add_argument("--host", default="127.0.0.1")
     p_webui.add_argument("--port", type=int, default=8765)
     p_webui.add_argument("--no-daemon", action="store_true", help="disable background quasi-realtime sync")
-    p_webui.add_argument("--daemon-scan-interval", type=int, default=8)
-    p_webui.add_argument("--daemon-pull-interval", type=int, default=30)
-    p_webui.add_argument("--daemon-retry-max-attempts", type=int, default=3)
-    p_webui.add_argument("--daemon-retry-initial-backoff", type=int, default=1)
-    p_webui.add_argument("--daemon-retry-max-backoff", type=int, default=8)
+    p_webui.add_argument("--daemon-scan-interval", type=int, default=None)
+    p_webui.add_argument("--daemon-pull-interval", type=int, default=None)
+    p_webui.add_argument("--daemon-retry-max-attempts", type=int, default=None)
+    p_webui.add_argument("--daemon-retry-initial-backoff", type=int, default=None)
+    p_webui.add_argument("--daemon-retry-max-backoff", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-interval", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-decay-days", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-decay-limit", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-consolidate-limit", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-compress-sessions", type=int, default=None)
+    p_webui.add_argument("--daemon-maintenance-compress-min-items", type=int, default=None)
+    p_webui.add_argument(
+        "--daemon-maintenance-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable daemon maintenance passes",
+    )
     p_webui.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
     p_webui.add_argument(
         "--allow-non-localhost",
@@ -1253,11 +1295,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--host", default="127.0.0.1")
     p_start.add_argument("--port", type=int, default=8765)
     p_start.add_argument("--no-daemon", action="store_true", help="disable background quasi-realtime sync")
-    p_start.add_argument("--daemon-scan-interval", type=int, default=8)
-    p_start.add_argument("--daemon-pull-interval", type=int, default=30)
-    p_start.add_argument("--daemon-retry-max-attempts", type=int, default=3)
-    p_start.add_argument("--daemon-retry-initial-backoff", type=int, default=1)
-    p_start.add_argument("--daemon-retry-max-backoff", type=int, default=8)
+    p_start.add_argument("--daemon-scan-interval", type=int, default=None)
+    p_start.add_argument("--daemon-pull-interval", type=int, default=None)
+    p_start.add_argument("--daemon-retry-max-attempts", type=int, default=None)
+    p_start.add_argument("--daemon-retry-initial-backoff", type=int, default=None)
+    p_start.add_argument("--daemon-retry-max-backoff", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-interval", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-decay-days", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-decay-limit", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-consolidate-limit", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-compress-sessions", type=int, default=None)
+    p_start.add_argument("--daemon-maintenance-compress-min-items", type=int, default=None)
+    p_start.add_argument(
+        "--daemon-maintenance-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable daemon maintenance passes",
+    )
     p_start.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
     p_start.add_argument(
         "--allow-non-localhost",

@@ -683,6 +683,19 @@ HTML_PAGE = """<!doctype html>
             <label><span data-i18n=\"cfg_remote_name\">Git Remote Name</span><input name=\"remote_name\" /></label>
             <label><span data-i18n=\"cfg_remote_url\">Git Remote URL</span><input name=\"remote_url\" placeholder=\"git@github.com:user/repo.git\" /></label>
             <label><span data-i18n=\"cfg_branch\">Git Branch</span><input name=\"branch\" /></label>
+            <div class=\"divider\"></div>
+            <label><span>Daemon Scan Interval (s)</span><input name=\"daemon_scan_interval\" type=\"number\" min=\"1\" max=\"3600\" /></label>
+            <label><span>Daemon Pull Interval (s)</span><input name=\"daemon_pull_interval\" type=\"number\" min=\"5\" max=\"86400\" /></label>
+            <label><span>Daemon Retry Max Attempts</span><input name=\"daemon_retry_max_attempts\" type=\"number\" min=\"1\" max=\"20\" /></label>
+            <label><span>Daemon Retry Initial Backoff (s)</span><input name=\"daemon_retry_initial_backoff\" type=\"number\" min=\"1\" max=\"120\" /></label>
+            <label><span>Daemon Retry Max Backoff (s)</span><input name=\"daemon_retry_max_backoff\" type=\"number\" min=\"1\" max=\"600\" /></label>
+            <label><span>Maintenance Enabled</span><select name=\"daemon_maintenance_enabled\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
+            <label><span>Maintenance Interval (s)</span><input name=\"daemon_maintenance_interval\" type=\"number\" min=\"60\" max=\"86400\" /></label>
+            <label><span>Maintenance Decay Days</span><input name=\"daemon_maintenance_decay_days\" type=\"number\" min=\"1\" max=\"365\" /></label>
+            <label><span>Maintenance Decay Limit</span><input name=\"daemon_maintenance_decay_limit\" type=\"number\" min=\"1\" max=\"2000\" /></label>
+            <label><span>Maintenance Consolidate Limit</span><input name=\"daemon_maintenance_consolidate_limit\" type=\"number\" min=\"1\" max=\"1000\" /></label>
+            <label><span>Maintenance Compress Sessions</span><input name=\"daemon_maintenance_compress_sessions\" type=\"number\" min=\"1\" max=\"20\" /></label>
+            <label><span>Maintenance Compress Min Items</span><input name=\"daemon_maintenance_compress_min_items\" type=\"number\" min=\"2\" max=\"200\" /></label>
             <button type=\"submit\" data-i18n=\"btn_save\">Save Configuration</button>
           </form>
         </div>
@@ -1462,8 +1475,16 @@ HTML_PAGE = """<!doctype html>
     async function loadCfg() {
       const d = await jget('/api/config');
       const f = document.getElementById('cfgForm');
-      for (const k of ['config_path','home','markdown','jsonl','sqlite','remote_name','remote_url','branch']) {
-        f.elements[k].value = d[k] || '';
+      for (const k of [
+        'config_path','home','markdown','jsonl','sqlite','remote_name','remote_url','branch',
+        'daemon_scan_interval','daemon_pull_interval',
+        'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
+        'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
+        'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
+        'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items'
+      ]) {
+        const v = d[k];
+        f.elements[k].value = (typeof v === 'boolean') ? String(v) : (v ?? '');
       }
       renderInitState(Boolean(d.initialized));
     }
@@ -1637,7 +1658,14 @@ HTML_PAGE = """<!doctype html>
       e.preventDefault();
       const f = e.target;
       const payload = {};
-      for (const k of ['home','markdown','jsonl','sqlite','remote_name','remote_url','branch']) payload[k] = f.elements[k].value;
+      for (const k of [
+        'home','markdown','jsonl','sqlite','remote_name','remote_url','branch',
+        'daemon_scan_interval','daemon_pull_interval',
+        'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
+        'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
+        'daemon_maintenance_decay_limit','daemon_maintenance_consolidate_limit',
+        'daemon_maintenance_compress_sessions','daemon_maintenance_compress_min_items'
+      ]) payload[k] = f.elements[k].value;
       const d = await jpost('/api/config', payload);
       document.getElementById('status').innerHTML = d.ok ? `<span class="pill"><b class="ok">${t('cfg_saved')}</b></span>` : `<span class="pill"><b class="err">${t('cfg_failed')}</b></span>`;
       toast('Config', d.ok ? t('cfg_saved') : (d.error || t('cfg_failed')), !!d.ok);
@@ -3343,6 +3371,7 @@ HTML_PAGE = """<!doctype html>
 def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
     storage = cfg.get("storage", {})
     gh = cfg.get("sync", {}).get("github", {})
+    dm = cfg.get("daemon", {})
     return {
         "ok": True,
         "initialized": cfg_path.exists(),
@@ -3354,6 +3383,18 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "remote_name": gh.get("remote_name", "origin"),
         "remote_url": gh.get("remote_url", ""),
         "branch": gh.get("branch", "main"),
+        "daemon_scan_interval": dm.get("scan_interval", 8),
+        "daemon_pull_interval": dm.get("pull_interval", 30),
+        "daemon_retry_max_attempts": dm.get("retry_max_attempts", 3),
+        "daemon_retry_initial_backoff": dm.get("retry_initial_backoff", 1),
+        "daemon_retry_max_backoff": dm.get("retry_max_backoff", 8),
+        "daemon_maintenance_enabled": dm.get("maintenance_enabled", True),
+        "daemon_maintenance_interval": dm.get("maintenance_interval", 300),
+        "daemon_maintenance_decay_days": dm.get("maintenance_decay_days", 14),
+        "daemon_maintenance_decay_limit": dm.get("maintenance_decay_limit", 120),
+        "daemon_maintenance_consolidate_limit": dm.get("maintenance_consolidate_limit", 80),
+        "daemon_maintenance_compress_sessions": dm.get("maintenance_compress_sessions", 2),
+        "daemon_maintenance_compress_min_items": dm.get("maintenance_compress_min_items", 8),
     }
 
 
@@ -3588,6 +3629,13 @@ def run_webui(
     daemon_retry_max_attempts: int = 3,
     daemon_retry_initial_backoff: int = 1,
     daemon_retry_max_backoff: int = 8,
+    daemon_maintenance_enabled: bool = True,
+    daemon_maintenance_interval: int = 300,
+    daemon_maintenance_decay_days: int = 14,
+    daemon_maintenance_decay_limit: int = 120,
+    daemon_maintenance_consolidate_limit: int = 80,
+    daemon_maintenance_compress_sessions: int = 2,
+    daemon_maintenance_compress_min_items: int = 8,
     auth_token: str | None = None,
     allow_non_localhost: bool = False,
 ) -> None:
@@ -3657,6 +3705,13 @@ def run_webui(
         "retry_max_attempts": max(1, int(daemon_retry_max_attempts)),
         "retry_initial_backoff": max(1, int(daemon_retry_initial_backoff)),
         "retry_max_backoff": max(1, int(daemon_retry_max_backoff)),
+        "maintenance_enabled": bool(daemon_maintenance_enabled),
+        "maintenance_interval": max(60, int(daemon_maintenance_interval)),
+        "maintenance_decay_days": max(1, int(daemon_maintenance_decay_days)),
+        "maintenance_decay_limit": max(1, int(daemon_maintenance_decay_limit)),
+        "maintenance_consolidate_limit": max(1, int(daemon_maintenance_consolidate_limit)),
+        "maintenance_compress_sessions": max(1, int(daemon_maintenance_compress_sessions)),
+        "maintenance_compress_min_items": max(2, int(daemon_maintenance_compress_min_items)),
         "cycles": 0,
         "success_count": 0,
         "failure_count": 0,
@@ -3683,10 +3738,11 @@ def run_webui(
             if not daemon_state.get("enabled", True):
                 time.sleep(1)
                 continue
+            scan_every = max(1, int(daemon_state.get("scan_interval", daemon_scan_interval)))
+            pull_every = max(5, int(daemon_state.get("pull_interval", daemon_pull_interval)))
             now_ts = time.time()
-            pull_every = max(5, int(daemon_pull_interval))
             if last_full_run_ts > 0 and (now_ts - last_full_run_ts) < pull_every:
-                time.sleep(max(1, daemon_scan_interval))
+                time.sleep(scan_every)
                 continue
             try:
                 # Operational telemetry for diagnosing long-running instability.
@@ -3706,11 +3762,18 @@ def run_webui(
                     remote_name=gh.get("remote_name", "origin"),
                     branch=gh.get("branch", "main"),
                     remote_url=gh.get("remote_url"),
-                    scan_interval=daemon_scan_interval,
-                    pull_interval=daemon_pull_interval,
-                    retry_max_attempts=daemon_retry_max_attempts,
-                    retry_initial_backoff=daemon_retry_initial_backoff,
-                    retry_max_backoff=daemon_retry_max_backoff,
+                    scan_interval=scan_every,
+                    pull_interval=pull_every,
+                    maintenance_enabled=bool(daemon_state.get("maintenance_enabled", True)),
+                    maintenance_interval=int(daemon_state.get("maintenance_interval", 300)),
+                    maintenance_decay_days=int(daemon_state.get("maintenance_decay_days", 14)),
+                    maintenance_decay_limit=int(daemon_state.get("maintenance_decay_limit", 120)),
+                    maintenance_consolidate_limit=int(daemon_state.get("maintenance_consolidate_limit", 80)),
+                    maintenance_compress_sessions=int(daemon_state.get("maintenance_compress_sessions", 2)),
+                    maintenance_compress_min_items=int(daemon_state.get("maintenance_compress_min_items", 8)),
+                    retry_max_attempts=int(daemon_state.get("retry_max_attempts", daemon_retry_max_attempts)),
+                    retry_initial_backoff=int(daemon_state.get("retry_initial_backoff", daemon_retry_initial_backoff)),
+                    retry_max_backoff=int(daemon_state.get("retry_max_backoff", daemon_retry_max_backoff)),
                     once=True,
                 )
                 last_full_run_ts = time.time()
@@ -3744,7 +3807,7 @@ def run_webui(
                 daemon_state["last_error_kind"] = "unknown"
                 daemon_state["remediation_hint"] = sync_error_hint("unknown")
                 _elog(f"[{utc_now()}] daemon_loop exception: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
-            time.sleep(max(1, daemon_scan_interval))
+            time.sleep(scan_every)
         daemon_state["running"] = False
 
     daemon_thread: threading.Thread | None = None
@@ -4574,11 +4637,57 @@ def run_webui(
                 cfg["sync"]["github"]["remote_name"] = data.get("remote_name", "origin")
                 cfg["sync"]["github"]["remote_url"] = data.get("remote_url", "")
                 cfg["sync"]["github"]["branch"] = data.get("branch", "main")
+                cfg.setdefault("daemon", {})
+                dm = cfg["daemon"]
+
+                def _to_int(name: str, default: int, mn: int, mx: int) -> int:
+                    raw = data.get(name, dm.get(name, default))
+                    try:
+                        v = int(raw)
+                    except Exception:
+                        v = default
+                    return max(mn, min(mx, v))
+
+                def _to_bool(name: str, default: bool) -> bool:
+                    raw = data.get(name, dm.get(name, default))
+                    if isinstance(raw, bool):
+                        return raw
+                    s = str(raw).strip().lower()
+                    if s in {"1", "true", "yes", "on"}:
+                        return True
+                    if s in {"0", "false", "no", "off"}:
+                        return False
+                    return bool(default)
+
+                dm["scan_interval"] = _to_int("daemon_scan_interval", int(daemon_state.get("scan_interval", 8)), 1, 3600)
+                dm["pull_interval"] = _to_int("daemon_pull_interval", int(daemon_state.get("pull_interval", 30)), 5, 86400)
+                dm["retry_max_attempts"] = _to_int("daemon_retry_max_attempts", int(daemon_state.get("retry_max_attempts", 3)), 1, 20)
+                dm["retry_initial_backoff"] = _to_int("daemon_retry_initial_backoff", int(daemon_state.get("retry_initial_backoff", 1)), 1, 120)
+                dm["retry_max_backoff"] = _to_int("daemon_retry_max_backoff", int(daemon_state.get("retry_max_backoff", 8)), 1, 600)
+                dm["maintenance_enabled"] = _to_bool("daemon_maintenance_enabled", bool(daemon_state.get("maintenance_enabled", True)))
+                dm["maintenance_interval"] = _to_int("daemon_maintenance_interval", int(daemon_state.get("maintenance_interval", 300)), 60, 86400)
+                dm["maintenance_decay_days"] = _to_int("daemon_maintenance_decay_days", int(daemon_state.get("maintenance_decay_days", 14)), 1, 365)
+                dm["maintenance_decay_limit"] = _to_int("daemon_maintenance_decay_limit", int(daemon_state.get("maintenance_decay_limit", 120)), 1, 2000)
+                dm["maintenance_consolidate_limit"] = _to_int("daemon_maintenance_consolidate_limit", int(daemon_state.get("maintenance_consolidate_limit", 80)), 1, 1000)
+                dm["maintenance_compress_sessions"] = _to_int("daemon_maintenance_compress_sessions", int(daemon_state.get("maintenance_compress_sessions", 2)), 1, 20)
+                dm["maintenance_compress_min_items"] = _to_int("daemon_maintenance_compress_min_items", int(daemon_state.get("maintenance_compress_min_items", 8)), 2, 200)
                 try:
                     save_config(cfg_path, cfg)
                     nonlocal paths
                     paths = resolve_paths(cfg)
                     ensure_storage(paths, schema_sql_path)
+                    daemon_state["scan_interval"] = int(dm["scan_interval"])
+                    daemon_state["pull_interval"] = int(dm["pull_interval"])
+                    daemon_state["retry_max_attempts"] = int(dm["retry_max_attempts"])
+                    daemon_state["retry_initial_backoff"] = int(dm["retry_initial_backoff"])
+                    daemon_state["retry_max_backoff"] = int(dm["retry_max_backoff"])
+                    daemon_state["maintenance_enabled"] = bool(dm["maintenance_enabled"])
+                    daemon_state["maintenance_interval"] = int(dm["maintenance_interval"])
+                    daemon_state["maintenance_decay_days"] = int(dm["maintenance_decay_days"])
+                    daemon_state["maintenance_decay_limit"] = int(dm["maintenance_decay_limit"])
+                    daemon_state["maintenance_consolidate_limit"] = int(dm["maintenance_consolidate_limit"])
+                    daemon_state["maintenance_compress_sessions"] = int(dm["maintenance_compress_sessions"])
+                    daemon_state["maintenance_compress_min_items"] = int(dm["maintenance_compress_min_items"])
                     was_initialized = daemon_state.get("initialized", False)
                     daemon_state["initialized"] = True
                     if not was_initialized and enable_daemon:
