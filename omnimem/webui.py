@@ -786,6 +786,8 @@ HTML_PAGE = """<!doctype html>
 	                <option value=\"path\">path</option>
 	              </select>
 	            </label>
+	            <button id=\"btnMemAutoTune\" class=\"secondary\" style=\"margin-top:0\">Auto Tune</button>
+	            <span id=\"memRetrieveHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
 	          <label>Layer Filter
 	            <select id=\"memLayer\" class=\"lang\" style=\"width:100%; max-width:260px;\">
@@ -1093,6 +1095,26 @@ HTML_PAGE = """<!doctype html>
 	    }
 	    function safeSetWsConfirm(v) {
 	      try { localStorage.setItem('omnimem.ws_confirm', v ? '1' : '0'); } catch (_) {}
+	    }
+	    function safeGetRetrievePrefs() {
+	      try {
+	        return {
+	          mode: localStorage.getItem('omnimem.mem_mode') || 'basic',
+	          depth: Number(localStorage.getItem('omnimem.mem_depth') || '2'),
+	          per_hop: Number(localStorage.getItem('omnimem.mem_per_hop') || '6'),
+	          ranking: localStorage.getItem('omnimem.mem_ranking') || 'hybrid',
+	        };
+	      } catch (_) {
+	        return { mode: 'basic', depth: 2, per_hop: 6, ranking: 'hybrid' };
+	      }
+	    }
+	    function safeSetRetrievePrefs(p) {
+	      try {
+	        localStorage.setItem('omnimem.mem_mode', String(p.mode || 'basic'));
+	        localStorage.setItem('omnimem.mem_depth', String(p.depth || 2));
+	        localStorage.setItem('omnimem.mem_per_hop', String(p.per_hop || 6));
+	        localStorage.setItem('omnimem.mem_ranking', String(p.ranking || 'hybrid'));
+	      } catch (_) {}
 	    }
 	    function safeGetWorkset() {
 	      try {
@@ -1532,6 +1554,51 @@ HTML_PAGE = """<!doctype html>
 	      return `<div class=\"small mono\">score=${escHtml(score.toFixed(3))} rel=${escHtml(rel.toFixed(2))} rec=${escHtml(rec.toFixed(2))} imp=${escHtml(imp.toFixed(2))} ${escHtml(strat)}</div>`;
 	    }
 
+	    function smartTuneRetrieveParams() {
+	      const query = document.getElementById('memQuery')?.value?.trim() || '';
+	      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
+	      const toks = (query.match(/[\w\u4e00-\u9fff]+/g) || []).length;
+	      let depth = 2;
+	      let per_hop = 6;
+	      let ranking = 'hybrid';
+	      let why = 'balanced default';
+	      if (!query) {
+	        depth = 1; per_hop = 4; ranking = 'path'; why = 'no query: lightweight traversal';
+	      } else if (toks <= 2) {
+	        depth = 3; per_hop = 8; ranking = 'ppr'; why = 'short query: expand with ppr';
+	      } else if (toks >= 8) {
+	        depth = 2; per_hop = 5; ranking = 'hybrid'; why = 'long query: precision-first';
+	      }
+	      if (session_id) {
+	        depth = Math.max(1, depth - 1);
+	        per_hop = Math.max(3, per_hop - 1);
+	        why += '; session scope narrows expansion';
+	      }
+	      const modeEl = document.getElementById('memRetrieveMode');
+	      const depthEl = document.getElementById('memRetrieveDepth');
+	      const hopEl = document.getElementById('memRetrievePerHop');
+	      const rankEl = document.getElementById('memRankingMode');
+	      if (modeEl) modeEl.value = 'smart';
+	      if (depthEl) depthEl.value = String(depth);
+	      if (hopEl) hopEl.value = String(per_hop);
+	      if (rankEl) rankEl.value = ranking;
+	      const hint = document.getElementById('memRetrieveHint');
+	      if (hint) hint.textContent = `auto: depth=${depth}, per_hop=${per_hop}, ranking=${ranking} (${why})`;
+	      safeSetRetrievePrefs({ mode: 'smart', depth, per_hop, ranking });
+	    }
+
+	    function loadRetrievePrefs() {
+	      const p = safeGetRetrievePrefs();
+	      const modeEl = document.getElementById('memRetrieveMode');
+	      const depthEl = document.getElementById('memRetrieveDepth');
+	      const hopEl = document.getElementById('memRetrievePerHop');
+	      const rankEl = document.getElementById('memRankingMode');
+	      if (modeEl) modeEl.value = String(p.mode || 'basic');
+	      if (depthEl) depthEl.value = String(Number.isFinite(p.depth) ? p.depth : 2);
+	      if (hopEl) hopEl.value = String(Number.isFinite(p.per_hop) ? p.per_hop : 6);
+	      if (rankEl) rankEl.value = String(p.ranking || 'hybrid');
+	    }
+
 	    async function loadMem() {
 	      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
 	      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
@@ -1541,6 +1608,12 @@ HTML_PAGE = """<!doctype html>
 	      const depth = Number(document.getElementById('memRetrieveDepth')?.value || 2);
 	      const per_hop = Number(document.getElementById('memRetrievePerHop')?.value || 6);
 	      const ranking_mode = document.getElementById('memRankingMode')?.value?.trim() || 'hybrid';
+	      safeSetRetrievePrefs({
+	        mode,
+	        depth: Number.isFinite(depth) ? Math.max(1, Math.min(4, Math.floor(depth))) : 2,
+	        per_hop: Number.isFinite(per_hop) ? Math.max(1, Math.min(30, Math.floor(per_hop))) : 6,
+	        ranking: ranking_mode || 'hybrid',
+	      });
 	      const d = await jget(
 	        '/api/memories?limit=20'
 	        + '&project_id=' + encodeURIComponent(project_id)
@@ -2940,6 +3013,7 @@ HTML_PAGE = """<!doctype html>
 	          document.getElementById('btnProjectDetach').onclick = () => detachProject();
 	          document.getElementById('btnMemReload').onclick = () => loadMem();
 	          document.getElementById('btnMemOpenBoard').onclick = async () => { setActiveTab('insightsTab'); await loadInsights(); };
+          document.getElementById('btnMemAutoTune').onclick = async () => { smartTuneRetrieveParams(); await loadMem(); };
 	          document.getElementById('memLayer').onchange = () => loadMem();
           document.getElementById('memRetrieveMode').onchange = () => loadMem();
           document.getElementById('memRankingMode').onchange = () => loadMem();
@@ -3381,10 +3455,11 @@ HTML_PAGE = """<!doctype html>
       if (s) s.innerHTML = `<span class=\"err\">UI error: ${e.message}</span>`;
     });
 
-		    bindActions();
-		    bindTabs();
-		    applyI18n();
+	    bindActions();
+	    bindTabs();
+	    applyI18n();
         loadBuildInfo();
+	    loadRetrievePrefs();
 		    loadThrFromStorage();
 	    loadLiveFromStorage();
 	    updateBoardToolbar();
