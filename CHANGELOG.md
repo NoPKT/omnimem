@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.2.24 - 2026-02-12
+
+
+
 ## 0.2.23 - 2026-02-12
 
 - OAuth broker templates: add missing `wrangler.toml` to Cloudflare Worker template, fixing one-click deploy failure (`Could not find a wrangler.json/jsonc/toml file`).
