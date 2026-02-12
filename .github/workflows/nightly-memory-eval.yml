@@ -23,6 +23,7 @@ jobs:
       - name: Prepare eval dataset and run core merge evaluation
         env:
           OMNIMEM_HOME: ${{ runner.temp }}/omnimem-nightly-home
+          PYTHONPATH: .
         run: |
           set -euo pipefail
           CFG="$OMNIMEM_HOME/omnimem.config.json"

@@ -36,8 +36,10 @@
 - WebUI UX upgrade: add GitHub repo picker (`/api/github/repos`) to select `owner/repo` from `gh repo list` results instead of manual entry.
 - WebUI UX upgrade: add one-click GitHub browser auth start (`/api/github/auth/start`) so users can authenticate via `gh auth login --web` without manual SSH key/token setup in OM.
 - WebUI OAuth: add pure GitHub OAuth device flow (`Sign In via GitHub` + `Complete OAuth Login`) that works without local `gh` CLI; stores token in runtime credential file and supports OAuth-backed repo listing/creation.
+- WebUI OAuth UX: `Sign In via GitHub` now auto-polls device-flow completion until success/timeout, reducing manual poll clicks.
 - Sync auth: add `oauth_token_file` support in Git sync pipeline and use `GIT_ASKPASS` for HTTPS GitHub remotes, so OAuth device tokens can authenticate `github-pull`/`github-push` without embedding secrets in remote URLs.
 - CI reliability: fix `nightly-memory-eval` `ModuleNotFoundError` by adding repo-root `sys.path` bootstrap in `scripts/tune_core_merge_from_eval.py` (and `tune_governance_from_eval.py` for parity).
+- CI reliability: set `PYTHONPATH=.` in `nightly-memory-eval` workflow step to make script/module resolution robust in runner environments.
 - WebUI cleanup: extract governance query/packing helpers (`_parse_governance_request`, `_governance_scope_filters`, `_pack_governance_rows`, `_infer_governance_thresholds`) to reduce endpoint complexity.
 
 ## 0.2.21 - 2026-02-11

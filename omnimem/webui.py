@@ -1454,6 +1454,9 @@ HTML_PAGE = """<!doctype html>
 	    let liveOn = false;
 	    let liveTimer = null;
 	    let liveBusy = false;
+	    let ghOAuthPollTimer = null;
+	    let ghOAuthPollUntilMs = 0;
+	    let ghOAuthPollIntervalMs = 5000;
 	    let boardSelectMode = false;
 	    let selectedBoardIds = new Set();
 	    let currentEvent = null;
@@ -2003,6 +2006,36 @@ HTML_PAGE = """<!doctype html>
       return d;
     }
 
+    function stopGithubOAuthAutoPoll() {
+      if (ghOAuthPollTimer) {
+        clearInterval(ghOAuthPollTimer);
+        ghOAuthPollTimer = null;
+      }
+      ghOAuthPollUntilMs = 0;
+    }
+
+    function startGithubOAuthAutoPoll(intervalSec, expiresAtIso) {
+      stopGithubOAuthAutoPoll();
+      const sec = Math.max(2, Number(intervalSec || 5));
+      ghOAuthPollIntervalMs = Math.max(2000, Math.round(sec * 1000));
+      const expMs = Date.parse(String(expiresAtIso || ''));
+      ghOAuthPollUntilMs = Number.isFinite(expMs) ? expMs : (Date.now() + 8 * 60 * 1000);
+      ghOAuthPollTimer = setInterval(async () => {
+        if (Date.now() >= ghOAuthPollUntilMs) {
+          stopGithubOAuthAutoPoll();
+          toast('GitHub', 'OAuth polling timed out. Restart Sign In if needed.', false);
+          return;
+        }
+        const d = await githubAuthPoll({ silentPending: true });
+        if (d.ok && d.authenticated) {
+          stopGithubOAuthAutoPoll();
+          await checkGithubStatus();
+        } else if (!d.ok && !d.pending) {
+          stopGithubOAuthAutoPoll();
+        }
+      }, ghOAuthPollIntervalMs);
+    }
+
     async function githubAuthStart() {
       const f = document.getElementById('cfgForm');
       const out = document.getElementById('githubQuickOut');
@@ -2016,26 +2049,32 @@ HTML_PAGE = """<!doctype html>
         if (d.verification_uri_complete) {
           try { window.open(String(d.verification_uri_complete), '_blank', 'noopener,noreferrer'); } catch (_) {}
         }
-        toast('GitHub', 'OAuth started; authorize in browser, then click Complete OAuth Login.', true);
+        startGithubOAuthAutoPoll(d.interval || 5, d.expires_at || '');
+        toast('GitHub', 'OAuth started; authorize in browser. Auto polling is running.', true);
       } else if (d.ok && d.started) {
         toast('GitHub', 'Browser auth started; complete login and click Check GitHub Auth.', true);
       } else if (d.ok && d.already_authenticated) {
+        stopGithubOAuthAutoPoll();
         toast('GitHub', 'Already authenticated.', true);
       } else {
+        stopGithubOAuthAutoPoll();
         toast('GitHub', d.error || 'failed to start auth', false);
       }
       return d;
     }
 
-    async function githubAuthPoll() {
+    async function githubAuthPoll(opts = {}) {
+      const silentPending = !!opts.silentPending;
       const out = document.getElementById('githubQuickOut');
       const d = await jpost('/api/github/auth/poll', {});
       out.textContent = JSON.stringify(d, null, 2);
       if (d.ok && d.authenticated) {
+        stopGithubOAuthAutoPoll();
         toast('GitHub', 'OAuth authenticated.', true);
       } else if (d.ok && d.pending) {
-        toast('GitHub', d.error || 'authorization pending', false);
+        if (!silentPending) toast('GitHub', d.error || 'authorization pending', false);
       } else if (!d.ok) {
+        stopGithubOAuthAutoPoll();
         toast('GitHub', d.error || 'oauth poll failed', false);
       }
       return d;
@@ -4931,6 +4970,7 @@ def _github_oauth_poll(*, cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]
     oauth = _github_oauth_cfg(cfg)
     cid = _github_oauth_client_id(cfg, client_id=str(oauth.get("client_id", "")))
     dcode = str(oauth.get("device_code") or "").strip()
+    retry_after = max(2, int(oauth.get("interval", 5) or 5))
     if not cid or not dcode:
         return {"ok": False, "error": "oauth device flow is not started"}
     req = _github_api_request(
@@ -4949,7 +4989,9 @@ def _github_oauth_poll(*, cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]
         err = str((data or {}).get("error") or "authorization_pending").strip()
         desc = str((data or {}).get("error_description") or err).strip()
         if err in {"authorization_pending", "slow_down"}:
-            return {"ok": True, "pending": True, "error": desc[:800]}
+            if err == "slow_down":
+                retry_after = max(retry_after, 7)
+            return {"ok": True, "pending": True, "error": desc[:800], "retry_after": int(retry_after)}
         return {"ok": False, "error": desc[:1200]}
     token_payload = {
         "provider": "github",

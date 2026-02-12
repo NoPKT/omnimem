@@ -62,7 +62,7 @@ WebUI provides:
 - Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
 - GitHub quick auth/setup actions on Config tab:
   - `Sign In via GitHub`: launches browser auth via local `gh auth login --web`
-  - Pure OAuth device flow (no `gh` needed): fill `OAuth Client ID`, click `Sign In via GitHub`, then `Complete OAuth Login`
+  - Pure OAuth device flow (no `gh` needed): fill `OAuth Client ID`, click `Sign In via GitHub`; WebUI auto-polls completion (manual `Complete OAuth Login` is also available)
   - `Check GitHub Auth`: checks local `gh auth status`
   - `Refresh Repo List` + `Use Selected Repo`: pick `owner/repo` from `gh repo list`
   - `Apply GitHub Setup`: writes sync remote settings from selected protocol/repo
