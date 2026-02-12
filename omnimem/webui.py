@@ -1996,6 +1996,12 @@ HTML_PAGE = """<!doctype html>
       return patch[key] || dict[key] || enPatch[key] || I18N.en[key] || key;
     }
 
+    function hasLocaleKey(key) {
+      const dict = I18N[currentLang] || {};
+      const patch = I18N_PATCH[currentLang] || {};
+      return Object.prototype.hasOwnProperty.call(patch, key) || Object.prototype.hasOwnProperty.call(dict, key);
+    }
+
     function tf(key, vars) {
       let s = String(t(key) || '');
       const mp = vars || {};
@@ -2184,11 +2190,21 @@ HTML_PAGE = """<!doctype html>
         }
         const dk = el.getAttribute('data-i18n-title');
         if (dk) {
-          el.setAttribute('title', t(dk));
+          const tv = hasLocaleKey(dk) ? t(dk) : String(el.getAttribute('title') || '').trim();
+          if (tv) el.setAttribute('title', tv);
           return;
         }
         const di = el.getAttribute('data-i18n');
-        const text = di ? t(di) : l(String((el.getAttribute('placeholder') || el.textContent || '')).trim());
+        let text = '';
+        if (di) {
+          if (hasLocaleKey(di)) {
+            text = t(di);
+          } else {
+            text = l(String((el.getAttribute('placeholder') || el.textContent || '')).trim());
+          }
+        } else {
+          text = l(String((el.getAttribute('placeholder') || el.textContent || '')).trim());
+        }
         if (text) el.setAttribute('title', prefix + text.replace(/\\s+/g, ' ').trim());
       });
     }
