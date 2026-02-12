@@ -1616,6 +1616,70 @@ HTML_PAGE = """<!doctype html>
       },
     };
 
+    const LITERAL_KEY_MAP = {
+      'Status & Actions': 'tab_status',
+      'Insights': 'tab_insights',
+      'Configuration': 'tab_config',
+      'Project Integration': 'tab_project',
+      'Memory': 'tab_memory',
+      'System Status': 'system_status',
+      'Actions': 'actions',
+      'Layered Memory Map': 'insights_title',
+      'A quick read of how your knowledge is distributed. Click a layer to filter the Memory tab.': 'insights_hint',
+      'Project ID Filter': 'mem_project_filter',
+      'Kinds': 'ins_kinds',
+      'Activity (14d)': 'ins_activity',
+      'Governance': 'ins_govern',
+      'Promote stable knowledge upward; demote volatile, low-reuse items.': 'ins_govern_hint',
+      'Top Tags': 'ins_tags',
+      'Recent Checkpoints': 'ins_checkpoints',
+      'Session Timeline': 'ins_timeline',
+      'Turns and checkpoints, grouped by session. Click an item to open details.': 'ins_timeline_hint',
+      'Recent Memories': 'mem_recent',
+      'Click an ID to open full content': 'mem_hint',
+      'Memory Content': 'mem_content',
+      'Project Path': 'project_path',
+      'Project ID': 'project_id',
+      'Attached Projects (Local)': 'project_list_title',
+      'Config Path': 'cfg_path',
+      'Home': 'cfg_home',
+      'Markdown Path': 'cfg_markdown',
+      'JSONL Path': 'cfg_jsonl',
+      'SQLite Path': 'cfg_sqlite',
+      'Git Remote Name': 'cfg_remote_name',
+      'Git Remote URL': 'cfg_remote_url',
+      'Git Branch': 'cfg_branch',
+      'Reload': 'btn_reload',
+      'Check Sync Status': 'btn_status',
+      'Bootstrap Device Sync': 'btn_bootstrap',
+      'Push': 'btn_push',
+      'Pull': 'btn_pull',
+      'Enable Daemon': 'btn_daemon_on',
+      'Disable Daemon': 'btn_daemon_off',
+      'Save Configuration': 'btn_save',
+      'Browse Directory': 'btn_browse_project',
+      'Use Server CWD': 'btn_use_cwd',
+      'Directory Browser': 'browser_title',
+      'Up': 'btn_browser_up',
+      'Select This Directory': 'btn_browser_select',
+      'Close': 'btn_browser_close',
+      'Attach Project + Install Agent Rules': 'btn_project_attach',
+      'Detach Project': 'btn_project_detach',
+      'Reload Projects': 'btn_projects_reload',
+      'ID': 'th_id',
+      'Project': 'th_project',
+      'Layer': 'th_layer',
+      'Kind': 'th_kind',
+      'Summary': 'th_summary',
+      'Updated At': 'th_updated',
+      'Language': 'language',
+      'Advanced': 'btn_advanced',
+      'Simple': 'btn_simple',
+      'Simple mode: Status & Actions / Insights / Memory': 'subtitle_simple',
+      'Advanced mode: full console': 'subtitle_adv',
+      'OmniMem WebUI': 'title',
+    };
+
     function safeGetLang() {
       try { return localStorage.getItem('omnimem.lang') || 'en'; } catch (_) { return 'en'; }
     }
@@ -1864,7 +1928,13 @@ HTML_PAGE = """<!doctype html>
     function l(raw) {
       const base = String(raw || '').trim();
       const dict = I18N_LITERALS[currentLang] || {};
-      return String(dict[base] || base);
+      if (dict[base]) return String(dict[base]);
+      const k = LITERAL_KEY_MAP[base];
+      if (k) {
+        const tv = String(t(k) || '');
+        if (tv && tv !== k) return tv;
+      }
+      return base;
     }
 
     function setTextById(id, key) {
@@ -2038,7 +2108,7 @@ HTML_PAGE = """<!doctype html>
           return;
         }
         const di = el.getAttribute('data-i18n');
-        const text = di ? t(di) : String((el.getAttribute('placeholder') || el.textContent || '')).trim();
+        const text = di ? t(di) : l(String((el.getAttribute('placeholder') || el.textContent || '')).trim());
         if (text) el.setAttribute('title', prefix + text.replace(/\\s+/g, ' ').trim());
       });
     }
