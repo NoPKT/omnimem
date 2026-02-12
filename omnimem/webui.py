@@ -201,6 +201,23 @@ HTML_PAGE = """<!doctype html>
 	    button:disabled { opacity: .45; cursor: not-allowed; transform: none; filter: none; }
 
     .row-btn { display:flex; gap:10px; flex-wrap:wrap; }
+    .section-nav { margin-bottom: 10px; }
+    .section-chip {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.76);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .section-chip.active {
+      color: var(--ink);
+      border-color: rgba(14,165,233,.35);
+      background: var(--tab);
+      box-shadow: 0 8px 16px rgba(11,18,32,.06);
+    }
+    .cfg-block { animation: fadeUp .12s ease both; }
     .advanced-only { display:none !important; }
     body.advanced .advanced-only { display: revert !important; }
 
@@ -478,8 +495,16 @@ HTML_PAGE = """<!doctype html>
     </div>
 
     <div id=\"insightsTab\" class=\"panel\">
+      <div id=\"insSectionNav\" class=\"row-btn advanced-only section-nav\">
+        <button class=\"section-chip active\" data-ins-section=\"overview\" style=\"margin-top:0\">Overview</button>
+        <button class=\"section-chip\" data-ins-section=\"governance\" style=\"margin-top:0\">Governance</button>
+        <button class=\"section-chip\" data-ins-section=\"sessions\" style=\"margin-top:0\">Sessions</button>
+        <button class=\"section-chip\" data-ins-section=\"operations\" style=\"margin-top:0\">Operations</button>
+        <button class=\"section-chip\" data-ins-section=\"signals\" style=\"margin-top:0\">Signals</button>
+        <button class=\"section-chip\" data-ins-section=\"all\" style=\"margin-top:0\">All</button>
+      </div>
       <div class=\"grid\">
-	        <div class=\"card wide\">
+	        <div class=\"card wide\" data-ins-section=\"overview\">
 	          <h3 data-i18n=\"insights_title\">Layered Memory Map</h3>
 	          <div class=\"small\" data-i18n=\"insights_hint\">A quick read of how your knowledge is distributed. Click a layer to filter the Memory tab.</div>
 	          <label><span data-i18n=\"mem_project_filter\">Project ID Filter</span><input id=\"insProjectId\" placeholder=\"(empty = all projects)\" /></label>
@@ -490,7 +515,7 @@ HTML_PAGE = """<!doctype html>
 	          <div id=\"insLayers\" class=\"grid\" style=\"grid-template-columns: repeat(4, 1fr);\"></div>
 	        </div>
 	
-	        <div class=\"card wide\">
+	        <div class=\"card wide\" data-ins-section=\"overview\">
 	          <h3>Layer Board</h3>
 	          <div class=\"small\">Drag a card to change its layer. Click a card to open full details.</div>
 	          <div class=\"row-btn\" style=\"margin-top:10px\">
@@ -521,15 +546,15 @@ HTML_PAGE = """<!doctype html>
 		        </div>
 
           <div class=\"advanced-only\" style=\"display:contents\">
-	        <div class=\"card\">
+	        <div class=\"card\" data-ins-section=\"signals\">
 	          <h3 data-i18n=\"ins_kinds\">Kinds</h3>
 	          <div id=\"insKinds\" class=\"small\"></div>
 	        </div>
-        <div class=\"card\">
+        <div class=\"card\" data-ins-section=\"signals\">
           <h3 data-i18n=\"ins_activity\">Activity (14d)</h3>
           <div id=\"insActivity\" class=\"small\"></div>
         </div>
-        <div class=\"card\">
+        <div class=\"card\" data-ins-section=\"governance\">
           <h3>Memory Quality (Week)</h3>
           <div class=\"small\">Conflict/reuse/decay and freshness metrics with week-over-week delta.</div>
           <div class=\"row-btn\" style=\"margin-top:8px\">
@@ -539,7 +564,7 @@ HTML_PAGE = """<!doctype html>
           </div>
           <div id=\"insQuality\" class=\"small\"></div>
         </div>
-        <div class=\"card\">
+        <div class=\"card\" data-ins-section=\"governance\">
           <h3 data-i18n=\"ins_govern\">Governance</h3>
           <div class=\"small\" data-i18n=\"ins_govern_hint\">Promote stable knowledge upward; demote volatile, low-reuse items.</div>
           <div class=\"muted-box\" style=\"margin-top:10px\">
@@ -576,20 +601,20 @@ HTML_PAGE = """<!doctype html>
           </div>
           <div id=\"insGovern\" class=\"small\"></div>
         </div>
-        <div class=\"card wide\">
+        <div class=\"card wide\" data-ins-section=\"signals\">
           <h3 data-i18n=\"ins_tags\">Top Tags</h3>
           <div id=\"insTags\" class=\"small\"></div>
         </div>
-        <div class=\"card wide\">
+        <div class=\"card wide\" data-ins-section=\"signals\">
           <h3 data-i18n=\"ins_checkpoints\">Recent Checkpoints</h3>
           <div id=\"insCheckpoints\" class=\"small\"></div>
         </div>
-	        <div class=\"card wide\">
+	        <div class=\"card wide\" data-ins-section=\"sessions\">
 	          <h3 data-i18n=\"ins_timeline\">Session Timeline</h3>
 	          <div class=\"small\" data-i18n=\"ins_timeline_hint\">Turns and checkpoints, grouped by session. Click an item to open details.</div>
 	          <div id=\"insTimeline\" class=\"small\"></div>
 	        </div>
-	        <div class=\"card wide\">
+	        <div class=\"card wide\" data-ins-section=\"sessions\">
 	          <h3>Sessions Console</h3>
 	          <div class=\"small\">Recent sessions with health signals. Use Activate to scope the console.</div>
 	          <div class=\"row-btn\">
@@ -636,7 +661,7 @@ HTML_PAGE = """<!doctype html>
 	            <tbody id=\"sessionsBody\"></tbody>
 	          </table>
 	        </div>
-	        <div class=\"card wide\">
+	        <div class=\"card wide\" data-ins-section=\"operations\">
 	          <h3>Maintenance</h3>
 	          <div class=\"small\">Operational tools to keep the memory model healthy. Use preview first; apply writes a governance event.</div>
 	          <div class=\"row-btn\">
@@ -686,7 +711,7 @@ HTML_PAGE = """<!doctype html>
             <div id=\"maintForecast\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	          <div id=\"maintStats\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	        </div>
-	        <div class=\"card wide\">
+	        <div class=\"card wide\" data-ins-section=\"operations\">
 	          <h3>Governance Log</h3>
 	          <div class=\"small\">Operational event stream (promote/reuse/sync/retrieve/write). Click an event to inspect payload.</div>
 	          <div class=\"row-btn\">
@@ -754,6 +779,13 @@ HTML_PAGE = """<!doctype html>
         <div class=\"card wide\">
           <h3 data-i18n=\"config_title\">Configuration</h3>
           <form id=\"cfgForm\">
+            <div id=\"cfgSectionNav\" class=\"row-btn section-nav\">
+              <button class=\"section-chip active\" data-cfg-section=\"core\" type=\"button\" style=\"margin-top:0\">Core</button>
+              <button class=\"section-chip\" data-cfg-section=\"github\" type=\"button\" style=\"margin-top:0\">GitHub</button>
+              <button class=\"section-chip\" data-cfg-section=\"daemon\" type=\"button\" style=\"margin-top:0\">Daemon & Maintenance</button>
+              <button class=\"section-chip\" data-cfg-section=\"all\" type=\"button\" style=\"margin-top:0\">All</button>
+            </div>
+            <div class=\"cfg-block\" data-cfg-section=\"core\">
             <label><span data-i18n=\"cfg_path\">Config Path</span><input name=\"config_path\" readonly /></label>
             <label><span data-i18n=\"cfg_home\">Home</span><input name=\"home\" /></label>
             <label><span data-i18n=\"cfg_markdown\">Markdown Path</span><input name=\"markdown\" /></label>
@@ -763,6 +795,8 @@ HTML_PAGE = """<!doctype html>
             <label><span data-i18n=\"cfg_remote_url\">Git Remote URL</span><input name=\"remote_url\" placeholder=\"git@github.com:user/repo.git\" /></label>
             <label><span data-i18n=\"cfg_branch\">Git Branch</span><input name=\"branch\" /></label>
             <div class=\"divider\"></div>
+            </div>
+            <div class=\"cfg-block\" data-cfg-section=\"github\">
             <div class=\"small\"><b>GitHub Quick Setup</b></div>
             <label><span>Repo (owner/repo)</span><input name=\"gh_full_name\" placeholder=\"yourname/omnimem-memory\" /></label>
             <label><span>OAuth Client ID (optional)</span><input name=\"gh_oauth_client_id\" placeholder=\"Iv1.xxxxx\" /></label>
@@ -782,6 +816,8 @@ HTML_PAGE = """<!doctype html>
             </div>
             <pre id=\"githubQuickOut\" class=\"small\"></pre>
             <div class=\"divider\"></div>
+            </div>
+            <div class=\"cfg-block\" data-cfg-section=\"daemon\">
             <label><span>Daemon Scan Interval (s)</span><input name=\"daemon_scan_interval\" type=\"number\" min=\"1\" max=\"3600\" /></label>
             <label><span>Daemon Pull Interval (s)</span><input name=\"daemon_pull_interval\" type=\"number\" min=\"5\" max=\"86400\" /></label>
             <label><span>Daemon Retry Max Attempts</span><input name=\"daemon_retry_max_attempts\" type=\"number\" min=\"1\" max=\"20\" /></label>
@@ -811,6 +847,7 @@ HTML_PAGE = """<!doctype html>
             <label><span>Maintenance Reflection Max Avg Retrieved</span><input name=\"daemon_maintenance_reflection_max_avg_retrieved\" type=\"number\" min=\"0\" max=\"20\" step=\"0.1\" /></label>
             <label><span>Approval Required For Apply</span><select name=\"webui_approval_required\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
             <label><span>Preview-Only Until (ISO UTC)</span><input name=\"webui_maintenance_preview_only_until\" placeholder=\"2026-02-18T00:00:00+00:00\" /></label>
+            </div>
             <button type=\"submit\" data-i18n=\"btn_save\">Save Configuration</button>
           </form>
         </div>
@@ -1983,11 +2020,13 @@ HTML_PAGE = """<!doctype html>
 	    let eventsCache = [];
 	    let eventsAll = [];
 		    let selectedEventIdx = -1;
-		    let eventsSort = { key: 'event_time', dir: 'desc' };
-		    let lastEventsCtx = { project_id:'', session_id:'', event_type:'' };
+	    let eventsSort = { key: 'event_time', dir: 'desc' };
+	    let lastEventsCtx = { project_id:'', session_id:'', event_type:'' };
         let governanceRecommended = null;
-		    let pendingWsImport = null;
-		    let pendingWsSource = '';
+	    let pendingWsImport = null;
+	    let pendingWsSource = '';
+      let insightsSection = 'overview';
+      let configSection = 'core';
 
     function t(key) {
       const dict = I18N[currentLang] || I18N.en;
@@ -2031,6 +2070,30 @@ HTML_PAGE = """<!doctype html>
     function setPlaceholderById(id, key) {
       const el = document.getElementById(id);
       if (el) el.setAttribute('placeholder', t(key));
+    }
+
+    function setInsightsSection(section) {
+      const next = String(section || 'overview').trim() || 'overview';
+      insightsSection = next;
+      document.querySelectorAll('#insSectionNav .section-chip').forEach(btn => {
+        btn.classList.toggle('active', (btn.dataset.insSection || '') === next);
+      });
+      document.querySelectorAll('#insightsTab .card[data-ins-section]').forEach(card => {
+        const s = card.getAttribute('data-ins-section') || '';
+        card.style.display = (next === 'all' || s === next) ? '' : 'none';
+      });
+    }
+
+    function setConfigSection(section) {
+      const next = String(section || 'core').trim() || 'core';
+      configSection = next;
+      document.querySelectorAll('#cfgSectionNav .section-chip').forEach(btn => {
+        btn.classList.toggle('active', (btn.dataset.cfgSection || '') === next);
+      });
+      document.querySelectorAll('#cfgForm .cfg-block[data-cfg-section]').forEach(block => {
+        const s = block.getAttribute('data-cfg-section') || '';
+        block.style.display = (next === 'all' || s === next) ? '' : 'none';
+      });
     }
 
     function setLabelPrefixForInput(inputId, key) {
@@ -2219,6 +2282,8 @@ HTML_PAGE = """<!doctype html>
         const active = document.querySelector('.panel.active');
         if (active && active.classList.contains('advanced-only')) setActiveTab('statusTab');
       }
+      setInsightsSection(insightsSection);
+      setConfigSection(configSection);
     }
 
 	    function applyI18n() {
@@ -5163,6 +5228,12 @@ HTML_PAGE = """<!doctype html>
         if (bST) bST.onclick = () => saveRouteTemplate();
 	      const bC = document.getElementById('btnBoardClear');
 	      if (bC) bC.onclick = () => clearBoardSelection();
+        document.querySelectorAll('#insSectionNav .section-chip').forEach(btn => {
+          btn.onclick = () => setInsightsSection(btn.dataset.insSection || 'overview');
+        });
+        document.querySelectorAll('#cfgSectionNav .section-chip').forEach(btn => {
+          btn.onclick = () => setConfigSection(btn.dataset.cfgSection || 'core');
+        });
 	      const liveBtn = document.getElementById('btnLiveToggle');
 	      if (liveBtn) liveBtn.onclick = () => setLive(!liveOn);
           const liveSel = document.getElementById('liveInterval');
