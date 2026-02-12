@@ -2,36 +2,61 @@
 
 Language: [English](quickstart-10min.md) | [简体中文](quickstart-10min.zh-CN.md)
 
-## New device
-
-After npm publish:
+## 1) Install
 
 ```bash
-npx -y omnimem
+bash scripts/install.sh
 ```
 
-Without npm publish yet:
+## 2) Start OmniMem
+
+```bash
+~/.omnimem/bin/omnimem start
+```
+
+Open: `http://127.0.0.1:8765`
+
+## 3) Configure GitHub sync (optional)
+
+In WebUI:
+
+- `Configuration` -> `GitHub Quick Setup`
+- Click `Sign In via GitHub`
+- Select/create repo and apply setup
+
+Note: memory sync remains local Git operations on your machine.
+
+## 4) Sync on a new device (optional)
 
 ```bash
 bash scripts/bootstrap.sh --repo <your-omnimem-repo-url>
 ```
 
-## Open UI
+## 5) Attach a project (optional)
 
 ```bash
-~/.omnimem/bin/omnimem --host 127.0.0.1 --port 8765
+bash scripts/attach_project.sh /path/to/project my-project-id
 ```
 
-Open `http://127.0.0.1:8765`.
-
-## New project
+## 6) Daily commands
 
 ```bash
-~/.omnimem/app/scripts/attach_project.sh /path/to/project my-project-id
+omnimem codex
+omnimem claude
+omnimem doctor
+omnimem stop
 ```
 
-## Remove
+## 7) Remove OmniMem
 
 ```bash
 ~/.omnimem/bin/omnimem uninstall --yes
 ```
+
+## Troubleshooting
+
+- Port already in use:
+  - `~/.omnimem/bin/omnimem --host 127.0.0.1 --port 8766`
+- GitHub login issues:
+  - run `omnimem doctor`
+  - see `docs/oauth-broker.md` for OAuth broker shortcuts
