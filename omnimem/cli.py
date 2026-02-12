@@ -710,6 +710,7 @@ def cmd_enhance(args: argparse.Namespace) -> int:
 
 def cmd_webui(args: argparse.Namespace) -> int:
     cfg, cfg_path = load_config_with_path(cfg_path_arg(args))
+    _maybe_run_startup_sync_guide(args, cfg, cfg_path)
     dm = cfg.get("daemon", {})
 
     def _pick_int(name: str, arg_value: int | None, default: int, mn: int, mx: int) -> int:
@@ -1295,6 +1296,101 @@ def cmd_oauth_broker_auto(args: argparse.Namespace) -> int:
         cfg_out = _update_cfg_broker_url(cfg_path=cfg_path_arg(args), broker_url=broker_url)
         print_json({"ok": True, "action": "config-update", **cfg_out})
     return 0
+
+
+def _startup_guide_enabled(args: argparse.Namespace) -> bool:
+    raw = getattr(args, "startup_guide", None)
+    if raw is not None:
+        return bool(raw)
+    env = str(os.environ.get("OMNIMEM_STARTUP_GUIDE", "")).strip().lower()
+    if env in {"0", "false", "no", "off"}:
+        return False
+    if env in {"1", "true", "yes", "on"}:
+        return True
+    return True
+
+
+def _sync_remote_configured(cfg: dict[str, object]) -> bool:
+    gh = cfg.get("sync", {}).get("github", {}) if isinstance(cfg.get("sync"), dict) else {}
+    return bool(str((gh.get("remote_url") if isinstance(gh, dict) else "") or "").strip())
+
+
+def _startup_guide_disabled_in_cfg(cfg: dict[str, object]) -> bool:
+    setup = cfg.get("setup", {})
+    if not isinstance(setup, dict):
+        return False
+    return bool(setup.get("startup_guide_disabled", False))
+
+
+def _set_startup_guide_disabled(cfg: dict[str, object], cfg_path: Path, disabled: bool) -> None:
+    setup = cfg.setdefault("setup", {})
+    if not isinstance(setup, dict):
+        setup = {}
+        cfg["setup"] = setup
+    setup["startup_guide_disabled"] = bool(disabled)
+    save_config(cfg_path, cfg)
+
+
+def _maybe_run_startup_sync_guide(args: argparse.Namespace, cfg: dict[str, object], cfg_path: Path) -> None:
+    if not _startup_guide_enabled(args):
+        return
+    if bool(getattr(args, "no_daemon", False)):
+        return
+    if not sys.stdin.isatty():
+        return
+    if _truthy_env("CI"):
+        return
+    if _sync_remote_configured(cfg):
+        return
+    if _startup_guide_disabled_in_cfg(cfg):
+        return
+
+    print_json(
+        {
+            "ok": True,
+            "action": "startup-guide",
+            "message": "sync/auth is not configured yet. run guided setup now?",
+            "choices": ["yes", "no", "never"],
+            "note": "auth-only broker never carries memory content; sync data path stays local",
+        }
+    )
+    raw = input("Run startup guide now? [Y/n/never]: ").strip().lower()
+    if raw in {"never", "nvr", "disable", "off"}:
+        _set_startup_guide_disabled(cfg, cfg_path, True)
+        print_json({"ok": True, "action": "startup-guide", "disabled": True})
+        return
+    if raw in {"n", "no", "skip"}:
+        return
+
+    auto_args = argparse.Namespace(
+        oauth_cmd="auto",
+        provider="",
+        dir="",
+        name="omnimem-oauth-broker",
+        client_id="",
+        force=False,
+        apply=False,
+        set_config_broker_url=False,
+        broker_url="",
+        config=str(cfg_path),
+    )
+    rc_preview = cmd_oauth_broker_auto(auto_args)
+    if rc_preview != 0:
+        print_json({"ok": False, "action": "startup-guide", "error": "auto preview failed", "hint": "run `omnimem oauth-broker doctor`"})
+        return
+
+    do_apply = input("Execute deploy now? [y/N]: ").strip().lower() in {"y", "yes"}
+    if not do_apply:
+        return
+    auto_args.apply = True
+    rc_apply = cmd_oauth_broker_auto(auto_args)
+    if rc_apply != 0:
+        print_json({"ok": False, "action": "startup-guide", "error": "deploy failed", "hint": "check previous output and login status"})
+        return
+    broker_url = input("Broker URL (optional, write into local config): ").strip()
+    if broker_url:
+        _update_cfg_broker_url(cfg_path=cfg_path, broker_url=broker_url)
+        print_json({"ok": True, "action": "startup-guide", "config_updated": True, "broker_url": broker_url})
 
 
 def cmd_oauth_broker(args: argparse.Namespace) -> int:
@@ -2873,6 +2969,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_webui.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
     p_webui.add_argument(
+        "--startup-guide",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable startup sync/auth guidance when configuration is missing",
+    )
+    p_webui.add_argument(
         "--allow-non-localhost",
         action="store_true",
         help="allow binding to non-local host (requires explicit opt-in)",
@@ -2937,6 +3039,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="enable/disable reflective gap maintenance",
     )
     p_start.add_argument("--webui-token", help="optional API token, can also use OMNIMEM_WEBUI_TOKEN")
+    p_start.add_argument(
+        "--startup-guide",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable/disable startup sync/auth guidance when configuration is missing",
+    )
     p_start.add_argument(
         "--allow-non-localhost",
         action="store_true",

@@ -117,6 +117,9 @@ class CLIFrontierCommandTest(unittest.TestCase):
         )
         self.assertEqual(a.cmd, "start")
         self.assertTrue(bool(a.daemon_maintenance_prune_enabled))
+        b = p.parse_args(["start", "--no-startup-guide"])
+        self.assertEqual(b.cmd, "start")
+        self.assertFalse(bool(b.startup_guide))
 
     def test_oauth_broker_commands_registered(self) -> None:
         p = build_parser()

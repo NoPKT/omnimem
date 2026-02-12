@@ -41,6 +41,7 @@
 - OAuth broker automation: add `omnimem oauth-broker init|deploy` command and provider templates (`cloudflare`, `vercel`, `railway`, `fly`) to streamline low-traffic auth-only broker deployment.
 - OAuth broker UX: add `omnimem oauth-broker wizard` guided flow for minimal-input setup/deploy and optional local config broker URL update.
 - OAuth broker automation UX: add `omnimem oauth-broker auto` pipeline (doctor + provider auto-selection + init + deploy preview/apply + optional config broker URL write-back).
+- Startup UX: `omnimem start/webui` now auto-detect missing sync/auth setup and can launch guided broker automation; supports `--no-startup-guide` and `OMNIMEM_STARTUP_GUIDE=0`.
 - Sync auth: add `oauth_token_file` support in Git sync pipeline and use `GIT_ASKPASS` for HTTPS GitHub remotes, so OAuth device tokens can authenticate `github-pull`/`github-push` without embedding secrets in remote URLs.
 - CI reliability: fix `nightly-memory-eval` `ModuleNotFoundError` by adding repo-root `sys.path` bootstrap in `scripts/tune_core_merge_from_eval.py` (and `tune_governance_from_eval.py` for parity).
 - CI reliability: set `PYTHONPATH=.` in `nightly-memory-eval` workflow step to make script/module resolution robust in runner environments.

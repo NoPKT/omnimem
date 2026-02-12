@@ -48,6 +48,11 @@ omnimem oauth-broker auto --apply
 omnimem oauth-broker auto --apply --set-config-broker-url --broker-url https://your-broker.example.com
 ```
 
+Startup-triggered guide:
+
+- `omnimem start` / `omnimem webui` can auto-prompt setup when sync/auth is missing.
+- Disable via `--no-startup-guide` or env `OMNIMEM_STARTUP_GUIDE=0`.
+
 Supported providers:
 
 - `cloudflare`

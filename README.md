@@ -337,6 +337,12 @@ Optional OAuth broker deploy shortcuts (auth-only service, no memory data path):
   - `omnimem oauth-broker doctor` (readiness diagnostics + suggested fixes)
   - `omnimem oauth-broker auto --apply` (doctor + auto-select provider + init + deploy)
 
+Startup auto-guidance:
+
+- `omnimem start` / `omnimem webui` now auto-detect missing sync/auth config in interactive terminals and can launch guided setup automatically.
+- Disable once permanently in prompt via `never`, or disable explicitly with `--no-startup-guide`.
+- Environment switch: `OMNIMEM_STARTUP_GUIDE=0` disables startup guidance globally.
+
 Nightly memory-eval workflow:
 
 - GitHub Actions `nightly-memory-eval` runs `eval_core_merge` + `tune_core_merge_from_eval --dry-run` on deterministic seeded core blocks.
