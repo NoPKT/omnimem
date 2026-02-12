@@ -35,11 +35,14 @@ def _collect_locale_keys(block: str, quoted: bool = False) -> dict[str, set[str]
         if not current:
             continue
         if quoted:
-            m_key = re.match(r"^\s{8}'([^']+)'\s*:\s*", line)
+            for m_key in re.finditer(r"'([^']+)'\s*:\s*", line):
+                out[current].add(m_key.group(1))
         else:
-            m_key = re.match(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:\s*", line)
-        if m_key:
-            out[current].add(m_key.group(1))
+            for m_key in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*", line):
+                key = m_key.group(1)
+                if key in {"if", "for", "return"}:
+                    continue
+                out[current].add(key)
     return out
 
 

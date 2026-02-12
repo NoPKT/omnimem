@@ -1861,6 +1861,12 @@ HTML_PAGE = """<!doctype html>
       return s;
     }
 
+    function l(raw) {
+      const base = String(raw || '').trim();
+      const dict = I18N_LITERALS[currentLang] || {};
+      return String(dict[base] || base);
+    }
+
     function setTextById(id, key) {
       const el = document.getElementById(id);
       if (el) el.textContent = t(key);
@@ -1958,6 +1964,50 @@ HTML_PAGE = """<!doctype html>
       if (lbHint && /Drag a card/i.test(String(lbHint.textContent || ''))) lbHint.textContent = t('ui_layer_board_hint');
     }
 
+    function _dynamicLiteralSkipId(id) {
+      return [
+        'status', 'daemonState', 'daemonMetrics', 'daemonAdvice', 'syncOut', 'healthOut', 'guideOut',
+        'insKinds', 'insActivity', 'insTags', 'insCheckpoints', 'insTimeline', 'insGovern', 'insQuality',
+        'maintOut', 'maintStats', 'maintForecast', 'evtStats', 'eventView', 'memView', 'memRetrieveHint',
+        'githubQuickOut', 'projectOut', 'browserList', 'boardSelInfo', 'pinHint', 'eventHint',
+      ].includes(String(id || ''));
+    }
+
+    function applyLiteralTranslations() {
+      if (currentLang === 'en') return;
+      const dict = I18N_LITERALS[currentLang] || {};
+      if (!dict || Object.keys(dict).length === 0) return;
+      document.querySelectorAll('h3, button, label, label span, th, option, .small, .drawer-title, .modal-title').forEach(el => {
+        if (!el) return;
+        if (el.closest('pre')) return;
+        if (_dynamicLiteralSkipId(el.id || '')) return;
+        if (el.getAttribute('data-i18n')) return;
+        if (el.getAttribute('data-i18n-title')) return;
+        if (el.getAttribute('data-i18n-placeholder')) return;
+        if (!el.dataset.i18nLiteralBase) {
+          const base = String(el.textContent || '').trim();
+          if (base) el.dataset.i18nLiteralBase = base;
+        }
+        const base = String(el.dataset.i18nLiteralBase || '').trim();
+        if (!base) return;
+        const nx = dict[base];
+        if (nx) el.textContent = String(nx);
+      });
+
+      document.querySelectorAll('input, textarea').forEach(el => {
+        if (!el) return;
+        if (el.getAttribute('data-i18n-placeholder')) return;
+        if (!el.dataset.i18nLiteralPlaceholderBase) {
+          const base = String(el.getAttribute('placeholder') || '').trim();
+          if (base) el.dataset.i18nLiteralPlaceholderBase = base;
+        }
+        const base = String(el.dataset.i18nLiteralPlaceholderBase || '').trim();
+        if (!base) return;
+        const nx = dict[base];
+        if (nx) el.setAttribute('placeholder', String(nx));
+      });
+    }
+
     function applyAutoTips() {
       const prefix = t('tip_auto_prefix');
       const tipKeyById = {
@@ -2021,6 +2071,7 @@ HTML_PAGE = """<!doctype html>
       });
       document.getElementById('langSelect').value = currentLang;
       applyLocalizedStaticUi();
+      applyLiteralTranslations();
       applyAutoTips();
       renderMode();
 	      renderDaemonState();
@@ -2042,7 +2093,7 @@ HTML_PAGE = """<!doctype html>
 	    function toast(title, body, ok) {
       const tEl = document.getElementById('toast');
       if (!tEl) return;
-      document.getElementById('toastTitle').textContent = title || 'Notification';
+      document.getElementById('toastTitle').textContent = l(title || 'Notification');
       document.getElementById('toastBody').innerHTML = body || '';
       tEl.classList.add('show');
       setTimeout(() => tEl.classList.remove('show'), ok ? 1400 : 2600);
