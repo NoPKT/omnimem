@@ -1241,6 +1241,251 @@ HTML_PAGE = """<!doctype html>
       }
     };
 
+    const I18N_PATCH = {
+      en: {
+        tip_auto_prefix: 'Tip: ',
+        ui_live_on: 'Live: on',
+        ui_live_off: 'Live: off',
+        ui_scope_auto: 'Scope: auto',
+        ui_scope_active: 'Scope: active',
+        ui_scope_pin: 'Scope: pin',
+        ui_scope_none: 'Scope: none',
+        ui_workset_none: 'Workset: (none)',
+        ui_share_full: 'Share: full',
+        ui_share_prefs: 'Share: prefs-only',
+        ui_select_on: 'Select: on',
+        ui_select_off: 'Select: off',
+        ui_health_check_title: 'Health Check',
+        ui_health_check_hint: 'Quick runtime diagnostics for storage, daemon and file-descriptor pressure.',
+        ui_btn_health_check: 'Run Health Check',
+        ui_getting_started_title: 'Getting Started',
+        ui_getting_started_hint: 'Guided safe workflow: health check -> maintenance preview -> apply with approval.',
+        ui_btn_guided_check: 'Run Guided Check',
+        ui_guide_default: '1) Run Health Check\\n2) Open Insights and preview Auto Maintenance\\n3) Apply only after checking recommendations',
+        ui_session_filter: 'Session ID Filter',
+        ui_layer_board_title: 'Layer Board',
+        ui_layer_board_hint: 'Drag a card to change its layer. Click a card to open full details.',
+        ui_btn_promote_long: 'Promote -> long',
+        ui_btn_demote_short: 'Demote -> short',
+        ui_btn_archive: 'Archive',
+        ui_btn_tag_episodic: 'Tag episodic',
+        ui_btn_tag_semantic: 'Tag semantic',
+        ui_btn_tag_procedural: 'Tag procedural',
+        ui_btn_apply_template: 'Apply Template',
+        ui_btn_save_template: 'Save Template',
+        ui_btn_clear: 'Clear',
+        ui_ph_template_name: 'template name',
+        ui_confirm: 'Confirm',
+        ui_archive_confirm_session: 'Archive session {sid}... from {from} -> {to}?',
+        ui_archive_confirm_active_session: 'Archive active session {sid}... from {from} -> {to}?',
+      },
+      zh: {
+        tip_auto_prefix: '说明：',
+        ui_live_on: '实时：开',
+        ui_live_off: '实时：关',
+        ui_scope_auto: '范围：自动',
+        ui_scope_active: '范围：当前活动',
+        ui_scope_pin: '范围：固定',
+        ui_scope_none: '范围：无',
+        ui_workset_none: '工作集：（无）',
+        ui_share_full: '共享：完整',
+        ui_share_prefs: '共享：仅偏好',
+        ui_select_on: '选择：开',
+        ui_select_off: '选择：关',
+        ui_health_check_title: '健康检查',
+        ui_health_check_hint: '快速诊断存储、守护进程和文件描述符压力。',
+        ui_btn_health_check: '运行健康检查',
+        ui_getting_started_title: '快速开始',
+        ui_getting_started_hint: '安全引导流程：健康检查 -> 维护预览 -> 确认后应用。',
+        ui_btn_guided_check: '运行引导检查',
+        ui_guide_default: '1) 运行健康检查\\n2) 打开洞察并预览自动维护\\n3) 检查建议后再应用',
+        ui_session_filter: '会话 ID 过滤',
+        ui_layer_board_title: '层级看板',
+        ui_layer_board_hint: '拖拽卡片可变更层级，点击卡片可查看完整详情。',
+        ui_btn_promote_long: '提升 -> long',
+        ui_btn_demote_short: '降级 -> short',
+        ui_btn_archive: '归档',
+        ui_btn_tag_episodic: '标记 episodic',
+        ui_btn_tag_semantic: '标记 semantic',
+        ui_btn_tag_procedural: '标记 procedural',
+        ui_btn_apply_template: '应用模板',
+        ui_btn_save_template: '保存模板',
+        ui_btn_clear: '清空',
+        ui_ph_template_name: '模板名称',
+        ui_confirm: '确认',
+        ui_archive_confirm_session: '归档会话 {sid}... 从 {from} -> {to}？',
+        ui_archive_confirm_active_session: '归档当前会话 {sid}... 从 {from} -> {to}？',
+      },
+      ja: {
+        tip_auto_prefix: 'ヒント: ',
+        ui_live_on: 'ライブ: オン',
+        ui_live_off: 'ライブ: オフ',
+        ui_scope_auto: '範囲: 自動',
+        ui_scope_active: '範囲: アクティブ',
+        ui_scope_pin: '範囲: 固定',
+        ui_scope_none: '範囲: なし',
+        ui_workset_none: 'ワークセット: (なし)',
+        ui_share_full: '共有: フル',
+        ui_share_prefs: '共有: 設定のみ',
+        ui_select_on: '選択: オン',
+        ui_select_off: '選択: オフ',
+        ui_health_check_title: 'ヘルスチェック',
+        ui_btn_health_check: 'ヘルスチェック実行',
+        ui_getting_started_title: 'はじめに',
+        ui_btn_guided_check: 'ガイドチェック実行',
+        ui_session_filter: 'セッション ID フィルタ',
+        ui_layer_board_title: 'レイヤーボード',
+        ui_btn_promote_long: '昇格 -> long',
+        ui_btn_demote_short: '降格 -> short',
+        ui_btn_archive: 'アーカイブ',
+        ui_btn_apply_template: 'テンプレート適用',
+        ui_btn_save_template: 'テンプレート保存',
+        ui_btn_clear: 'クリア',
+        ui_ph_template_name: 'テンプレート名',
+        ui_confirm: '確認',
+      },
+      de: {
+        tip_auto_prefix: 'Hinweis: ',
+        ui_live_on: 'Live: an',
+        ui_live_off: 'Live: aus',
+        ui_scope_auto: 'Umfang: auto',
+        ui_scope_active: 'Umfang: aktiv',
+        ui_scope_pin: 'Umfang: fixiert',
+        ui_scope_none: 'Umfang: keiner',
+        ui_workset_none: 'Workset: (keins)',
+        ui_share_full: 'Freigabe: komplett',
+        ui_share_prefs: 'Freigabe: nur Präferenzen',
+        ui_select_on: 'Auswahl: an',
+        ui_select_off: 'Auswahl: aus',
+        ui_health_check_title: 'Gesundheitscheck',
+        ui_btn_health_check: 'Gesundheitscheck starten',
+        ui_getting_started_title: 'Erste Schritte',
+        ui_btn_guided_check: 'Geführten Check starten',
+        ui_session_filter: 'Session-ID-Filter',
+        ui_layer_board_title: 'Layer-Board',
+        ui_btn_promote_long: 'Hochstufen -> long',
+        ui_btn_demote_short: 'Herabstufen -> short',
+        ui_btn_archive: 'Archivieren',
+        ui_btn_apply_template: 'Vorlage anwenden',
+        ui_btn_save_template: 'Vorlage speichern',
+        ui_btn_clear: 'Leeren',
+        ui_ph_template_name: 'Vorlagenname',
+        ui_confirm: 'Bestätigen',
+      },
+      fr: {
+        tip_auto_prefix: 'Astuce : ',
+        ui_live_on: 'Live : on',
+        ui_live_off: 'Live : off',
+        ui_scope_auto: 'Portée : auto',
+        ui_scope_active: 'Portée : active',
+        ui_scope_pin: 'Portée : épinglée',
+        ui_scope_none: 'Portée : aucune',
+        ui_workset_none: 'Workset : (aucun)',
+        ui_share_full: 'Partage : complet',
+        ui_share_prefs: 'Partage : préférences',
+        ui_select_on: 'Sélection : on',
+        ui_select_off: 'Sélection : off',
+        ui_health_check_title: 'Vérification santé',
+        ui_btn_health_check: 'Lancer la vérification',
+        ui_getting_started_title: 'Prise en main',
+        ui_btn_guided_check: 'Lancer le check guidé',
+        ui_session_filter: 'Filtre Session ID',
+        ui_layer_board_title: 'Tableau des couches',
+        ui_btn_promote_long: 'Promouvoir -> long',
+        ui_btn_demote_short: 'Rétrograder -> short',
+        ui_btn_archive: 'Archiver',
+        ui_btn_apply_template: 'Appliquer le modèle',
+        ui_btn_save_template: 'Enregistrer le modèle',
+        ui_btn_clear: 'Effacer',
+        ui_ph_template_name: 'nom du modèle',
+        ui_confirm: 'Confirmer',
+      },
+      ru: {
+        tip_auto_prefix: 'Подсказка: ',
+        ui_live_on: 'Live: вкл',
+        ui_live_off: 'Live: выкл',
+        ui_scope_auto: 'Область: авто',
+        ui_scope_active: 'Область: активная',
+        ui_scope_pin: 'Область: закреплённая',
+        ui_scope_none: 'Область: нет',
+        ui_workset_none: 'Набор: (нет)',
+        ui_share_full: 'Общий доступ: полный',
+        ui_share_prefs: 'Общий доступ: только настройки',
+        ui_select_on: 'Выбор: вкл',
+        ui_select_off: 'Выбор: выкл',
+        ui_health_check_title: 'Проверка здоровья',
+        ui_btn_health_check: 'Запустить проверку',
+        ui_getting_started_title: 'Быстрый старт',
+        ui_btn_guided_check: 'Запустить мастер-проверку',
+        ui_session_filter: 'Фильтр Session ID',
+        ui_layer_board_title: 'Доска слоёв',
+        ui_btn_promote_long: 'Повысить -> long',
+        ui_btn_demote_short: 'Понизить -> short',
+        ui_btn_archive: 'Архивировать',
+        ui_btn_apply_template: 'Применить шаблон',
+        ui_btn_save_template: 'Сохранить шаблон',
+        ui_btn_clear: 'Очистить',
+        ui_ph_template_name: 'имя шаблона',
+        ui_confirm: 'Подтвердить',
+      },
+      it: {
+        tip_auto_prefix: 'Suggerimento: ',
+        ui_live_on: 'Live: on',
+        ui_live_off: 'Live: off',
+        ui_scope_auto: 'Ambito: auto',
+        ui_scope_active: 'Ambito: attivo',
+        ui_scope_pin: 'Ambito: fissato',
+        ui_scope_none: 'Ambito: nessuno',
+        ui_workset_none: 'Workset: (nessuno)',
+        ui_share_full: 'Condivisione: completa',
+        ui_share_prefs: 'Condivisione: solo preferenze',
+        ui_select_on: 'Selezione: on',
+        ui_select_off: 'Selezione: off',
+        ui_health_check_title: 'Controllo salute',
+        ui_btn_health_check: 'Esegui controllo salute',
+        ui_getting_started_title: 'Per iniziare',
+        ui_btn_guided_check: 'Esegui controllo guidato',
+        ui_session_filter: 'Filtro Session ID',
+        ui_layer_board_title: 'Board dei layer',
+        ui_btn_promote_long: 'Promuovi -> long',
+        ui_btn_demote_short: 'Retrocedi -> short',
+        ui_btn_archive: 'Archivia',
+        ui_btn_apply_template: 'Applica modello',
+        ui_btn_save_template: 'Salva modello',
+        ui_btn_clear: 'Cancella',
+        ui_ph_template_name: 'nome modello',
+        ui_confirm: 'Conferma',
+      },
+      ko: {
+        tip_auto_prefix: '팁: ',
+        ui_live_on: '실시간: 켬',
+        ui_live_off: '실시간: 끔',
+        ui_scope_auto: '범위: 자동',
+        ui_scope_active: '범위: 활성',
+        ui_scope_pin: '범위: 고정',
+        ui_scope_none: '범위: 없음',
+        ui_workset_none: '워크셋: (없음)',
+        ui_share_full: '공유: 전체',
+        ui_share_prefs: '공유: 환경설정만',
+        ui_select_on: '선택: 켬',
+        ui_select_off: '선택: 끔',
+        ui_health_check_title: '헬스 체크',
+        ui_btn_health_check: '헬스 체크 실행',
+        ui_getting_started_title: '시작 가이드',
+        ui_btn_guided_check: '가이드 점검 실행',
+        ui_session_filter: '세션 ID 필터',
+        ui_layer_board_title: '레이어 보드',
+        ui_btn_promote_long: '승격 -> long',
+        ui_btn_demote_short: '강등 -> short',
+        ui_btn_archive: '보관',
+        ui_btn_apply_template: '템플릿 적용',
+        ui_btn_save_template: '템플릿 저장',
+        ui_btn_clear: '지우기',
+        ui_ph_template_name: '템플릿 이름',
+        ui_confirm: '확인',
+      },
+    };
+
     function safeGetLang() {
       try { return localStorage.getItem('omnimem.lang') || 'en'; } catch (_) { return 'en'; }
     }
@@ -1472,7 +1717,150 @@ HTML_PAGE = """<!doctype html>
 
     function t(key) {
       const dict = I18N[currentLang] || I18N.en;
-      return dict[key] || I18N.en[key] || key;
+      const patch = I18N_PATCH[currentLang] || {};
+      const enPatch = I18N_PATCH.en || {};
+      return patch[key] || dict[key] || enPatch[key] || I18N.en[key] || key;
+    }
+
+    function tf(key, vars) {
+      let s = String(t(key) || '');
+      const mp = vars || {};
+      Object.keys(mp).forEach(k => {
+        s = s.replaceAll(`{${k}}`, String(mp[k] ?? ''));
+      });
+      return s;
+    }
+
+    function setTextById(id, key) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = t(key);
+    }
+
+    function setPlaceholderById(id, key) {
+      const el = document.getElementById(id);
+      if (el) el.setAttribute('placeholder', t(key));
+    }
+
+    function setLabelPrefixForInput(inputId, key) {
+      const inp = document.getElementById(inputId);
+      const label = inp ? inp.closest('label') : null;
+      if (!label) return;
+      const node = Array.from(label.childNodes || []).find(n => n && n.nodeType === Node.TEXT_NODE);
+      if (node) node.nodeValue = t(key) + ' ';
+    }
+
+    function setSelectOptionText(selectId, defs, keepOthers) {
+      const el = document.getElementById(selectId);
+      if (!el) return;
+      const prev = String(el.value || '');
+      const map = {};
+      (defs || []).forEach(x => { map[String(x.value)] = t(String(x.key)); });
+      const opts = Array.from(el.options || []);
+      if (!keepOthers) {
+        opts.forEach(op => {
+          const k = map[String(op.value)];
+          if (k) op.textContent = k;
+        });
+      } else {
+        opts.forEach((op, idx) => {
+          if (idx === 0) {
+            const k = map[String(op.value)];
+            if (k) op.textContent = k;
+          }
+        });
+      }
+      el.value = prev;
+    }
+
+    function applyLocalizedStaticUi() {
+      setTextById('btnLiveToggle', liveOn ? 'ui_live_on' : 'ui_live_off');
+      setSelectOptionText('scopeMode', [
+        { value: 'auto', key: 'ui_scope_auto' },
+        { value: 'active', key: 'ui_scope_active' },
+        { value: 'pin', key: 'ui_scope_pin' },
+        { value: 'none', key: 'ui_scope_none' },
+      ]);
+      setSelectOptionText('shareMode', [
+        { value: 'full', key: 'ui_share_full' },
+        { value: 'prefs', key: 'ui_share_prefs' },
+      ]);
+      setSelectOptionText('worksetSelect', [{ value: '', key: 'ui_workset_none' }], true);
+
+      setTextById('btnHealthCheck', 'ui_btn_health_check');
+      setTextById('btnGuideRun', 'ui_btn_guided_check');
+      setTextById('btnBoardSelectToggle', boardSelectMode ? 'ui_select_on' : 'ui_select_off');
+      setTextById('btnBoardPromote', 'ui_btn_promote_long');
+      setTextById('btnBoardDemote', 'ui_btn_demote_short');
+      setTextById('btnBoardArchive', 'ui_btn_archive');
+      setTextById('btnBoardTagEpisodic', 'ui_btn_tag_episodic');
+      setTextById('btnBoardTagSemantic', 'ui_btn_tag_semantic');
+      setTextById('btnBoardTagProcedural', 'ui_btn_tag_procedural');
+      setTextById('btnBoardApplyTemplate', 'ui_btn_apply_template');
+      setTextById('btnBoardSaveTemplate', 'ui_btn_save_template');
+      setTextById('btnBoardClear', 'ui_btn_clear');
+
+      setTextById('btnPromote', 'ui_btn_promote_long');
+      setTextById('btnDemote', 'ui_btn_demote_short');
+      setTextById('btnArchive', 'ui_btn_archive');
+      setTextById('btnClassifyEpisodic', 'ui_btn_tag_episodic');
+      setTextById('btnClassifySemantic', 'ui_btn_tag_semantic');
+      setTextById('btnClassifyProcedural', 'ui_btn_tag_procedural');
+
+      setPlaceholderById('boardTemplateName', 'ui_ph_template_name');
+      setLabelPrefixForInput('insSessionId', 'ui_session_filter');
+      setLabelPrefixForInput('memSessionId', 'ui_session_filter');
+      setLabelPrefixForInput('wsConfirm', 'ui_confirm');
+
+      const guide = document.getElementById('guideOut');
+      if (guide) guide.textContent = t('ui_guide_default');
+
+      const healthH3 = document.querySelector('#statusTab .card:nth-child(3) h3');
+      if (healthH3) healthH3.textContent = t('ui_health_check_title');
+      const healthHint = document.querySelector('#statusTab .card:nth-child(3) .small');
+      if (healthHint) healthHint.textContent = t('ui_health_check_hint');
+      const gsH3 = document.querySelector('#statusTab .card:nth-child(4) h3');
+      if (gsH3) gsH3.textContent = t('ui_getting_started_title');
+      const gsHint = document.querySelector('#statusTab .card:nth-child(4) .small');
+      if (gsHint) gsHint.textContent = t('ui_getting_started_hint');
+      const lbH3 = document.querySelector('#insightsTab .card.wide h3:not([data-i18n])');
+      if (lbH3 && /Layer Board/i.test(String(lbH3.textContent || ''))) lbH3.textContent = t('ui_layer_board_title');
+      const lbHint = lbH3 ? lbH3.parentElement?.querySelector('.small') : null;
+      if (lbHint && /Drag a card/i.test(String(lbHint.textContent || ''))) lbHint.textContent = t('ui_layer_board_hint');
+    }
+
+    function applyAutoTips() {
+      const prefix = t('tip_auto_prefix');
+      const tipKeyById = {
+        btnLiveToggle: 'ui_live_on',
+        scopeMode: 'ui_scope_auto',
+        worksetSelect: 'ui_workset_none',
+        shareMode: 'ui_share_full',
+        btnHealthCheck: 'ui_btn_health_check',
+        btnGuideRun: 'ui_btn_guided_check',
+        btnBoardSelectToggle: 'ui_select_off',
+        btnBoardPromote: 'ui_btn_promote_long',
+        btnBoardDemote: 'ui_btn_demote_short',
+        btnBoardArchive: 'ui_btn_archive',
+        btnPromote: 'ui_btn_promote_long',
+        btnDemote: 'ui_btn_demote_short',
+        btnArchive: 'ui_btn_archive',
+      };
+      document.querySelectorAll('button, h3, label span, input, select, textarea, th, .tab-btn').forEach(el => {
+        const id = String(el.id || '');
+        const k = tipKeyById[id];
+        if (k) {
+          el.setAttribute('title', t(k));
+          return;
+        }
+        const dk = el.getAttribute('data-i18n-title');
+        if (dk) {
+          el.setAttribute('title', t(dk));
+          return;
+        }
+        const di = el.getAttribute('data-i18n');
+        const text = di ? t(di) : String((el.getAttribute('placeholder') || el.textContent || '')).trim();
+        if (text) el.setAttribute('title', prefix + text.replace(/\\s+/g, ' ').trim());
+      });
     }
 
     function renderMode() {
@@ -1502,6 +1890,8 @@ HTML_PAGE = """<!doctype html>
         el.setAttribute('title', t(key));
       });
       document.getElementById('langSelect').value = currentLang;
+      applyLocalizedStaticUi();
+      applyAutoTips();
       renderMode();
 	      renderDaemonState();
 	    }
@@ -2375,7 +2765,7 @@ HTML_PAGE = """<!doctype html>
         const btnAT = document.getElementById('btnBoardApplyTemplate');
 	      const btnC = document.getElementById('btnBoardClear');
 	      const info = document.getElementById('boardSelInfo');
-	      if (btnSel) btnSel.textContent = boardSelectMode ? 'Select: on' : 'Select: off';
+	      if (btnSel) btnSel.textContent = t(boardSelectMode ? 'ui_select_on' : 'ui_select_off');
 	      if (btnP) btnP.disabled = n === 0;
 	      if (btnD) btnD.disabled = n === 0;
 	      if (btnA) btnA.disabled = n === 0;
@@ -2503,7 +2893,7 @@ HTML_PAGE = """<!doctype html>
 
 	    function renderLive() {
 	      const btn = document.getElementById('btnLiveToggle');
-	      if (btn) btn.textContent = liveOn ? 'Live: on' : 'Live: off';
+	      if (btn) btn.textContent = t(liveOn ? 'ui_live_on' : 'ui_live_off');
 	      const hint = document.getElementById('liveHint');
 	      if (hint) hint.textContent = liveOn ? `Live refresh every ${Math.round(readLiveIntervalMs()/1000)}s (daemon + active tab)` : 'Live refresh is off';
 	    }
@@ -2991,7 +3381,7 @@ HTML_PAGE = """<!doctype html>
 	          if (action === 'archive') {
 	            const pid = document.getElementById('insProjectId')?.value?.trim() || '';
 	            const opts = readSessionArchiveOpts();
-	            if (!confirm(`Archive session ${sid.slice(0,12)}... from ${opts.from_layers.join('+')} -> ${opts.to_layer}?`)) return;
+	            if (!confirm(tf('ui_archive_confirm_session', { sid: sid.slice(0,12), from: opts.from_layers.join('+'), to: opts.to_layer }))) return;
 	            const r = await jpost('/api/session/archive', {
 	              project_id: pid,
 	              session_id: sid,
@@ -3551,7 +3941,7 @@ HTML_PAGE = """<!doctype html>
 	      if (!sel) return;
 	      const items = safeLoadWorksets();
 	      const active = safeGetActiveWorksetName();
-	      const opts = [`<option value="">Workset: (none)</option>`].concat(
+	      const opts = [`<option value="">${escHtml(t('ui_workset_none'))}</option>`].concat(
 	        items
 	          .slice()
 	          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
@@ -4159,7 +4549,7 @@ HTML_PAGE = """<!doctype html>
 	          return;
 	        }
 	        const opts = readSessionArchiveOpts();
-	        if (!confirm(`Archive active session ${sid.slice(0,12)}... from ${opts.from_layers.join('+')} -> ${opts.to_layer}?`)) return;
+	        if (!confirm(tf('ui_archive_confirm_active_session', { sid: sid.slice(0,12), from: opts.from_layers.join('+'), to: opts.to_layer }))) return;
 	        const r = await jpost('/api/session/archive', {
 	          project_id: pid,
 	          session_id: sid,

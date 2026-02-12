@@ -39,6 +39,8 @@ WebUI provides:
 - Status & actions tab
 - Configuration tab
 - Memory browser tab
+- Language switch with broader static-text localization coverage (including advanced panel controls/options)
+- Per-element localized `title` tip generation (auto-applied to key controls/headings/inputs)
 - Daemon toggle and bootstrap sync action
 - Daemon metrics via `/api/daemon` (`success_count`, `failure_count`, retry settings, last run timestamps)
 - Daemon API schema: `spec/daemon-state.schema.json`

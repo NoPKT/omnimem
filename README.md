@@ -359,5 +359,6 @@ Nightly memory-eval workflow:
 - `docs/quickstart-10min.md`
 - `docs/webui-config.md`
 - `docs/oauth-broker.md`
+- `docs/qa-startup-guide.md`
 - `docs/publish-npm.md`
 - `docs/install-uninstall.md`

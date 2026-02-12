@@ -78,6 +78,10 @@ def schema_sql_path() -> Path:
     raise FileNotFoundError("schema.sql not found in expected locations")
 
 
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def add_common_write_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", help="path to omnimem config json")
     p.add_argument("--layer", choices=sorted(LAYER_SET), default="instant")
@@ -1809,9 +1813,6 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
         )
         print_json(out)
         return 0
-
-    def _truthy_env(name: str) -> bool:
-        return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
     # Default to on-demand lifecycle for wrapper commands to avoid stale sidecar ports.
     # Users can still opt into persistent WebUI via --webui-persist or OMNIMEM_WEBUI_PERSIST=1.

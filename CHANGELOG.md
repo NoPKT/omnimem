@@ -45,6 +45,10 @@
 - Startup UX: broker URL can now be auto-detected from deploy output and written to local config automatically (manual paste is optional fallback).
 - Startup UX: when provider CLI login + OAuth client id are already available, startup guide now auto-runs without prompt for near-zero-touch setup.
 - Startup UX: startup guide can now inline-capture missing OAuth client id and optionally run provider login command before continuing auto deploy flow.
+- Startup reliability: add startup-guide integration-style CLI tests for missing client id, provider-login recovery, provider-missing fallback, autorun path, and `never` disable behavior.
+- QA docs: add `docs/qa-startup-guide.md` with first-run acceptance checklist.
+- WebUI i18n: add locale patch layer for previously hard-coded advanced-panel labels/buttons/options and make dynamic toggle text translatable.
+- WebUI UX: add auto-generated localized `title` tips for major visible controls/headings/inputs to improve discoverability for non-expert users.
 - Sync auth: add `oauth_token_file` support in Git sync pipeline and use `GIT_ASKPASS` for HTTPS GitHub remotes, so OAuth device tokens can authenticate `github-pull`/`github-push` without embedding secrets in remote URLs.
 - CI reliability: fix `nightly-memory-eval` `ModuleNotFoundError` by adding repo-root `sys.path` bootstrap in `scripts/tune_core_merge_from_eval.py` (and `tune_governance_from_eval.py` for parity).
 - CI reliability: set `PYTHONPATH=.` in `nightly-memory-eval` workflow step to make script/module resolution robust in runner environments.

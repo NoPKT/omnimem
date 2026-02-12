@@ -33,6 +33,8 @@ class WebUiScriptSyntaxTest(unittest.TestCase):
         self.assertIn('details class="disclosure"', HTML_PAGE)
         self.assertIn("status_feedback", HTML_PAGE)
         self.assertIn("change pressure", HTML_PAGE)
+        self.assertIn("function applyAutoTips()", HTML_PAGE)
+        self.assertIn("const I18N_PATCH", HTML_PAGE)
 
 
 if __name__ == "__main__":
