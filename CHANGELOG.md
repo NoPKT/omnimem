@@ -39,6 +39,7 @@
 - WebUI OAuth UX: `Sign In via GitHub` now auto-polls device-flow completion until success/timeout, reducing manual poll clicks.
 - WebUI OAuth architecture: add optional `OAuth Broker URL` path so device-flow start/poll can be proxied by a tiny external service (for easier auth bootstrap) while sync remains local-only.
 - OAuth broker automation: add `omnimem oauth-broker init|deploy` command and provider templates (`cloudflare`, `vercel`, `railway`, `fly`) to streamline low-traffic auth-only broker deployment.
+- OAuth broker UX: add `omnimem oauth-broker wizard` guided flow for minimal-input setup/deploy and optional local config broker URL update.
 - Sync auth: add `oauth_token_file` support in Git sync pipeline and use `GIT_ASKPASS` for HTTPS GitHub remotes, so OAuth device tokens can authenticate `github-pull`/`github-push` without embedding secrets in remote URLs.
 - CI reliability: fix `nightly-memory-eval` `ModuleNotFoundError` by adding repo-root `sys.path` bootstrap in `scripts/tune_core_merge_from_eval.py` (and `tune_governance_from_eval.py` for parity).
 - CI reliability: set `PYTHONPATH=.` in `nightly-memory-eval` workflow step to make script/module resolution robust in runner environments.

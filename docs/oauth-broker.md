@@ -23,6 +23,12 @@ omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflar
 omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare --apply
 ```
 
+Or use guided mode (minimal prompts):
+
+```bash
+omnimem oauth-broker wizard
+```
+
 Supported providers:
 
 - `cloudflare`
@@ -57,7 +63,7 @@ Provider templates live under `examples/oauth-broker/`.
 
 ## Minimal Cloudflare Worker
 
-See `examples/oauth-broker/cloudflare-worker.js`.
+See `examples/oauth-broker/cloudflare-worker/cloudflare-worker.js`.
 
 Alternative templates:
 
