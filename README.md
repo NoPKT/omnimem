@@ -68,28 +68,9 @@ omnimem stop
 
 ## Maintainer Docs
 
-- Publish: `docs/publish-npm.md`
-- Startup/OAuth QA: `docs/qa-startup-guide.md`
-- WebUI config: `docs/webui-config.md`
-- Advanced ops/eval/tuning: `docs/advanced-ops.md`
-- OAuth broker deploy details: `docs/oauth-broker.md`
+- Entry: `docs/README.md`
 
 ## Documentation
 
-- English:
-  - `docs/quickstart-10min.md`
-  - `docs/webui-config.md`
-  - `docs/oauth-broker.md`
-  - `docs/qa-startup-guide.md`
-  - `docs/install-uninstall.md`
-  - `docs/publish-npm.md`
-  - `docs/advanced-ops.md`
-- 中文:
-  - `README.zh-CN.md`
-  - `docs/quickstart-10min.zh-CN.md`
-  - `docs/webui-config.zh-CN.md`
-  - `docs/oauth-broker.zh-CN.md`
-  - `docs/qa-startup-guide.zh-CN.md`
-  - `docs/install-uninstall.zh-CN.md`
-  - `docs/publish-npm.zh-CN.md`
-  - `docs/advanced-ops.zh-CN.md`
+- English index: `docs/README.md`
+- 中文索引: `docs/README.zh-CN.md`

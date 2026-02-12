@@ -15,6 +15,7 @@ DOC_PAIRS = [
     ("docs/publish-npm.md", "docs/publish-npm.zh-CN.md"),
     ("docs/install-uninstall.md", "docs/install-uninstall.zh-CN.md"),
     ("docs/advanced-ops.md", "docs/advanced-ops.zh-CN.md"),
+    ("docs/README.md", "docs/README.zh-CN.md"),
 ]
 
 
