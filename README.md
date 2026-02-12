@@ -34,6 +34,7 @@ bash scripts/install.sh
 [![Fly.io Template](https://img.shields.io/badge/Template-Fly.io-8B5CF6?logo=flydotio&logoColor=white)](https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/fly)
 
 After deploy, paste broker URL in WebUI `Configuration` -> `OAuth Broker URL`.
+Note: Cloudflare may show a generic monorepo warning page first; this is expected and can be continued.
 
 Quick health check (replace `<BROKER_URL>`):
 

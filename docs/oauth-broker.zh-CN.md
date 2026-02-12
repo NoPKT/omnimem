@@ -28,6 +28,7 @@ curl -sS -X POST "<BROKER_URL>/v1/github/device/start" \
 
 - Cloudflare Worker：
   - `https://deploy.workers.cloudflare.com/?url=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/cloudflare-worker`
+  - 如果 Cloudflare 出现通用 monorepo 警告页面，可继续；该模板已包含 `wrangler.toml`。
 - Vercel：
   - `https://vercel.com/new/clone?repository-url=https://github.com/NoPKT/omnimem&root-directory=examples%2Foauth-broker%2Fvercel&project-name=omnimem-oauth-broker`
 - Railway：

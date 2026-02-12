@@ -28,6 +28,7 @@ Expected: JSON error like `missing client_id` (endpoint reachable).
 
 - Cloudflare Worker:
   - `https://deploy.workers.cloudflare.com/?url=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/cloudflare-worker`
+  - If Cloudflare shows a generic monorepo warning page, continue; this template includes `wrangler.toml`.
 - Vercel:
   - `https://vercel.com/new/clone?repository-url=https://github.com/NoPKT/omnimem&root-directory=examples%2Foauth-broker%2Fvercel&project-name=omnimem-oauth-broker`
 - Railway:
