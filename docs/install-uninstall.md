@@ -2,8 +2,7 @@
 
 Language: [English](install-uninstall.md) | [简体中文](install-uninstall.zh-CN.md)
 
-Use this page for lifecycle operations.  
-For first-time setup flow, use `docs/quickstart-10min.md`.
+Use this page for lifecycle operations. For first-time setup flow, use `docs/quickstart-10min.md`.
 
 ## Install OmniMem
 

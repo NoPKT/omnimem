@@ -2,8 +2,7 @@
 
 English: [install-uninstall.md](install-uninstall.md)
 
-本页用于生命周期操作。  
-首次使用请优先看 `docs/quickstart-10min.zh-CN.md`。
+本页用于生命周期操作。首次使用请优先看 `docs/quickstart-10min.zh-CN.md`。
 
 ## 安装 OmniMem
 

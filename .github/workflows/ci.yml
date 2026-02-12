@@ -30,6 +30,11 @@ jobs:
           python3 scripts/report_webui_i18n_coverage.py --out eval/webui_i18n_report.json
           echo "[i18n] report generated at eval/webui_i18n_report.json"
 
+      - name: Docs health report
+        run: |
+          python3 scripts/report_docs_health.py --out eval/docs_health_report.json
+          echo "[docs] report generated at eval/docs_health_report.json"
+
       - name: Release gate smoke
         run: |
           bash scripts/release_gate.sh \
