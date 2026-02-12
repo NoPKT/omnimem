@@ -40,12 +40,7 @@ bash scripts/attach_project.sh /path/to/project my-project-id
 
 ## 6) 日常命令
 
-```bash
-omnimem codex
-omnimem claude
-omnimem doctor
-omnimem stop
-```
+见：`docs/common-commands.zh-CN.md`
 
 ## 7) 卸载 OmniMem
 

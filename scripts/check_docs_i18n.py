@@ -16,6 +16,7 @@ DOC_PAIRS = [
     ("docs/install-uninstall.md", "docs/install-uninstall.zh-CN.md"),
     ("docs/advanced-ops.md", "docs/advanced-ops.zh-CN.md"),
     ("docs/README.md", "docs/README.zh-CN.md"),
+    ("docs/common-commands.md", "docs/common-commands.zh-CN.md"),
 ]
 
 

@@ -5,6 +5,7 @@ Language: [English](README.md) | [简体中文](README.zh-CN.md)
 ## User Path
 
 - quickstart: `quickstart-10min.md`
+- common commands: `common-commands.md`
 - install/attach/uninstall: `install-uninstall.md`
 - WebUI configuration: `webui-config.md`
 - GitHub OAuth broker (optional): `oauth-broker.md`
@@ -21,4 +22,3 @@ Language: [English](README.md) | [简体中文](README.zh-CN.md)
 - integration spec: `integration-spec.md`
 - sync and adapters: `sync-and-adapters.md`
 - phase workflow log: `phase-workflow.md`
-

@@ -40,12 +40,7 @@ bash scripts/attach_project.sh /path/to/project my-project-id
 
 ## 6) Daily commands
 
-```bash
-omnimem codex
-omnimem claude
-omnimem doctor
-omnimem stop
-```
+See: `docs/common-commands.md`
 
 ## 7) Remove OmniMem
 
