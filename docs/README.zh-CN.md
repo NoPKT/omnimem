@@ -8,7 +8,7 @@ English: [README.md](README.md)
 - 常用命令：`common-commands.zh-CN.md`
 - 安装/接入/卸载：`install-uninstall.zh-CN.md`
 - WebUI 配置：`webui-config.zh-CN.md`
-- GitHub OAuth broker（可选）：`oauth-broker.zh-CN.md`
+- GitHub OAuth Broker（可选）：`oauth-broker.zh-CN.md`
 
 ## 维护者路径
 

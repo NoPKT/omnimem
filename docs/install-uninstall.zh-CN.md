@@ -23,7 +23,7 @@ bash scripts/install.sh --wizard
 ~/.omnimem/bin/omnimem start
 ```
 
-## 新设备引导
+## 新设备同步
 
 ```bash
 bash scripts/bootstrap.sh --repo <your-omnimem-repo-url>

@@ -1,4 +1,4 @@
-# 可选 GitHub OAuth Broker
+# GitHub OAuth Broker（可选）
 
 English: [oauth-broker.md](oauth-broker.md)
 
@@ -45,7 +45,7 @@ omnimem oauth-broker init --provider cloudflare --dir ./oauth-broker-cloudflare 
 omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare --apply
 ```
 
-## 启动自动引导联动
+## 启动引导联动
 
 当检测到 sync/auth 配置缺失时，`omnimem start` 与 `omnimem webui` 可触发启动引导并执行 OAuth broker 配置流程。
 

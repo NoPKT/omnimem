@@ -66,11 +66,7 @@ omnimem stop
 - OAuth broker 一键部署按钮在哪？
   - 见 `docs/oauth-broker.zh-CN.md`（Cloudflare/Vercel/Railway/Fly + CLI 兜底）。
 
-## 维护者文档
-
-- 入口：`docs/README.zh-CN.md`
-
 ## 文档索引
 
-- 中文入口：`docs/README.zh-CN.md`
-- English entry: `docs/README.md`
+- 中文文档入口：`docs/README.zh-CN.md`
+- English docs entry: `docs/README.md`

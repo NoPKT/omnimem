@@ -9,7 +9,7 @@ English: [common-commands.md](common-commands.md)
 omnimem stop
 ```
 
-## Agent 入口
+## Agent 模式命令
 
 ```bash
 omnimem codex
@@ -31,4 +31,3 @@ bash scripts/attach_project.sh /path/to/project my-project-id
 bash scripts/detach_project.sh /path/to/project
 ~/.omnimem/bin/omnimem uninstall --yes
 ```
-
