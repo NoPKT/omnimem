@@ -16,6 +16,14 @@ English: [README.md](README.md)
 - 启动引导 QA：`qa-startup-guide.zh-CN.md`
 - 高级运维/评测/调参：`advanced-ops.zh-CN.md`
 
+## 本地文档检查
+
+```bash
+python3 scripts/check_docs_i18n.py
+python3 scripts/report_docs_health.py --out eval/docs_health_report.json
+python3 scripts/report_webui_i18n_coverage.py --out eval/webui_i18n_report.json
+```
+
 ## 架构与规范
 
 - 架构总览：`architecture.md`
