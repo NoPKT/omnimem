@@ -87,7 +87,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "[gate] step 1/5 preflight"
+echo "[gate] step 1/6 preflight"
 if [[ "$ALLOW_CLEAN" -eq 1 ]]; then
   "${OM[@]}" preflight --path "$ROOT" --allow-clean
 else
@@ -95,17 +95,17 @@ else
 fi
 
 if [[ "$SKIP_DOCTOR" -eq 0 ]]; then
-  echo "[gate] step 2/5 doctor"
+  echo "[gate] step 2/6 doctor"
   "${OM[@]}" doctor
 else
-  echo "[gate] step 2/5 doctor (skipped)"
+  echo "[gate] step 2/6 doctor (skipped)"
 fi
 
 if [[ "$SKIP_PACK" -eq 0 ]]; then
-  echo "[gate] step 3/5 npm pack dry-run"
+  echo "[gate] step 3/6 npm pack dry-run"
   npm_config_cache="$ROOT/.npm-cache" npm run pack:check
 else
-  echo "[gate] step 3/5 npm pack dry-run (skipped)"
+  echo "[gate] step 3/6 npm pack dry-run (skipped)"
 fi
 
 if [[ "$SKIP_DOCS" -eq 0 ]]; then
