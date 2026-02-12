@@ -531,6 +531,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     remote_name = args.remote_name or sync_cfg.get("remote_name", "origin")
     branch = args.branch or sync_cfg.get("branch", "main")
     remote_url = args.remote_url or sync_cfg.get("remote_url")
+    oauth_token_file = str(sync_cfg.get("oauth", {}).get("token_file", "") or "") if isinstance(sync_cfg, dict) else ""
     raw_layers = getattr(args, "sync_layers", None)
     if raw_layers is None:
         raw_layers = sync_cfg.get("include_layers")
@@ -550,6 +551,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         remote_name=remote_name,
         branch=branch,
         remote_url=remote_url,
+        oauth_token_file=oauth_token_file,
         commit_message=args.commit_message,
         sync_include_layers=sync_layers,
         sync_include_jsonl=include_jsonl,

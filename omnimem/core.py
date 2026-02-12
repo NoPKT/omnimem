@@ -5827,12 +5827,18 @@ def _run_git(
     args: list[str],
     *,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    proc_env = os.environ.copy()
+    if env:
+        for k, v in env.items():
+            proc_env[str(k)] = str(v)
     proc = subprocess.run(
         ["git", "-C", str(paths.root), *args],
         check=False,
         capture_output=True,
         text=True,
+        env=proc_env,
     )
     if check and proc.returncode != 0:
         cmd = "git -C " + str(paths.root) + " " + " ".join(args)
@@ -5845,6 +5851,55 @@ def _run_git(
             msg += f"\nstderr:\n{err}"
         raise RuntimeError(msg)
     return proc
+
+
+def _load_oauth_access_token(token_file: str | None) -> str:
+    raw = str(token_file or "").strip()
+    if not raw:
+        return ""
+    fp = Path(raw).expanduser()
+    if not fp.exists() or not fp.is_file():
+        return ""
+    try:
+        obj = json.loads(fp.read_text(encoding="utf-8"))
+        return str(obj.get("access_token") or "").strip()
+    except Exception:
+        return ""
+
+
+def _should_use_github_oauth_askpass(remote_url: str | None, token_file: str | None) -> tuple[bool, str]:
+    tok = _load_oauth_access_token(token_file)
+    if not tok:
+        return False, ""
+    raw = str(remote_url or "").strip().lower()
+    if not raw.startswith("https://github.com/"):
+        return False, ""
+    return True, tok
+
+
+@contextmanager
+def _git_askpass_env(token: str):
+    tok = str(token or "").strip()
+    if not tok:
+        yield {}
+        return
+    with tempfile.TemporaryDirectory(prefix="omnimem-askpass-") as td:
+        script = Path(td) / "git-askpass.sh"
+        script.write_text(
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  *Username*) echo \"x-access-token\" ;;\n"
+            "  *Password*) printf \"%s\\n\" \"$OMNIMEM_GITHUB_TOKEN\" ;;\n"
+            "  *) echo \"\" ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        os.chmod(script, 0o700)
+        yield {
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_ASKPASS": str(script),
+            "OMNIMEM_GITHUB_TOKEN": tok,
+        }
 
 
 def _ensure_git_repo(paths: MemoryPaths) -> None:
@@ -6042,6 +6097,7 @@ def sync_git(
     remote_name: str = "origin",
     branch: str = "main",
     remote_url: str | None = None,
+    oauth_token_file: str | None = None,
     commit_message: str = "chore(memory): sync snapshot",
     sync_include_layers: list[str] | None = None,
     sync_include_jsonl: bool = True,
@@ -6055,150 +6111,153 @@ def sync_git(
     # Git operations and storage mutations must not interleave across processes.
     lock_ctx = repo_lock(paths.root, timeout_s=30.0) if mode in {"git", "github-status", "github-push", "github-pull", "github-bootstrap"} else nullcontext()
     with lock_ctx:
-        if mode == "noop":
-            message = "sync noop"
-            ok = True
-            detail = ""
-        elif mode in {"git", "github-status"}:
-            try:
-                _ensure_git_repo(paths)
-                proc = _run_git(paths, ["status", "--short"])
-                message = "github status ok"
+        use_askpass, oauth_token = _should_use_github_oauth_askpass(remote_url, oauth_token_file)
+        with _git_askpass_env(oauth_token if use_askpass else "") as git_env:
+
+            def _g(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+                return _run_git(paths, args, check=check, env=git_env)
+
+            if mode == "noop":
+                message = "sync noop"
                 ok = True
-                detail = proc.stdout.strip()
-            except Exception as exc:  # pragma: no cover
-                message = f"github status failed ({exc})"
-                ok = False
                 detail = ""
-        elif mode == "github-push":
-            try:
-                _ensure_git_repo(paths)
-                _ensure_remote(paths, remote_name, remote_url)
-                _ensure_sync_gitignore(
-                    paths,
-                    sync_include_layers=sync_include_layers,
-                    sync_include_jsonl=bool(sync_include_jsonl),
-                )
-                _untrack_sync_ignored(
-                    paths,
-                    sync_include_layers=sync_include_layers,
-                    sync_include_jsonl=bool(sync_include_jsonl),
-                )
-                if _git_rebase_in_progress(paths) or _git_merge_in_progress(paths) or _git_unmerged_paths(paths):
-                    st = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
-                    raise RuntimeError(f"git repo has an in-progress merge/rebase or unmerged files; resolve first\n{st}")
+            elif mode in {"git", "github-status"}:
+                try:
+                    _ensure_git_repo(paths)
+                    proc = _g(["status", "--short"])
+                    message = "github status ok"
+                    ok = True
+                    detail = proc.stdout.strip()
+                except Exception as exc:  # pragma: no cover
+                    message = f"github status failed ({exc})"
+                    ok = False
+                    detail = ""
+            elif mode == "github-push":
+                try:
+                    _ensure_git_repo(paths)
+                    _ensure_remote(paths, remote_name, remote_url)
+                    _ensure_sync_gitignore(
+                        paths,
+                        sync_include_layers=sync_include_layers,
+                        sync_include_jsonl=bool(sync_include_jsonl),
+                    )
+                    _untrack_sync_ignored(
+                        paths,
+                        sync_include_layers=sync_include_layers,
+                        sync_include_jsonl=bool(sync_include_jsonl),
+                    )
+                    if _git_rebase_in_progress(paths) or _git_merge_in_progress(paths) or _git_unmerged_paths(paths):
+                        st = _g(["status", "--short"], check=False).stdout.strip()
+                        raise RuntimeError(f"git repo has an in-progress merge/rebase or unmerged files; resolve first\n{st}")
 
-                _run_git(paths, ["add", "-A"])
-                commit_proc = _run_git(paths, ["commit", "-m", commit_message], check=False)
-                if commit_proc.returncode != 0 and "nothing to commit" not in (commit_proc.stdout or "") + (commit_proc.stderr or ""):
-                    raise RuntimeError((commit_proc.stderr or "").strip() or (commit_proc.stdout or "").strip() or "git commit failed")
-                if remote_url or remote_name in _run_git(paths, ["remote"]).stdout.split():
-                    _run_git(paths, ["push", "-u", remote_name, branch])
-                    message = "github push ok"
-                else:
-                    message = "local commit ok; remote not configured"
-                ok = True
-                detail = _run_git(paths, ["status", "--short"]).stdout.strip()
-            except Exception as exc:  # pragma: no cover
-                message = f"github push failed ({exc})"
-                ok = False
-                detail = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
-        elif mode == "github-pull":
-            try:
-                _ensure_git_repo(paths)
-                _ensure_remote(paths, remote_name, remote_url)
-                _ensure_sync_gitignore(
-                    paths,
-                    sync_include_layers=sync_include_layers,
-                    sync_include_jsonl=bool(sync_include_jsonl),
-                )
-                _untrack_sync_ignored(
-                    paths,
-                    sync_include_layers=sync_include_layers,
-                    sync_include_jsonl=bool(sync_include_jsonl),
-                )
-
-                _run_git(paths, ["fetch", remote_name, branch])
-                remote_ref = f"{remote_name}/{branch}"
-                remote_ok = _run_git(
-                    paths,
-                    ["show-ref", "--verify", "--quiet", f"refs/remotes/{remote_name}/{branch}"],
-                    check=False,
-                ).returncode == 0
-                if not remote_ok:
-                    raise RuntimeError(f"remote branch not found after fetch: {remote_ref}")
-
-                # If repo has no commits yet, create a snapshot commit first (if needed),
-                # then merge remote (handles unrelated histories / root commits robustly).
-                if not _git_has_head(paths):
-                    st = _run_git(paths, ["status", "--porcelain"], check=False).stdout or ""
-                    if st.strip():
-                        _run_git(paths, ["add", "-A"])
-                        cp = _run_git(paths, ["commit", "-m", "chore(memory): local snapshot (pre-pull)"], check=False)
-                        if cp.returncode != 0 and "nothing to commit" not in (cp.stdout or "") + (cp.stderr or ""):
-                            raise RuntimeError((cp.stderr or "").strip() or (cp.stdout or "").strip() or "git commit failed")
-                        _run_git(paths, ["merge", "--no-ff", "--allow-unrelated-histories", remote_ref])
+                    _g(["add", "-A"])
+                    commit_proc = _g(["commit", "-m", commit_message], check=False)
+                    if commit_proc.returncode != 0 and "nothing to commit" not in (commit_proc.stdout or "") + (commit_proc.stderr or ""):
+                        raise RuntimeError((commit_proc.stderr or "").strip() or (commit_proc.stdout or "").strip() or "git commit failed")
+                    if remote_url or remote_name in _g(["remote"]).stdout.split():
+                        _g(["push", "-u", remote_name, branch])
+                        message = "github push ok"
                     else:
-                        _run_git(paths, ["checkout", "-B", branch, remote_ref])
-                else:
-                    # Prefer rebase, but fall back to a merge when histories are unrelated.
-                    rebase_proc = _run_git(paths, ["rebase", "--autostash", remote_ref], check=False)
-                    if rebase_proc.returncode != 0:
-                        err_text = (rebase_proc.stdout or "") + "\n" + (rebase_proc.stderr or "")
-                        if "unrelated histories" in err_text.lower() or "no common commits" in err_text.lower():
-                            _run_git(paths, ["rebase", "--abort"], check=False)
-                            _run_git(paths, ["merge", "--no-ff", "--allow-unrelated-histories", remote_ref])
-                        else:
-                            # Attempt safe auto-resolution for JSONL conflicts only.
-                            for _ in range(20):
-                                if not _git_unmerged_paths(paths):
-                                    break
-                                if not _auto_resolve_jsonl_conflicts(paths):
-                                    break
-                                if _git_rebase_in_progress(paths):
-                                    cont = _run_git(paths, ["rebase", "--continue"], check=False)
-                                    if cont.returncode != 0:
-                                        break
-                            if _git_unmerged_paths(paths) or _git_rebase_in_progress(paths):
-                                st2 = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
-                                raise RuntimeError(f"git pull/rebase has conflicts; manual resolution required\n{st2}")
+                        message = "local commit ok; remote not configured"
+                    ok = True
+                    detail = _g(["status", "--short"]).stdout.strip()
+                except Exception as exc:  # pragma: no cover
+                    message = f"github push failed ({exc})"
+                    ok = False
+                    detail = _g(["status", "--short"], check=False).stdout.strip()
+            elif mode == "github-pull":
+                try:
+                    _ensure_git_repo(paths)
+                    _ensure_remote(paths, remote_name, remote_url)
+                    _ensure_sync_gitignore(
+                        paths,
+                        sync_include_layers=sync_include_layers,
+                        sync_include_jsonl=bool(sync_include_jsonl),
+                    )
+                    _untrack_sync_ignored(
+                        paths,
+                        sync_include_layers=sync_include_layers,
+                        sync_include_jsonl=bool(sync_include_jsonl),
+                    )
 
-                message = "github pull ok"
-                ok = True
-                detail = _run_git(paths, ["status", "--short"]).stdout.strip()
-            except Exception as exc:  # pragma: no cover
-                message = f"github pull failed ({exc})"
-                ok = False
-                detail = _run_git(paths, ["status", "--short"], check=False).stdout.strip()
-        elif mode == "github-bootstrap":
-            pull_out = sync_git(
-                paths,
-                schema_sql_path,
-                "github-pull",
-                remote_name=remote_name,
-                branch=branch,
-                remote_url=remote_url,
-                commit_message=commit_message,
-                sync_include_layers=sync_include_layers,
-                sync_include_jsonl=bool(sync_include_jsonl),
-                log_event=False,
-            )
-            reindex_out = reindex_from_jsonl(paths, schema_sql_path, reset=True)
-            push_out = sync_git(
-                paths,
-                schema_sql_path,
-                "github-push",
-                remote_name=remote_name,
-                branch=branch,
-                remote_url=remote_url,
-                commit_message=commit_message,
-                sync_include_layers=sync_include_layers,
-                sync_include_jsonl=bool(sync_include_jsonl),
-                log_event=False,
-            )
-            ok = bool(pull_out.get("ok") and reindex_out.get("ok") and push_out.get("ok"))
-            message = "github bootstrap ok" if ok else "github bootstrap finished with errors"
-            detail = {"pull": pull_out, "reindex": reindex_out, "push": push_out}
+                    _g(["fetch", remote_name, branch])
+                    remote_ref = f"{remote_name}/{branch}"
+                    remote_ok = _g(
+                        ["show-ref", "--verify", "--quiet", f"refs/remotes/{remote_name}/{branch}"],
+                        check=False,
+                    ).returncode == 0
+                    if not remote_ok:
+                        raise RuntimeError(f"remote branch not found after fetch: {remote_ref}")
+
+                    if not _git_has_head(paths):
+                        st = _g(["status", "--porcelain"], check=False).stdout or ""
+                        if st.strip():
+                            _g(["add", "-A"])
+                            cp = _g(["commit", "-m", "chore(memory): local snapshot (pre-pull)"], check=False)
+                            if cp.returncode != 0 and "nothing to commit" not in (cp.stdout or "") + (cp.stderr or ""):
+                                raise RuntimeError((cp.stderr or "").strip() or (cp.stdout or "").strip() or "git commit failed")
+                            _g(["merge", "--no-ff", "--allow-unrelated-histories", remote_ref])
+                        else:
+                            _g(["checkout", "-B", branch, remote_ref])
+                    else:
+                        rebase_proc = _g(["rebase", "--autostash", remote_ref], check=False)
+                        if rebase_proc.returncode != 0:
+                            err_text = (rebase_proc.stdout or "") + "\n" + (rebase_proc.stderr or "")
+                            if "unrelated histories" in err_text.lower() or "no common commits" in err_text.lower():
+                                _g(["rebase", "--abort"], check=False)
+                                _g(["merge", "--no-ff", "--allow-unrelated-histories", remote_ref])
+                            else:
+                                for _ in range(20):
+                                    if not _git_unmerged_paths(paths):
+                                        break
+                                    if not _auto_resolve_jsonl_conflicts(paths):
+                                        break
+                                    if _git_rebase_in_progress(paths):
+                                        cont = _g(["rebase", "--continue"], check=False)
+                                        if cont.returncode != 0:
+                                            break
+                                if _git_unmerged_paths(paths) or _git_rebase_in_progress(paths):
+                                    st2 = _g(["status", "--short"], check=False).stdout.strip()
+                                    raise RuntimeError(f"git pull/rebase has conflicts; manual resolution required\n{st2}")
+
+                    message = "github pull ok"
+                    ok = True
+                    detail = _g(["status", "--short"]).stdout.strip()
+                except Exception as exc:  # pragma: no cover
+                    message = f"github pull failed ({exc})"
+                    ok = False
+                    detail = _g(["status", "--short"], check=False).stdout.strip()
+            elif mode == "github-bootstrap":
+                pull_out = sync_git(
+                    paths,
+                    schema_sql_path,
+                    "github-pull",
+                    remote_name=remote_name,
+                    branch=branch,
+                    remote_url=remote_url,
+                    oauth_token_file=oauth_token_file,
+                    commit_message=commit_message,
+                    sync_include_layers=sync_include_layers,
+                    sync_include_jsonl=bool(sync_include_jsonl),
+                    log_event=False,
+                )
+                reindex_out = reindex_from_jsonl(paths, schema_sql_path, reset=True)
+                push_out = sync_git(
+                    paths,
+                    schema_sql_path,
+                    "github-push",
+                    remote_name=remote_name,
+                    branch=branch,
+                    remote_url=remote_url,
+                    oauth_token_file=oauth_token_file,
+                    commit_message=commit_message,
+                    sync_include_layers=sync_include_layers,
+                    sync_include_jsonl=bool(sync_include_jsonl),
+                    log_event=False,
+                )
+                ok = bool(pull_out.get("ok") and reindex_out.get("ok") and push_out.get("ok"))
+                message = "github bootstrap ok" if ok else "github bootstrap finished with errors"
+                detail = {"pull": pull_out, "reindex": reindex_out, "push": push_out}
     should_log_event = log_event
     if should_log_event:
         log_system_event(
@@ -6222,6 +6281,7 @@ def sync_placeholder(
     remote_name: str = "origin",
     branch: str = "main",
     remote_url: str | None = None,
+    oauth_token_file: str | None = None,
     commit_message: str = "chore(memory): sync snapshot",
     sync_include_layers: list[str] | None = None,
     sync_include_jsonl: bool = True,
@@ -6235,6 +6295,7 @@ def sync_placeholder(
         remote_name=remote_name,
         branch=branch,
         remote_url=remote_url,
+        oauth_token_file=oauth_token_file,
         commit_message=commit_message,
         sync_include_layers=sync_include_layers,
         sync_include_jsonl=bool(sync_include_jsonl),
@@ -6359,6 +6420,7 @@ def run_sync_with_retry(
     remote_name: str,
     branch: str,
     remote_url: str | None,
+    oauth_token_file: str | None = None,
     sync_include_layers: list[str] | None = None,
     sync_include_jsonl: bool = True,
     max_attempts: int = 3,
@@ -6380,6 +6442,7 @@ def run_sync_with_retry(
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
+                oauth_token_file=oauth_token_file,
                 sync_include_layers=sync_include_layers,
                 sync_include_jsonl=bool(sync_include_jsonl),
                 log_event=False,
@@ -6414,6 +6477,7 @@ def run_sync_daemon(
     remote_name: str,
     branch: str,
     remote_url: str | None,
+    oauth_token_file: str | None = None,
     sync_include_layers: list[str] | None = None,
     sync_include_jsonl: bool = True,
     scan_interval: int = 8,
@@ -6499,6 +6563,7 @@ def run_sync_daemon(
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
+                oauth_token_file=oauth_token_file,
                 sync_include_layers=sync_include_layers,
                 sync_include_jsonl=bool(sync_include_jsonl),
                 max_attempts=retry_max_attempts,
@@ -6536,6 +6601,7 @@ def run_sync_daemon(
                 remote_name=remote_name,
                 branch=branch,
                 remote_url=remote_url,
+                oauth_token_file=oauth_token_file,
                 sync_include_layers=sync_include_layers,
                 sync_include_jsonl=bool(sync_include_jsonl),
                 max_attempts=retry_max_attempts,

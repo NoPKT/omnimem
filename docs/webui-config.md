@@ -62,9 +62,16 @@ WebUI provides:
 - Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
 - GitHub quick auth/setup actions on Config tab:
   - `Sign In via GitHub`: launches browser auth via local `gh auth login --web`
+  - Pure OAuth device flow (no `gh` needed): fill `OAuth Client ID`, click `Sign In via GitHub`, then `Complete OAuth Login`
   - `Check GitHub Auth`: checks local `gh auth status`
   - `Refresh Repo List` + `Use Selected Repo`: pick `owner/repo` from `gh repo list`
   - `Apply GitHub Setup`: writes sync remote settings from selected protocol/repo
+
+OAuth token handling:
+
+- Token file is stored at `<OMNIMEM_HOME>/runtime/github_oauth_token.json` by default.
+- Git sync (`github-pull`/`github-push`) uses this token via `GIT_ASKPASS` for `https://github.com/...` remotes.
+- Do not commit token files; runtime folder is excluded from sync.
 
 Recommended safe rollout:
 

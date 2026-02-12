@@ -257,7 +257,7 @@ class WebUIDiagnosticsTest(unittest.TestCase):
 
     def test_github_auth_start_reports_missing_cli(self) -> None:
         with patch("omnimem.webui.shutil.which", return_value=None):
-            out = _github_auth_start(protocol="https")
+            out = _github_auth_start(cfg={}, cfg_path=Path("/tmp/omnimem.config.json"), protocol="https")
         self.assertFalse(bool(out.get("ok")))
         self.assertIn("error", out)
 
@@ -265,7 +265,7 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         with patch("omnimem.webui.shutil.which", return_value="/usr/bin/gh"), patch(
             "omnimem.webui._github_status", return_value={"ok": True, "installed": True, "authenticated": True}
         ):
-            out = _github_auth_start(protocol="ssh")
+            out = _github_auth_start(cfg={}, cfg_path=Path("/tmp/omnimem.config.json"), protocol="ssh")
         self.assertTrue(bool(out.get("ok")))
         self.assertTrue(bool(out.get("already_authenticated")))
 

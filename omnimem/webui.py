@@ -17,7 +17,9 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
+import urllib.error
+import urllib.request
 
 from . import __version__ as OMNIMEM_VERSION
 from .core import (
@@ -763,6 +765,7 @@ HTML_PAGE = """<!doctype html>
             <div class=\"divider\"></div>
             <div class=\"small\"><b>GitHub Quick Setup</b></div>
             <label><span>Repo (owner/repo)</span><input name=\"gh_full_name\" placeholder=\"yourname/omnimem-memory\" /></label>
+            <label><span>OAuth Client ID (optional)</span><input name=\"gh_oauth_client_id\" placeholder=\"Iv1.xxxxx\" /></label>
             <label><span>Protocol</span><select name=\"gh_protocol\"><option value=\"ssh\">ssh</option><option value=\"https\">https</option></select></label>
             <label><span>Create If Missing</span><select name=\"gh_create_if_missing\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
             <label><span>Create As Private</span><select name=\"gh_private_repo\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
@@ -770,6 +773,7 @@ HTML_PAGE = """<!doctype html>
             <label><span>Choose Existing Repo</span><select name=\"gh_repo_picker\"><option value=\"\">(click Refresh Repo List)</option></select></label>
             <div class=\"row-btn\">
               <button type=\"button\" id=\"btnGithubAuthStart\">Sign In via GitHub</button>
+              <button type=\"button\" id=\"btnGithubAuthPoll\">Complete OAuth Login</button>
               <button type=\"button\" id=\"btnGithubStatus\">Check GitHub Auth</button>
               <button type=\"button\" id=\"btnGithubRepos\">Refresh Repo List</button>
               <button type=\"button\" id=\"btnGithubUseSelected\">Use Selected Repo</button>
@@ -1971,6 +1975,7 @@ HTML_PAGE = """<!doctype html>
       const f = document.getElementById('cfgForm');
       for (const k of [
         'config_path','home','markdown','jsonl','sqlite','remote_name','remote_url','branch',
+        'gh_oauth_client_id',
         'daemon_scan_interval','daemon_pull_interval',
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
@@ -2001,15 +2006,37 @@ HTML_PAGE = """<!doctype html>
     async function githubAuthStart() {
       const f = document.getElementById('cfgForm');
       const out = document.getElementById('githubQuickOut');
-      const payload = { protocol: f.elements['gh_protocol'].value || 'https' };
+      const payload = {
+        protocol: f.elements['gh_protocol'].value || 'https',
+        client_id: f.elements['gh_oauth_client_id'].value || '',
+      };
       const d = await jpost('/api/github/auth/start', payload);
       out.textContent = JSON.stringify(d, null, 2);
-      if (d.ok && d.started) {
+      if (d.ok && d.started && d.auth_method === 'oauth-device') {
+        if (d.verification_uri_complete) {
+          try { window.open(String(d.verification_uri_complete), '_blank', 'noopener,noreferrer'); } catch (_) {}
+        }
+        toast('GitHub', 'OAuth started; authorize in browser, then click Complete OAuth Login.', true);
+      } else if (d.ok && d.started) {
         toast('GitHub', 'Browser auth started; complete login and click Check GitHub Auth.', true);
       } else if (d.ok && d.already_authenticated) {
         toast('GitHub', 'Already authenticated.', true);
       } else {
         toast('GitHub', d.error || 'failed to start auth', false);
+      }
+      return d;
+    }
+
+    async function githubAuthPoll() {
+      const out = document.getElementById('githubQuickOut');
+      const d = await jpost('/api/github/auth/poll', {});
+      out.textContent = JSON.stringify(d, null, 2);
+      if (d.ok && d.authenticated) {
+        toast('GitHub', 'OAuth authenticated.', true);
+      } else if (d.ok && d.pending) {
+        toast('GitHub', d.error || 'authorization pending', false);
+      } else if (!d.ok) {
+        toast('GitHub', d.error || 'oauth poll failed', false);
       }
       return d;
     }
@@ -2498,6 +2525,7 @@ HTML_PAGE = """<!doctype html>
       const payload = {};
       for (const k of [
         'home','markdown','jsonl','sqlite','remote_name','remote_url','branch',
+        'gh_oauth_client_id',
         'daemon_scan_interval','daemon_pull_interval',
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
@@ -2521,6 +2549,7 @@ HTML_PAGE = """<!doctype html>
       await loadInsights();
     };
     document.getElementById('btnGithubAuthStart').onclick = async () => { await githubAuthStart(); };
+    document.getElementById('btnGithubAuthPoll').onclick = async () => { await githubAuthPoll(); };
     document.getElementById('btnGithubStatus').onclick = async () => { await checkGithubStatus(); };
     document.getElementById('btnGithubRepos').onclick = async () => { await loadGithubRepos(); };
     document.getElementById('btnGithubUseSelected').onclick = () => { useSelectedGithubRepo(); };
@@ -4518,6 +4547,7 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "remote_name": gh.get("remote_name", "origin"),
         "remote_url": gh.get("remote_url", ""),
         "branch": gh.get("branch", "main"),
+        "gh_oauth_client_id": gh.get("oauth", {}).get("client_id", "") if isinstance(gh.get("oauth"), dict) else "",
         "sync_include_layers": ",".join([str(x).strip() for x in (gh.get("include_layers") or []) if str(x).strip()]),
         "sync_include_jsonl": bool(gh.get("include_jsonl", True)),
         "daemon_scan_interval": dm.get("scan_interval", 8),
@@ -4579,10 +4609,143 @@ def _build_github_remote_url(full_name: str, protocol: str) -> str:
     return f"git@github.com:{full_name}.git"
 
 
-def _github_status() -> dict[str, Any]:
+def _github_home_dir(cfg: dict[str, Any]) -> Path:
+    raw = str(cfg.get("home", "")).strip()
+    if raw:
+        return Path(raw).expanduser()
+    return (Path.home() / ".omnimem").expanduser()
+
+
+def _github_oauth_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    sync = cfg.setdefault("sync", {})
+    if not isinstance(sync, dict):
+        sync = {}
+        cfg["sync"] = sync
+    gh = sync.setdefault("github", {})
+    if not isinstance(gh, dict):
+        gh = {}
+        sync["github"] = gh
+    oauth = gh.setdefault("oauth", {})
+    if not isinstance(oauth, dict):
+        oauth = {}
+        gh["oauth"] = oauth
+    return oauth
+
+
+def _github_oauth_client_id(cfg: dict[str, Any], client_id: str = "") -> str:
+    c = str(client_id or "").strip()
+    if c:
+        return c
+    env_c = str(os.environ.get("OMNIMEM_GITHUB_OAUTH_CLIENT_ID", "")).strip()
+    if env_c:
+        return env_c
+    return str(cfg.get("sync", {}).get("github", {}).get("oauth", {}).get("client_id", "")).strip()
+
+
+def _github_oauth_token_file(cfg: dict[str, Any]) -> Path:
+    oauth = cfg.get("sync", {}).get("github", {}).get("oauth", {})
+    raw = str((oauth or {}).get("token_file", "")).strip() if isinstance(oauth, dict) else ""
+    if raw:
+        return Path(raw).expanduser()
+    return _github_home_dir(cfg) / "runtime" / "github_oauth_token.json"
+
+
+def _read_github_oauth_token(cfg: dict[str, Any]) -> dict[str, Any]:
+    fp = _github_oauth_token_file(cfg)
+    if not fp.exists():
+        return {}
+    try:
+        obj = json.loads(fp.read_text(encoding="utf-8"))
+        if not isinstance(obj, dict):
+            return {}
+        return obj
+    except Exception:
+        return {}
+
+
+def _write_github_oauth_token(cfg: dict[str, Any], payload: dict[str, Any]) -> Path:
+    fp = _github_oauth_token_file(cfg)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(fp, 0o600)
+    except Exception:
+        pass
+    return fp
+
+
+def _github_api_request(
+    *,
+    method: str,
+    url: str,
+    token: str = "",
+    form: dict[str, Any] | None = None,
+    json_payload: dict[str, Any] | None = None,
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "omnimem-webui",
+    }
+    data: bytes | None = None
+    if str(token or "").strip():
+        headers["Authorization"] = f"Bearer {str(token).strip()}"
+    if form is not None:
+        data = urlencode({k: str(v) for k, v in form.items()}).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif json_payload is not None:
+        data = json.dumps(json_payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            raw = json.loads(body) if body.strip() else {}
+            return {"ok": True, "status": int(resp.status), "json": raw}
+    except urllib.error.HTTPError as exc:
+        body = (exc.read() or b"").decode("utf-8", errors="ignore")
+        try:
+            raw = json.loads(body) if body.strip() else {}
+        except Exception:
+            raw = {"message": body[:1200]}
+        return {"ok": False, "status": int(exc.code), "json": raw, "error": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "status": 0, "json": {}, "error": str(exc)}
+
+
+def _github_oauth_status(cfg: dict[str, Any]) -> dict[str, Any]:
+    oauth = cfg.get("sync", {}).get("github", {}).get("oauth", {})
+    token_obj = _read_github_oauth_token(cfg)
+    token = str(token_obj.get("access_token") or "").strip()
+    pending = bool(str((oauth or {}).get("device_code", "")).strip()) if isinstance(oauth, dict) else False
+    return {
+        "configured": bool(_github_oauth_client_id(cfg)),
+        "authenticated": bool(token),
+        "pending": pending and not bool(token),
+        "token_file": str(_github_oauth_token_file(cfg)),
+        "scope": str(token_obj.get("scope") or ""),
+        "updated_at": str(token_obj.get("updated_at") or ""),
+    }
+
+
+def _github_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     gh = shutil.which("gh")
+    oauth_info = _github_oauth_status(cfg or {}) if isinstance(cfg, dict) else {
+        "configured": False,
+        "authenticated": False,
+        "pending": False,
+        "token_file": "",
+        "scope": "",
+        "updated_at": "",
+    }
     if not gh:
-        return {"ok": True, "installed": False, "authenticated": False}
+        return {
+            "ok": True,
+            "installed": False,
+            "authenticated": bool(oauth_info.get("authenticated", False)),
+            "auth_source": "oauth-device" if bool(oauth_info.get("authenticated", False)) else "none",
+            "oauth": oauth_info,
+        }
     try:
         cp = subprocess.run(
             [gh, "auth", "status"],
@@ -4592,21 +4755,77 @@ def _github_status() -> dict[str, Any]:
             check=False,
         )
         txt = (cp.stdout or "") + "\n" + (cp.stderr or "")
+        gh_auth = bool(cp.returncode == 0)
+        oauth_auth = bool(oauth_info.get("authenticated", False))
         return {
             "ok": True,
             "installed": True,
-            "authenticated": bool(cp.returncode == 0),
+            "authenticated": bool(gh_auth or oauth_auth),
+            "auth_source": "gh" if gh_auth else ("oauth-device" if oauth_auth else "none"),
+            "gh_authenticated": gh_auth,
             "details": txt.strip()[:1200],
+            "oauth": oauth_info,
         }
     except Exception as exc:
-        return {"ok": True, "installed": True, "authenticated": False, "error": str(exc)}
+        return {
+            "ok": True,
+            "installed": True,
+            "authenticated": bool(oauth_info.get("authenticated", False)),
+            "auth_source": "oauth-device" if bool(oauth_info.get("authenticated", False)) else "none",
+            "error": str(exc),
+            "oauth": oauth_info,
+        }
 
 
-def _github_repo_list(*, query: str = "", limit: int = 50) -> dict[str, Any]:
+def _github_repo_list(*, cfg: dict[str, Any] | None = None, query: str = "", limit: int = 50) -> dict[str, Any]:
+    if isinstance(cfg, dict):
+        tok = str(_read_github_oauth_token(cfg).get("access_token") or "").strip()
+    else:
+        tok = ""
+    n = max(1, min(200, int(limit)))
+    if tok:
+        url = f"https://api.github.com/user/repos?per_page={min(100, n)}&sort=updated&direction=desc"
+        resp = _github_api_request(method="GET", url=url, token=tok, timeout=20)
+        if not bool(resp.get("ok")):
+            return {
+                "ok": True,
+                "installed": False,
+                "authenticated": False,
+                "items": [],
+                "source": "oauth-device",
+                "error": str((resp.get("json") or {}).get("message") or resp.get("error") or "oauth api failed")[:1200],
+            }
+        raw_items = resp.get("json") if isinstance(resp.get("json"), list) else []
+        q = str(query or "").strip().lower()
+        items: list[dict[str, Any]] = []
+        for it in raw_items:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("full_name") or "").strip()
+            if not name:
+                continue
+            if q and q not in name.lower():
+                continue
+            items.append(
+                {
+                    "full_name": name,
+                    "private": bool(it.get("private", False)),
+                    "permission": str((it.get("permissions") or {}).get("admin", False)),
+                    "url": str(it.get("html_url") or ""),
+                }
+            )
+        return {
+            "ok": True,
+            "installed": False,
+            "authenticated": True,
+            "count": len(items),
+            "items": items[:n],
+            "source": "oauth-device",
+        }
+
     gh = shutil.which("gh")
     if not gh:
         return {"ok": True, "installed": False, "authenticated": False, "items": []}
-    n = max(1, min(200, int(limit)))
     try:
         cp = subprocess.run(
             [gh, "repo", "list", "--limit", str(n), "--json", "nameWithOwner,isPrivate,viewerPermission,url"],
@@ -4642,19 +4861,134 @@ def _github_repo_list(*, query: str = "", limit: int = 50) -> dict[str, Any]:
                 }
             )
         items.sort(key=lambda x: str(x.get("full_name") or "").lower())
-        return {"ok": True, "installed": True, "authenticated": True, "count": len(items), "items": items[:n]}
+        return {
+            "ok": True,
+            "installed": True,
+            "authenticated": True,
+            "count": len(items),
+            "items": items[:n],
+            "source": "gh",
+        }
     except Exception as exc:
         return {"ok": True, "installed": True, "authenticated": False, "items": [], "error": str(exc)}
 
 
-def _github_auth_start(*, protocol: str = "https") -> dict[str, Any]:
+def _github_oauth_start(
+    *,
+    cfg: dict[str, Any],
+    cfg_path: Path,
+    client_id: str = "",
+    scope: str = "repo",
+) -> dict[str, Any]:
+    cid = _github_oauth_client_id(cfg, client_id=client_id)
+    if not cid:
+        return {
+            "ok": False,
+            "error": "missing GitHub OAuth client_id (set in WebUI field or OMNIMEM_GITHUB_OAUTH_CLIENT_ID)",
+        }
+    req = _github_api_request(
+        method="POST",
+        url="https://github.com/login/device/code",
+        form={"client_id": cid, "scope": str(scope or "repo")},
+        timeout=12,
+    )
+    if not bool(req.get("ok")):
+        msg = str((req.get("json") or {}).get("error_description") or (req.get("json") or {}).get("message") or req.get("error") or "oauth start failed")
+        return {"ok": False, "error": msg[:1200]}
+    data = req.get("json") if isinstance(req.get("json"), dict) else {}
+    device_code = str(data.get("device_code") or "").strip()
+    user_code = str(data.get("user_code") or "").strip()
+    if not device_code or not user_code:
+        return {"ok": False, "error": "oauth device flow did not return expected device_code/user_code"}
+    interval = max(2, int(data.get("interval", 5) or 5))
+    expires_in = max(interval, int(data.get("expires_in", 900) or 900))
+    oauth = _github_oauth_cfg(cfg)
+    oauth["client_id"] = cid
+    oauth["scope"] = str(scope or "repo").strip() or "repo"
+    oauth["device_code"] = device_code
+    oauth["user_code"] = user_code
+    oauth["verification_uri"] = str(data.get("verification_uri") or "https://github.com/login/device")
+    oauth["verification_uri_complete"] = str(data.get("verification_uri_complete") or "")
+    oauth["interval"] = int(interval)
+    oauth["expires_at"] = (
+        datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    ).replace(microsecond=0).isoformat()
+    save_config(cfg_path, cfg)
+    return {
+        "ok": True,
+        "started": True,
+        "auth_method": "oauth-device",
+        "user_code": oauth["user_code"],
+        "verification_uri": oauth["verification_uri"],
+        "verification_uri_complete": oauth.get("verification_uri_complete", ""),
+        "interval": oauth["interval"],
+        "expires_at": oauth["expires_at"],
+        "hint": "Open verification_uri, authorize app, then click Complete OAuth Login.",
+    }
+
+
+def _github_oauth_poll(*, cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
+    oauth = _github_oauth_cfg(cfg)
+    cid = _github_oauth_client_id(cfg, client_id=str(oauth.get("client_id", "")))
+    dcode = str(oauth.get("device_code") or "").strip()
+    if not cid or not dcode:
+        return {"ok": False, "error": "oauth device flow is not started"}
+    req = _github_api_request(
+        method="POST",
+        url="https://github.com/login/oauth/access_token",
+        form={
+            "client_id": cid,
+            "device_code": dcode,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        },
+        timeout=15,
+    )
+    data = req.get("json") if isinstance(req.get("json"), dict) else {}
+    access_token = str((data or {}).get("access_token") or "").strip()
+    if not access_token:
+        err = str((data or {}).get("error") or "authorization_pending").strip()
+        desc = str((data or {}).get("error_description") or err).strip()
+        if err in {"authorization_pending", "slow_down"}:
+            return {"ok": True, "pending": True, "error": desc[:800]}
+        return {"ok": False, "error": desc[:1200]}
+    token_payload = {
+        "provider": "github",
+        "access_token": access_token,
+        "token_type": str((data or {}).get("token_type") or "bearer"),
+        "scope": str((data or {}).get("scope") or oauth.get("scope") or ""),
+        "updated_at": utc_now(),
+    }
+    token_path = _write_github_oauth_token(cfg, token_payload)
+    oauth["token_file"] = str(token_path)
+    oauth["client_id"] = cid
+    oauth["authenticated_at"] = utc_now()
+    oauth.pop("device_code", None)
+    oauth.pop("user_code", None)
+    oauth.pop("verification_uri", None)
+    oauth.pop("verification_uri_complete", None)
+    oauth.pop("interval", None)
+    oauth.pop("expires_at", None)
+    save_config(cfg_path, cfg)
+    return {
+        "ok": True,
+        "authenticated": True,
+        "auth_method": "oauth-device",
+        "token_file": str(token_path),
+        "scope": str(token_payload.get("scope") or ""),
+    }
+
+
+def _github_auth_start(*, cfg: dict[str, Any], cfg_path: Path, protocol: str = "https", client_id: str = "") -> dict[str, Any]:
+    cid = _github_oauth_client_id(cfg, client_id=client_id)
+    if cid:
+        return _github_oauth_start(cfg=cfg, cfg_path=cfg_path, client_id=cid, scope="repo")
     gh = shutil.which("gh")
     if not gh:
-        return {"ok": False, "error": "gh CLI is not installed"}
+        return {"ok": False, "error": "gh CLI is not installed and OAuth client_id is not configured"}
     proto = str(protocol or "https").strip().lower()
     if proto not in {"https", "ssh"}:
         proto = "https"
-    status = _github_status()
+    status = _github_status(cfg)
     if bool(status.get("authenticated", False)):
         return {"ok": True, "already_authenticated": True}
     cmd = [gh, "auth", "login", "--hostname", "github.com", "--git-protocol", proto, "--web"]
@@ -4670,6 +5004,7 @@ def _github_auth_start(*, protocol: str = "https") -> dict[str, Any]:
         return {
             "ok": True,
             "started": True,
+            "auth_method": "gh",
             "pid": int(proc.pid),
             "protocol": proto,
             "hint": "Complete authentication in browser, then click Check GitHub Auth.",
@@ -4697,22 +5032,50 @@ def _github_quick_setup(
     created = False
     if bool(create_if_missing):
         gh = shutil.which("gh")
-        if not gh:
-            raise RuntimeError("gh CLI is not installed; cannot auto-create repository")
-        view = subprocess.run([gh, "repo", "view", full], capture_output=True, text=True, timeout=12, check=False)
-        if int(view.returncode) != 0:
-            vis_flag = "--private" if bool(private_repo) else "--public"
-            crt = subprocess.run(
-                [gh, "repo", "create", full, vis_flag, "--disable-wiki"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if int(crt.returncode) != 0:
-                msg = ((crt.stderr or "") + "\n" + (crt.stdout or "")).strip()
-                raise RuntimeError(f"failed to create GitHub repo: {msg[:800]}")
-            created = True
+        if gh:
+            view = subprocess.run([gh, "repo", "view", full], capture_output=True, text=True, timeout=12, check=False)
+            if int(view.returncode) != 0:
+                vis_flag = "--private" if bool(private_repo) else "--public"
+                crt = subprocess.run(
+                    [gh, "repo", "create", full, vis_flag, "--disable-wiki"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                if int(crt.returncode) != 0:
+                    msg = ((crt.stderr or "") + "\n" + (crt.stdout or "")).strip()
+                    raise RuntimeError(f"failed to create GitHub repo: {msg[:800]}")
+                created = True
+        else:
+            tok = str(_read_github_oauth_token(cfg).get("access_token") or "").strip()
+            if not tok:
+                raise RuntimeError("cannot auto-create repository: no gh auth and no OAuth token")
+            owner, repo_name = full.split("/", 1)
+            chk = _github_api_request(method="GET", url=f"https://api.github.com/repos/{full}", token=tok, timeout=15)
+            if int(chk.get("status", 0)) == 404:
+                me = _github_api_request(method="GET", url="https://api.github.com/user", token=tok, timeout=12)
+                login = str((me.get("json") or {}).get("login") or "").strip()
+                if owner == login:
+                    crt = _github_api_request(
+                        method="POST",
+                        url="https://api.github.com/user/repos",
+                        token=tok,
+                        json_payload={"name": repo_name, "private": bool(private_repo)},
+                        timeout=20,
+                    )
+                else:
+                    crt = _github_api_request(
+                        method="POST",
+                        url=f"https://api.github.com/orgs/{owner}/repos",
+                        token=tok,
+                        json_payload={"name": repo_name, "private": bool(private_repo)},
+                        timeout=20,
+                    )
+                if not bool(crt.get("ok")):
+                    msg = str((crt.get("json") or {}).get("message") or crt.get("error") or "repo create failed")
+                    raise RuntimeError(f"failed to create GitHub repo: {msg[:800]}")
+                created = True
 
     cfg.setdefault("sync", {}).setdefault("github", {})
     cfg["sync"]["github"]["remote_name"] = str(remote_name or "origin").strip() or "origin"
@@ -4739,6 +5102,14 @@ def _sync_options_from_cfg(cfg: dict[str, Any]) -> tuple[list[str], bool]:
         layers = [x.strip() for x in str(raw_layers or "").split(",") if x.strip()]
     include_jsonl = bool(gh.get("include_jsonl", True))
     return layers, include_jsonl
+
+
+def _sync_oauth_token_file_from_cfg(cfg: dict[str, Any]) -> str:
+    gh = cfg.get("sync", {}).get("github", {})
+    oauth = gh.get("oauth", {}) if isinstance(gh, dict) else {}
+    if isinstance(oauth, dict):
+        return str(oauth.get("token_file", "") or "").strip()
+    return ""
 
 
 def _projects_registry_path(home: str) -> Path:
@@ -6015,6 +6386,7 @@ def run_webui(
                     remote_name=gh.get("remote_name", "origin"),
                     branch=gh.get("branch", "main"),
                     remote_url=gh.get("remote_url"),
+                    oauth_token_file=_sync_oauth_token_file_from_cfg(cfg),
                     sync_include_layers=_sync_options_from_cfg(cfg)[0],
                     sync_include_jsonl=_sync_options_from_cfg(cfg)[1],
                     scan_interval=scan_every,
@@ -6197,14 +6569,14 @@ def run_webui(
                 return
 
             if parsed.path == "/api/github/status":
-                self._send_json(_github_status())
+                self._send_json(_github_status(cfg))
                 return
 
             if parsed.path == "/api/github/repos":
                 q = parse_qs(parsed.query)
                 limit = _parse_int_param(q.get("limit", ["80"])[0], default=80, lo=1, hi=200)
                 query = str(q.get("query", [""])[0] or "").strip()
-                self._send_json(_github_repo_list(query=query, limit=limit))
+                self._send_json(_github_repo_list(cfg=cfg, query=query, limit=limit))
                 return
 
             if parsed.path == "/api/route-templates":
@@ -7318,6 +7690,9 @@ def run_webui(
                 cfg["sync"]["github"]["remote_name"] = data.get("remote_name", "origin")
                 cfg["sync"]["github"]["remote_url"] = data.get("remote_url", "")
                 cfg["sync"]["github"]["branch"] = data.get("branch", "main")
+                if not isinstance(cfg["sync"]["github"].get("oauth"), dict):
+                    cfg["sync"]["github"]["oauth"] = {}
+                cfg["sync"]["github"]["oauth"]["client_id"] = str(data.get("gh_oauth_client_id", cfg["sync"]["github"]["oauth"].get("client_id", "")) or "").strip()
                 if "sync_include_layers" in data:
                     raw_layers = data.get("sync_include_layers")
                     if isinstance(raw_layers, list):
@@ -7460,6 +7835,7 @@ def run_webui(
                         remote_name=gh.get("remote_name", "origin"),
                         branch=gh.get("branch", "main"),
                         remote_url=gh.get("remote_url"),
+                        oauth_token_file=_sync_oauth_token_file_from_cfg(cfg),
                         commit_message="chore(memory): sync from webui",
                         sync_include_layers=sync_layers,
                         sync_include_jsonl=sync_include_jsonl,
@@ -7491,7 +7867,15 @@ def run_webui(
             if parsed.path == "/api/github/auth/start":
                 try:
                     protocol = str(data.get("protocol", "https") or "https").strip().lower()
-                    self._send_json(_github_auth_start(protocol=protocol))
+                    client_id = str(data.get("client_id", "") or "").strip()
+                    self._send_json(_github_auth_start(cfg=cfg, cfg_path=cfg_path, protocol=protocol, client_id=client_id))
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 400)
+                return
+
+            if parsed.path == "/api/github/auth/poll":
+                try:
+                    self._send_json(_github_oauth_poll(cfg=cfg, cfg_path=cfg_path))
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 400)
                 return
