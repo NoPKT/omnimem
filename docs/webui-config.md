@@ -2,22 +2,37 @@
 
 Language: [English](webui-config.md) | [简体中文](webui-config.zh-CN.md)
 
+## Recommended Defaults
+
+Most users only need this:
+
+```bash
+~/.omnimem/bin/omnimem start
+```
+
+Then open:
+
+- `http://127.0.0.1:8765`
+
 Default config path:
 
 - `$OMNIMEM_HOME/omnimem.config.json`
 - fallback: `~/.omnimem/omnimem.config.json`
 
-Start app:
+## GitHub Sync Setup (Recommended UI Path)
 
-```bash
-~/.omnimem/bin/omnimem
-```
+In WebUI `Configuration` tab:
 
-Security defaults:
+- `GitHub Quick Setup`
+- `Sign In via GitHub`
+- select/create repo
+- `Apply GitHub Setup`
 
-- WebUI binds to local host by default (`127.0.0.1`).
-- Binding a non-local host requires explicit `--allow-non-localhost`.
-- Optional API token auth:
+This keeps memory sync local (Git operations on your machine).
+
+## Advanced Options (Only If Needed)
+
+### WebUI auth token
 
 ```bash
 OMNIMEM_WEBUI_TOKEN='your-token' ~/.omnimem/bin/omnimem start
@@ -25,9 +40,17 @@ OMNIMEM_WEBUI_TOKEN='your-token' ~/.omnimem/bin/omnimem start
 ~/.omnimem/bin/omnimem start --webui-token 'your-token'
 ```
 
-When token auth is enabled, API requests must include header `X-OmniMem-Token: <token>`.
+When enabled, API calls must include `X-OmniMem-Token: <token>`.
 
-Daemon retry tuning (optional):
+### Non-local bind
+
+Only use when you understand network exposure:
+
+```bash
+~/.omnimem/bin/omnimem start --host 0.0.0.0 --allow-non-localhost --webui-token 'your-token'
+```
+
+### Daemon retry tuning
 
 ```bash
 ~/.omnimem/bin/omnimem start \
@@ -36,54 +59,36 @@ Daemon retry tuning (optional):
   --daemon-retry-max-backoff 8
 ```
 
-WebUI provides:
+### OAuth broker (optional)
 
-- Status & actions tab
-- Configuration tab
-- Memory browser tab
-- Language switch with broader static-text localization coverage (including advanced panel controls/options)
-- Per-element localized `title` tip generation (auto-applied to key controls/headings/inputs)
-- Daemon toggle and bootstrap sync action
-- Daemon metrics via `/api/daemon` (`success_count`, `failure_count`, retry settings, last run timestamps)
-- Daemon API schema: `spec/daemon-state.schema.json`
-- Failure kind classification in daemon metrics: `auth`, `network`, `conflict`, `unknown`
-- Remediation guidance is returned as `remediation_hint` in `/api/daemon`
-- When `last_error_kind=conflict`, WebUI shows a one-click recovery flow (`status -> pull -> push`)
-- Maintenance dashboard summary via `/api/maintenance/summary` (recent runs/decay/promote/demote and event counts)
-- Runtime health diagnosis via `/api/health/check` (sqlite reachability, daemon status, fd pressure)
-- Memory-level governance explainability via `/api/governance/explain?id=<memory_id>&adaptive=1&days=14`
-- Memory route retrieval in WebUI (`auto`/`episodic`/`semantic`/`procedural`) for intent-aware filtering
-- Drawer actions: `Undo Last Move` and one-click memory typing tags (`mem:episodic`, `mem:semantic`, `mem:procedural`)
-- Drawer move history with event-level undo (`/api/memory/move-history`, `/api/memory/undo-move-event`)
-- Drawer supports rollback to timestamp (`/api/memory/rollback-to-time`)
-- Drawer supports rollback preview (`/api/memory/rollback-preview`) with before/after layer diff
-- Insights quality panel (`/api/quality/summary`) with week-over-week deltas for conflicts/reuse/decay/writes and signal averages
-- Quality panel now returns alert hints (`alerts`) and supports preview actions from UI
-- Layer Board batch typing (`/api/memory/tag-batch`) for selected cards
-- Layer Board supports route templates (save/apply) for faster episodic/semantic/procedural labeling workflows
-- Route templates can be persisted server-side (`/api/route-templates`) and shared across sessions/devices via config sync
-- Optional approval gate for apply actions: `webui.approval_required=true`
-- Optional preview-only window for maintenance apply: `webui.maintenance_preview_only_until=<ISO-8601 UTC>`
-- GitHub quick auth/setup actions on Config tab:
-  - `Sign In via GitHub`: launches browser auth via local `gh auth login --web`
-  - Pure OAuth device flow (no `gh` needed): fill `OAuth Client ID`, click `Sign In via GitHub`; WebUI auto-polls completion (manual `Complete OAuth Login` is also available)
-  - Optional OAuth broker mode: set `OAuth Broker URL` to route device-flow `start/poll` via a lightweight server while keeping sync local-only
-  - `Check GitHub Auth`: checks local `gh auth status`
-  - `Refresh Repo List` + `Use Selected Repo`: pick `owner/repo` from `gh repo list`
-  - `Apply GitHub Setup`: writes sync remote settings from selected protocol/repo
+Use only to simplify OAuth login UX for users without local CLI auth.
 
-OAuth token handling:
+- docs: `docs/oauth-broker.md`
+- broker handles only OAuth device flow start/poll, not memory data transport
 
-- Token file is stored at `<OMNIMEM_HOME>/runtime/github_oauth_token.json` by default.
-- Git sync (`github-pull`/`github-push`) uses this token via `GIT_ASKPASS` for `https://github.com/...` remotes.
-- Do not commit token files; runtime folder is excluded from sync.
-- See `docs/oauth-broker.md` for broker API contract and a Cloudflare Worker reference implementation.
-- For automated scaffold/deploy helpers, use `omnimem oauth-broker init|deploy` or guided `omnimem oauth-broker wizard` (see `docs/oauth-broker.md`).
+## Risk and Safety Notes
 
-Recommended safe rollout:
+- Keep WebUI on localhost by default.
+- If you expose WebUI (`--allow-non-localhost`), always enable token auth.
+- Token file path: `<OMNIMEM_HOME>/runtime/github_oauth_token.json`.
+- Never commit token/runtime files.
+- For startup/auth diagnostics, run:
 
 ```bash
-PYTHONPATH=. python3 scripts/enable_governance_preview.py --days 7
+omnimem doctor
 ```
 
-After preview period, disable or clear `webui.maintenance_preview_only_until` in config and keep `approval_required=true`.
+## Feature Map (Reference)
+
+WebUI includes:
+
+- status/actions/config/memory tabs
+- daemon metrics, health check, and conflict recovery hints
+- governance/maintenance preview workflows
+- layer board + route templates + batch tagging
+- multilingual UI labels and localized tooltip generation
+
+For full API/details, see:
+
+- `docs/advanced-ops.md`
+- `spec/daemon-state.schema.json`

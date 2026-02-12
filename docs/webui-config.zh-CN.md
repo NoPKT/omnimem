@@ -1,23 +1,38 @@
-# WebUI 与配置（中文）
+# WebUI 与配置
 
-> English: [webui-config.md](webui-config.md)
+English: [webui-config.md](webui-config.md)
+
+## 推荐默认（建议先这样用）
+
+多数用户只需要：
+
+```bash
+~/.omnimem/bin/omnimem start
+```
+
+然后打开：
+
+- `http://127.0.0.1:8765`
 
 默认配置路径：
 
 - `$OMNIMEM_HOME/omnimem.config.json`
 - 回退：`~/.omnimem/omnimem.config.json`
 
-启动：
+## GitHub 同步配置（推荐走 WebUI）
 
-```bash
-~/.omnimem/bin/omnimem
-```
+在 WebUI 的 `Configuration` 页：
 
-## 安全默认值
+- `GitHub Quick Setup`
+- `Sign In via GitHub`
+- 选择/创建仓库
+- `Apply GitHub Setup`
 
-- WebUI 默认只监听本地：`127.0.0.1`
-- 非本地监听必须加 `--allow-non-localhost`
-- 可选 token 鉴权：
+这条路径下，记忆同步仍是你本机 Git 操作。
+
+## 进阶选项（按需开启）
+
+### WebUI token 鉴权
 
 ```bash
 OMNIMEM_WEBUI_TOKEN='your-token' ~/.omnimem/bin/omnimem start
@@ -25,21 +40,55 @@ OMNIMEM_WEBUI_TOKEN='your-token' ~/.omnimem/bin/omnimem start
 ~/.omnimem/bin/omnimem start --webui-token 'your-token'
 ```
 
-启用 token 后，请求需带头：`X-OmniMem-Token: <token>`
+启用后，API 请求必须携带：`X-OmniMem-Token: <token>`。
 
-## WebUI 提供能力
+### 非本地监听
 
-- 状态/动作、配置、记忆浏览
-- daemon 开关与 bootstrap 同步
-- GitHub 快速认证与仓库设置
-- 纯 OAuth 设备流（无 `gh` CLI 也可）
-- 可选 OAuth Broker（仅代理认证，不经过记忆数据）
-- 路由模板、批量标签、回滚预览、治理解释
-- 多语言切换（含更完整 static text 覆盖）
-- 元素级 `title` 提示（本地化 tip）
+仅在明确理解网络暴露风险时使用：
 
-## OAuth token 存储
+```bash
+~/.omnimem/bin/omnimem start --host 0.0.0.0 --allow-non-localhost --webui-token 'your-token'
+```
 
-- 默认存于：`<OMNIMEM_HOME>/runtime/github_oauth_token.json`
-- `github-pull/github-push` 通过 `GIT_ASKPASS` 使用该 token 访问 `https://github.com/...`
-- 不要提交 token 文件
+### 守护进程重试参数
+
+```bash
+~/.omnimem/bin/omnimem start \
+  --daemon-retry-max-attempts 4 \
+  --daemon-retry-initial-backoff 1 \
+  --daemon-retry-max-backoff 8
+```
+
+### OAuth broker（可选）
+
+仅用于简化 OAuth 登录体验（例如用户机器上没有本地 CLI 认证环境）。
+
+- 文档：`docs/oauth-broker.zh-CN.md`
+- broker 只代理 OAuth 设备流 start/poll，不承载记忆数据
+
+## 风险与安全提示
+
+- 默认保持 WebUI 仅本地监听。
+- 若开启非本地监听（`--allow-non-localhost`），必须同时启用 token。
+- token 文件路径：`<OMNIMEM_HOME>/runtime/github_oauth_token.json`。
+- 不要提交 token/runtime 文件。
+- 启动与认证诊断命令：
+
+```bash
+omnimem doctor
+```
+
+## 功能地图（参考）
+
+WebUI 提供：
+
+- 状态/动作/配置/记忆页面
+- daemon 指标、健康检查、冲突恢复提示
+- 治理/维护预览流程
+- layer board、路由模板、批量标签
+- 多语言文案与本地化 tooltip
+
+详细 API 与能力说明见：
+
+- `docs/advanced-ops.zh-CN.md`
+- `spec/daemon-state.schema.json`
