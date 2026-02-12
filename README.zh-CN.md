@@ -76,21 +76,9 @@ bash scripts/detach_project.sh /path/to/project
 ~/.omnimem/bin/omnimem uninstall --yes
 ```
 
-## 发布与 npx
+## npm 安装方式
 
-发布前检查：
-
-```bash
-npm run release:gate
-```
-
-生成下个版本草案（dry-run）：
-
-```bash
-npm run release:prepare
-```
-
-发布后用户可直接运行：
+用户可直接运行（无需全局安装）：
 
 ```bash
 npm exec -y --package=omnimem --call "omnimem start"
@@ -123,12 +111,12 @@ omnimem stop --all
 omnimem doctor
 ```
 
-## 校验
+## 维护者文档
 
-```bash
-python3 -m pytest -q
-bash scripts/release_gate.sh --allow-clean --skip-doctor --skip-pack --project-id OM --home ./.omnimem_gate
-```
+- npm 发布流程：`docs/publish-npm.zh-CN.md`
+- 启动/OAuth QA 清单：`docs/qa-startup-guide.zh-CN.md`
+- WebUI 与同步配置细节：`docs/webui-config.zh-CN.md`
+- 高级运维/评测/调参：`docs/advanced-ops.zh-CN.md`
 
 ## 文档（中文）
 
@@ -138,6 +126,7 @@ bash scripts/release_gate.sh --allow-clean --skip-doctor --skip-pack --project-i
 - [docs/qa-startup-guide.zh-CN.md](docs/qa-startup-guide.zh-CN.md)
 - [docs/publish-npm.zh-CN.md](docs/publish-npm.zh-CN.md)
 - [docs/install-uninstall.zh-CN.md](docs/install-uninstall.zh-CN.md)
+- [docs/advanced-ops.zh-CN.md](docs/advanced-ops.zh-CN.md)
 
 ## 文档（英文原版）
 
@@ -148,3 +137,4 @@ bash scripts/release_gate.sh --allow-clean --skip-doctor --skip-pack --project-i
 - [docs/qa-startup-guide.md](docs/qa-startup-guide.md)
 - [docs/publish-npm.md](docs/publish-npm.md)
 - [docs/install-uninstall.md](docs/install-uninstall.md)
+- [docs/advanced-ops.md](docs/advanced-ops.md)
