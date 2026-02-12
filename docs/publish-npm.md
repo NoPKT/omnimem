@@ -21,6 +21,7 @@ Optional partial gate:
 
 ```bash
 bash scripts/release_gate.sh --skip-doctor --project-id OM --home ./.omnimem_gate
+# Optional (faster local run): add --skip-docs if docs checks were already run.
 ```
 
 Optional pack dry-run (recommended):

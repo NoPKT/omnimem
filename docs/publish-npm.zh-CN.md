@@ -21,6 +21,7 @@ bash scripts/release_prepare.sh --apply
 
 ```bash
 bash scripts/release_gate.sh --skip-doctor --project-id OM --home ./.omnimem_gate
+# 可选（本地更快）：如果已单独执行文档检查，可附加 --skip-docs。
 ```
 
 可选（推荐）打包预检：

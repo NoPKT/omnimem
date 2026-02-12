@@ -23,19 +23,19 @@ jobs:
       - name: Prepare eval dataset and run core merge evaluation
         env:
           OMNIMEM_HOME: ${{ runner.temp }}/omnimem-nightly-home
-          PYTHONPATH: .
         run: |
           set -euo pipefail
+          export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH:-}"
           CFG="$OMNIMEM_HOME/omnimem.config.json"
           mkdir -p "$OMNIMEM_HOME"
 
           # Seed deterministic conflicting core blocks to make merge-mode deltas comparable.
-          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name style-a --topic style --priority 60 --body "Use concise bullets."
-          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name style-b --topic style --priority 92 --body "Use numbered technical lists with explicit assumptions."
-          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name safety-a --topic safety --priority 65 --body "Prefer non-destructive commands by default."
-          python -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name safety-b --topic safety --priority 88 --body "Require explicit confirmation for risky write operations."
+          python3 -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name style-a --topic style --priority 60 --body "Use concise bullets."
+          python3 -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name style-b --topic style --priority 92 --body "Use numbered technical lists with explicit assumptions."
+          python3 -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name safety-a --topic safety --priority 65 --body "Prefer non-destructive commands by default."
+          python3 -m omnimem.cli --config "$CFG" core-set --project-id OM --session-id ci-seed --name safety-b --topic safety --priority 88 --body "Require explicit confirmation for risky write operations."
 
-          python scripts/eval_core_merge.py \
+          python3 scripts/eval_core_merge.py \
             --config "$CFG" \
             --project-id OM \
             --session-id ci-seed \
@@ -43,7 +43,7 @@ jobs:
             --max-merged-lines 6 \
             --out "$RUNNER_TEMP/core_merge_report.json"
 
-          python scripts/tune_core_merge_from_eval.py \
+          python3 scripts/tune_core_merge_from_eval.py \
             --config "$CFG" \
             --report "$RUNNER_TEMP/core_merge_report.json" \
             --dry-run > "$RUNNER_TEMP/core_merge_tune_dry_run.json"

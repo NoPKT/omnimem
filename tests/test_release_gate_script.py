@@ -25,6 +25,8 @@ class ReleaseGateScriptTest(unittest.TestCase):
         self.assertIn("\"${OM[@]}\" preflight --path", txt)
         self.assertIn("\"${OM[@]}\" doctor", txt)
         self.assertIn("npm run pack:check", txt)
+        self.assertIn("python3 scripts/check_docs_i18n.py", txt)
+        self.assertIn("python3 scripts/report_docs_health.py", txt)
         self.assertIn("bash scripts/verify_phase_d.sh", txt)
         self.assertIn("\"${OM[@]}\" raptor", txt)
         self.assertIn("python3 scripts/eval_locomo_style.py", txt)
