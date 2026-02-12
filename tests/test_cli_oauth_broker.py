@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from omnimem.cli import _detect_broker_url_from_deploy_output, _extract_https_urls
+from omnimem.cli import _detect_broker_url_from_deploy_output, _extract_https_urls, _startup_guide_can_autorun
 
 
 class CLIOAuthBrokerTest(unittest.TestCase):
@@ -23,6 +23,24 @@ class CLIOAuthBrokerTest(unittest.TestCase):
         out = {"stdout": "done at https://example.net/service", "stderr": ""}
         u = _detect_broker_url_from_deploy_output("cloudflare", out)
         self.assertEqual(u, "https://example.net/service")
+
+    def test_startup_guide_can_autorun_true(self) -> None:
+        diag = {
+            "oauth_client_id_available": True,
+            "providers": [
+                {"provider": "cloudflare", "installed": True, "logged_in": True},
+            ],
+        }
+        self.assertTrue(_startup_guide_can_autorun(diag))
+
+    def test_startup_guide_can_autorun_false(self) -> None:
+        diag = {
+            "oauth_client_id_available": False,
+            "providers": [
+                {"provider": "cloudflare", "installed": True, "logged_in": True},
+            ],
+        }
+        self.assertFalse(_startup_guide_can_autorun(diag))
 
 
 if __name__ == "__main__":

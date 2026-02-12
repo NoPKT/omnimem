@@ -1382,6 +1382,20 @@ def _set_startup_guide_disabled(cfg: dict[str, object], cfg_path: Path, disabled
     save_config(cfg_path, cfg)
 
 
+def _startup_guide_can_autorun(diag: dict[str, object]) -> bool:
+    if not bool(diag.get("oauth_client_id_available", False)):
+        return False
+    providers = diag.get("providers", [])
+    if not isinstance(providers, list):
+        return False
+    for p in providers:
+        if not isinstance(p, dict):
+            continue
+        if bool(p.get("installed", False)) and bool(p.get("logged_in", False)):
+            return True
+    return False
+
+
 def _maybe_run_startup_sync_guide(args: argparse.Namespace, cfg: dict[str, object], cfg_path: Path) -> None:
     if not _startup_guide_enabled(args):
         return
@@ -1396,26 +1410,40 @@ def _maybe_run_startup_sync_guide(args: argparse.Namespace, cfg: dict[str, objec
     if _startup_guide_disabled_in_cfg(cfg):
         return
 
-    print_json(
-        {
-            "ok": True,
-            "action": "startup-guide",
-            "message": "sync/auth is not configured yet. run guided setup now?",
-            "choices": ["yes", "no", "never"],
-            "note": "auth-only broker never carries memory content; sync data path stays local",
-        }
-    )
-    raw = input("Run startup guide now? [Y/n/never]: ").strip().lower()
-    if raw in {"never", "nvr", "disable", "off"}:
-        _set_startup_guide_disabled(cfg, cfg_path, True)
-        print_json({"ok": True, "action": "startup-guide", "disabled": True})
-        return
-    if raw in {"n", "no", "skip"}:
-        return
+    diag = _oauth_broker_doctor_data(cfg_path=cfg_path, client_id="")
+    autorun = _startup_guide_can_autorun(diag)
+    if not autorun:
+        print_json(
+            {
+                "ok": True,
+                "action": "startup-guide",
+                "message": "sync/auth is not configured yet. run guided setup now?",
+                "choices": ["yes", "no", "never"],
+                "note": "auth-only broker never carries memory content; sync data path stays local",
+                "recommended_provider": str(diag.get("recommended_provider", "cloudflare")),
+            }
+        )
+        raw = input("Run startup guide now? [Y/n/never]: ").strip().lower()
+        if raw in {"never", "nvr", "disable", "off"}:
+            _set_startup_guide_disabled(cfg, cfg_path, True)
+            print_json({"ok": True, "action": "startup-guide", "disabled": True})
+            return
+        if raw in {"n", "no", "skip"}:
+            return
+    else:
+        print_json(
+            {
+                "ok": True,
+                "action": "startup-guide",
+                "mode": "auto-run",
+                "recommended_provider": str(diag.get("recommended_provider", "cloudflare")),
+                "note": "detected ready provider login + oauth client id; proceeding automatically",
+            }
+        )
 
     auto_args = argparse.Namespace(
         oauth_cmd="auto",
-        provider="",
+        provider=str(diag.get("recommended_provider", "") or ""),
         dir="",
         name="omnimem-oauth-broker",
         client_id="",
