@@ -907,6 +907,188 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _oauth_broker_examples_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "examples" / "oauth-broker"
+
+
+def _oauth_broker_template_dir(provider: str) -> Path:
+    p = str(provider or "").strip().lower()
+    if p == "cloudflare":
+        return _oauth_broker_examples_root() / "cloudflare-worker"
+    if p == "vercel":
+        return _oauth_broker_examples_root() / "vercel"
+    if p == "railway":
+        return _oauth_broker_examples_root() / "railway"
+    if p == "fly":
+        return _oauth_broker_examples_root() / "fly"
+    raise ValueError(f"unsupported provider: {provider}")
+
+
+def _oauth_broker_deploy_hint(provider: str, workdir: Path) -> list[str]:
+    p = str(provider or "").strip().lower()
+    wd = str(workdir)
+    if p == "cloudflare":
+        return [
+            f"cd {wd}",
+            "wrangler deploy",
+        ]
+    if p == "vercel":
+        return [
+            f"cd {wd}",
+            "vercel deploy --prod --yes",
+        ]
+    if p == "railway":
+        return [
+            f"cd {wd}",
+            "railway up",
+        ]
+    if p == "fly":
+        return [
+            f"cd {wd}",
+            "flyctl deploy",
+        ]
+    return []
+
+
+def _write_cloudflare_wrangler_toml(*, target_dir: Path, name: str, client_id: str) -> Path:
+    safe_name = re_sub_non_alnum(str(name or "omnimem-oauth-broker").strip().lower(), "-").strip("-") or "omnimem-oauth-broker"
+    txt = (
+        f'name = "{safe_name}"\n'
+        'main = "cloudflare-worker.js"\n'
+        'compatibility_date = "2026-01-01"\n\n'
+        "[vars]\n"
+        f'GITHUB_OAUTH_CLIENT_ID = "{str(client_id or "").strip()}"\n'
+    )
+    fp = target_dir / "wrangler.toml"
+    fp.write_text(txt, encoding="utf-8")
+    return fp
+
+
+def re_sub_non_alnum(text: str, repl: str = "-") -> str:
+    out = []
+    last_dash = False
+    for ch in text:
+        ok = ("a" <= ch <= "z") or ("0" <= ch <= "9")
+        if ok:
+            out.append(ch)
+            last_dash = False
+        else:
+            if not last_dash:
+                out.append(repl)
+            last_dash = True
+    return "".join(out)
+
+
+def _run_ext_cmd(cmd: list[str], cwd: Path) -> dict[str, object]:
+    try:
+        cp = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, check=False)
+        return {
+            "ok": bool(cp.returncode == 0),
+            "cmd": cmd,
+            "exit_code": int(cp.returncode),
+            "stdout": (cp.stdout or "")[-2000:],
+            "stderr": (cp.stderr or "")[-2000:],
+        }
+    except Exception as exc:
+        return {"ok": False, "cmd": cmd, "exit_code": -1, "error": str(exc)}
+
+
+def cmd_oauth_broker(args: argparse.Namespace) -> int:
+    provider = str(args.provider or "").strip().lower()
+    template_dir = _oauth_broker_template_dir(provider)
+    target_dir = Path(args.dir or f"./oauth-broker-{provider}").expanduser().resolve()
+
+    if args.oauth_cmd == "init":
+        if not template_dir.exists():
+            print_json({"ok": False, "error": f"template not found: {template_dir}"})
+            return 1
+        if target_dir.exists():
+            if any(target_dir.iterdir()) and not bool(args.force):
+                print_json({"ok": False, "error": f"target is not empty: {target_dir}", "hint": "use --force to overwrite"})
+                return 1
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if bool(args.force):
+            for p in target_dir.iterdir():
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    shutil.rmtree(p)
+        shutil.copytree(template_dir, target_dir, dirs_exist_ok=True)
+        generated: list[str] = []
+        if provider == "cloudflare":
+            fp = _write_cloudflare_wrangler_toml(
+                target_dir=target_dir,
+                name=str(args.name or "omnimem-oauth-broker"),
+                client_id=str(args.client_id or ""),
+            )
+            generated.append(str(fp))
+        print_json(
+            {
+                "ok": True,
+                "action": "init",
+                "provider": provider,
+                "template": str(template_dir),
+                "target_dir": str(target_dir),
+                "generated": generated,
+                "next": _oauth_broker_deploy_hint(provider, target_dir),
+                "note": "Auth-only broker: memory sync data does not go through this service.",
+            }
+        )
+        return 0
+
+    # deploy
+    if not target_dir.exists():
+        print_json({"ok": False, "error": f"target dir not found: {target_dir}", "hint": "run init first"})
+        return 1
+
+    hint = _oauth_broker_deploy_hint(provider, target_dir)
+    if not bool(args.apply):
+        print_json(
+            {
+                "ok": True,
+                "action": "deploy-preview",
+                "provider": provider,
+                "target_dir": str(target_dir),
+                "commands": hint,
+                "apply": False,
+            }
+        )
+        return 0
+
+    if provider == "cloudflare":
+        if not shutil.which("wrangler"):
+            print_json({"ok": False, "error": "wrangler not found in PATH", "hint": "npm i -g wrangler"})
+            return 1
+        if str(args.client_id or "").strip():
+            _write_cloudflare_wrangler_toml(
+                target_dir=target_dir,
+                name=str(args.name or "omnimem-oauth-broker"),
+                client_id=str(args.client_id or ""),
+            )
+        out = _run_ext_cmd(["wrangler", "deploy"], target_dir)
+    elif provider == "vercel":
+        if not shutil.which("vercel"):
+            print_json({"ok": False, "error": "vercel not found in PATH", "hint": "npm i -g vercel"})
+            return 1
+        out = _run_ext_cmd(["vercel", "deploy", "--prod", "--yes"], target_dir)
+    elif provider == "railway":
+        if not shutil.which("railway"):
+            print_json({"ok": False, "error": "railway not found in PATH", "hint": "npm i -g @railway/cli"})
+            return 1
+        out = _run_ext_cmd(["railway", "up"], target_dir)
+    elif provider == "fly":
+        if not shutil.which("flyctl"):
+            print_json({"ok": False, "error": "flyctl not found in PATH", "hint": "brew install flyctl"})
+            return 1
+        out = _run_ext_cmd(["flyctl", "deploy"], target_dir)
+    else:
+        out = {"ok": False, "error": f"unsupported provider: {provider}"}
+
+    out = {"ok": bool(out.get("ok")), "action": "deploy", "provider": provider, "target_dir": str(target_dir), **out}
+    print_json(out)
+    return 0 if bool(out.get("ok")) else 1
+
+
 def cmd_adapter_cred_resolve(args: argparse.Namespace) -> int:
     value = resolve_cred_ref(args.ref)
     if args.mask:
@@ -2571,6 +2753,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_bootstrap.add_argument("--attach-project", help="optional project path to attach")
     p_bootstrap.add_argument("--project-id", help="optional project id for attach")
     p_bootstrap.set_defaults(func=cmd_bootstrap)
+
+    p_oauth = sub.add_parser("oauth-broker", help="initialize/deploy optional auth-only GitHub OAuth broker")
+    p_oauth.add_argument("--config", help="path to omnimem config json")
+    p_oauth_sub = p_oauth.add_subparsers(dest="oauth_cmd", required=True)
+
+    p_oauth_init = p_oauth_sub.add_parser("init", help="copy provider template into target directory")
+    p_oauth_init.add_argument("--provider", choices=["cloudflare", "vercel", "railway", "fly"], required=True)
+    p_oauth_init.add_argument("--dir", help="target directory for template files")
+    p_oauth_init.add_argument("--name", default="omnimem-oauth-broker")
+    p_oauth_init.add_argument("--client-id", default="", help="optional GitHub OAuth client id (mainly for cloudflare vars)")
+    p_oauth_init.add_argument("--force", action="store_true", help="overwrite non-empty target directory")
+    p_oauth_init.set_defaults(func=cmd_oauth_broker)
+
+    p_oauth_deploy = p_oauth_sub.add_parser("deploy", help="deploy provider template (preview by default)")
+    p_oauth_deploy.add_argument("--provider", choices=["cloudflare", "vercel", "railway", "fly"], required=True)
+    p_oauth_deploy.add_argument("--dir", help="deployment directory")
+    p_oauth_deploy.add_argument("--name", default="omnimem-oauth-broker")
+    p_oauth_deploy.add_argument("--client-id", default="", help="optional GitHub OAuth client id (cloudflare)")
+    p_oauth_deploy.add_argument("--apply", action="store_true", help="run provider deploy command")
+    p_oauth_deploy.set_defaults(func=cmd_oauth_broker)
 
     p_adapter = sub.add_parser("adapter", help="external adapters")
     p_adapter.add_argument("--config", help="path to omnimem config json")

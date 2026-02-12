@@ -8,6 +8,30 @@ Use this only to simplify login UX. It is not used for memory sync data flow.
 - With broker: WebUI can start/poll device login through one shared endpoint.
 - Sync remains local Git operations (`github-pull` / `github-push`) on the user machine.
 
+## Quick Start (Automated)
+
+Use the built-in CLI helper to scaffold and deploy broker templates:
+
+```bash
+# 1) Initialize provider template
+omnimem oauth-broker init --provider cloudflare --dir ./oauth-broker-cloudflare --client-id Iv1.your_client_id
+
+# 2) Preview deploy command
+omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare
+
+# 3) Execute deploy
+omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare --apply
+```
+
+Supported providers:
+
+- `cloudflare`
+- `vercel`
+- `railway`
+- `fly`
+
+Provider templates live under `examples/oauth-broker/`.
+
 ## Threat model and scope
 
 - Broker should only proxy GitHub OAuth device flow.
@@ -35,6 +59,12 @@ Use this only to simplify login UX. It is not used for memory sync data flow.
 
 See `examples/oauth-broker/cloudflare-worker.js`.
 
+Alternative templates:
+
+- `examples/oauth-broker/vercel/`
+- `examples/oauth-broker/railway/`
+- `examples/oauth-broker/fly/`
+
 Required secret/env:
 
 - `GITHUB_OAUTH_CLIENT_ID` (or pass `client_id` from request if you allow it)
@@ -45,3 +75,4 @@ Recommended hardening:
 - Restrict origins (CORS allowlist).
 - Keep request logs but never log access tokens.
 - Return short error messages to clients.
+- Set aggressive scale-to-zero/auto-sleep so idle traffic costs stay near zero.

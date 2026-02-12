@@ -324,6 +324,16 @@ GitHub quick setup in WebUI:
 - `Apply GitHub Setup` writes sync remote config without manually pasting long remote URLs.
 - Optional repo auto-create requires authenticated `gh` CLI on the server host.
 
+Optional OAuth broker deploy shortcuts (auth-only service, no memory data path):
+
+- [![Cloudflare Broker](https://img.shields.io/badge/OAuth%20Broker-Cloudflare-f38020?logo=cloudflare&logoColor=white)](docs/oauth-broker.md#quick-start-automated)
+- [![Vercel Broker](https://img.shields.io/badge/OAuth%20Broker-Vercel-black?logo=vercel&logoColor=white)](docs/oauth-broker.md#quick-start-automated)
+- [![Railway Broker](https://img.shields.io/badge/OAuth%20Broker-Railway-0B0D0E?logo=railway&logoColor=white)](docs/oauth-broker.md#quick-start-automated)
+- [![Fly Broker](https://img.shields.io/badge/OAuth%20Broker-Fly.io-7B3FF2?logo=flydotio&logoColor=white)](docs/oauth-broker.md#quick-start-automated)
+- CLI automation:
+  - `omnimem oauth-broker init --provider cloudflare --dir ./oauth-broker-cloudflare --client-id Iv1.your_client_id`
+  - `omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare --apply`
+
 Nightly memory-eval workflow:
 
 - GitHub Actions `nightly-memory-eval` runs `eval_core_merge` + `tune_core_merge_from_eval --dry-run` on deterministic seeded core blocks.

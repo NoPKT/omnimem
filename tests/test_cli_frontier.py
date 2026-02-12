@@ -118,6 +118,15 @@ class CLIFrontierCommandTest(unittest.TestCase):
         self.assertEqual(a.cmd, "start")
         self.assertTrue(bool(a.daemon_maintenance_prune_enabled))
 
+    def test_oauth_broker_commands_registered(self) -> None:
+        p = build_parser()
+        a1 = p.parse_args(["oauth-broker", "init", "--provider", "cloudflare", "--dir", "./tmp"])
+        self.assertEqual(a1.cmd, "oauth-broker")
+        self.assertEqual(a1.oauth_cmd, "init")
+        a2 = p.parse_args(["oauth-broker", "deploy", "--provider", "vercel", "--dir", "./tmp"])
+        self.assertEqual(a2.cmd, "oauth-broker")
+        self.assertEqual(a2.oauth_cmd, "deploy")
+
 
 if __name__ == "__main__":
     unittest.main()

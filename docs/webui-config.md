@@ -74,6 +74,7 @@ OAuth token handling:
 - Git sync (`github-pull`/`github-push`) uses this token via `GIT_ASKPASS` for `https://github.com/...` remotes.
 - Do not commit token files; runtime folder is excluded from sync.
 - See `docs/oauth-broker.md` for broker API contract and a Cloudflare Worker reference implementation.
+- For automated scaffold/deploy helpers, use `omnimem oauth-broker init|deploy` (see `docs/oauth-broker.md`).
 
 Recommended safe rollout:
 
