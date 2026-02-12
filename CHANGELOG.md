@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.23 - 2026-02-12
+
+- OAuth broker templates: add missing `wrangler.toml` to Cloudflare Worker template, fixing one-click deploy failure (`Could not find a wrangler.json/jsonc/toml file`).
+- OAuth broker QA: add template-file guard test (`tests/test_oauth_broker_templates.py`) to ensure Cloudflare/Vercel/Railway/Fly deploy essentials remain present.
+- Docs: move one-click deploy guidance earlier in README (en/zh), add post-deploy health check snippet, and document exactly what to fill on provider deploy pages (`GITHUB_OAUTH_CLIENT_ID`, Fly secret/app name notes).
+
 ## 0.2.22 - 2026-02-12
 
 - Profile modeling: add deterministic user profile builder (`omnimem profile`) and WebUI API endpoint (`GET /api/profile`) to summarize preferences/goals/focus tags from memory traces.

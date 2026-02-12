@@ -36,6 +36,20 @@ Expected: JSON error like `missing client_id` (endpoint reachable).
 - Fly.io template reference:
   - `https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/fly`
 
+## What To Fill On Deploy Pages
+
+- Common required value:
+  - `GITHUB_OAUTH_CLIENT_ID` (GitHub OAuth App client id)
+- Cloudflare Worker:
+  - In Worker Settings -> Variables and Secrets, set `GITHUB_OAUTH_CLIENT_ID`.
+- Vercel:
+  - In Project Settings -> Environment Variables, add `GITHUB_OAUTH_CLIENT_ID` (Production at minimum).
+- Railway:
+  - In Variables tab, add `GITHUB_OAUTH_CLIENT_ID`.
+- Fly.io:
+  - App name can be arbitrary unique name.
+  - Set secret with `fly secrets set GITHUB_OAUTH_CLIENT_ID=...`.
+
 ## CLI Fallback (Deterministic)
 
 ```bash

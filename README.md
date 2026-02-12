@@ -36,6 +36,18 @@ bash scripts/install.sh
 After deploy, paste broker URL in WebUI `Configuration` -> `OAuth Broker URL`.
 Note: Cloudflare may show a generic monorepo warning page first; this is expected and can be continued.
 
+What to fill on deploy pages:
+
+- Cloudflare Worker:
+  - Variables/Secrets: set `GITHUB_OAUTH_CLIENT_ID`.
+- Vercel:
+  - Environment Variables: add `GITHUB_OAUTH_CLIENT_ID` (Production at minimum).
+- Railway:
+  - Variables: add `GITHUB_OAUTH_CLIENT_ID`.
+- Fly.io:
+  - Create app with any unique app name.
+  - Set secret: `fly secrets set GITHUB_OAUTH_CLIENT_ID=...`.
+
 Quick health check (replace `<BROKER_URL>`):
 
 ```bash

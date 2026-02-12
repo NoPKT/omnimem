@@ -36,6 +36,18 @@ bash scripts/install.sh
 部署完成后，把 broker URL 填到 WebUI `Configuration` -> `OAuth Broker URL`。
 说明：Cloudflare 可能先展示通用 monorepo 警告页面，这属于正常提示，可继续操作。
 
+部署页面需要填写的关键项：
+
+- Cloudflare Worker：
+  - Variables/Secrets 中设置 `GITHUB_OAUTH_CLIENT_ID`。
+- Vercel：
+  - Environment Variables 增加 `GITHUB_OAUTH_CLIENT_ID`（至少 Production）。
+- Railway：
+  - Variables 增加 `GITHUB_OAUTH_CLIENT_ID`。
+- Fly.io：
+  - App 名称可自定义且需唯一。
+  - 设置 secret：`fly secrets set GITHUB_OAUTH_CLIENT_ID=...`。
+
 快速健康检查（把 `<BROKER_URL>` 替换成你的地址）：
 
 ```bash

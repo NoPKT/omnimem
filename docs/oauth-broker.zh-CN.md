@@ -36,6 +36,20 @@ curl -sS -X POST "<BROKER_URL>/v1/github/device/start" \
 - Fly.io 模板参考：
   - `https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/fly`
 
+## 部署页面需要填写什么
+
+- 通用必填：
+  - `GITHUB_OAUTH_CLIENT_ID`（GitHub OAuth App 的 client id）
+- Cloudflare Worker：
+  - Worker Settings -> Variables and Secrets 中设置 `GITHUB_OAUTH_CLIENT_ID`。
+- Vercel：
+  - Project Settings -> Environment Variables 中增加 `GITHUB_OAUTH_CLIENT_ID`（至少 Production）。
+- Railway：
+  - Variables 页增加 `GITHUB_OAUTH_CLIENT_ID`。
+- Fly.io：
+  - App 名称可自定义但需唯一。
+  - 用 `fly secrets set GITHUB_OAUTH_CLIENT_ID=...` 设置 secret。
+
 ## CLI 兜底（可复现）
 
 ```bash
