@@ -25,8 +25,14 @@ class WebUiI18nReportScriptTest(unittest.TestCase):
             self.assertIn("per_locale", data)
             self.assertIn("en", data.get("per_locale", {}))
             self.assertIn("hardcoded_text_candidates_count", data)
-            zh = data.get("per_locale", {}).get("zh", {})
-            self.assertEqual(zh.get("missing_data_i18n_keys"), [])
+            per_locale = data.get("per_locale", {})
+            self.assertTrue(per_locale)
+            for locale, details in per_locale.items():
+                self.assertEqual(
+                    details.get("missing_data_i18n_keys"),
+                    [],
+                    msg=f"{locale} has missing data-i18n keys: {details.get('missing_data_i18n_keys')}",
+                )
 
 
 if __name__ == "__main__":
