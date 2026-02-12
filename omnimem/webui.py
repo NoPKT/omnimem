@@ -217,6 +217,7 @@ HTML_PAGE = """<!doctype html>
       background: var(--tab);
       box-shadow: 0 8px 16px rgba(11,18,32,.06);
     }
+    .section-summary { margin-bottom: 10px; }
     .cfg-block { animation: fadeUp .12s ease both; }
     .advanced-only { display:none !important; }
     body.advanced .advanced-only { display: revert !important; }
@@ -503,6 +504,7 @@ HTML_PAGE = """<!doctype html>
         <button class=\"section-chip\" data-ins-section=\"signals\" style=\"margin-top:0\">Signals</button>
         <button class=\"section-chip\" data-ins-section=\"all\" style=\"margin-top:0\">All</button>
       </div>
+      <div id=\"insSectionSummary\" class=\"advanced-only muted-box small section-summary\"></div>
       <div class=\"grid\">
 	        <div class=\"card wide\" data-ins-section=\"overview\">
 	          <h3 data-i18n=\"insights_title\">Layered Memory Map</h3>
@@ -785,6 +787,7 @@ HTML_PAGE = """<!doctype html>
               <button class=\"section-chip\" data-cfg-section=\"daemon\" type=\"button\" style=\"margin-top:0\">Daemon & Maintenance</button>
               <button class=\"section-chip\" data-cfg-section=\"all\" type=\"button\" style=\"margin-top:0\">All</button>
             </div>
+            <div id=\"cfgSectionSummary\" class=\"muted-box small section-summary\"></div>
             <div class=\"cfg-block\" data-cfg-section=\"core\">
             <label><span data-i18n=\"cfg_path\">Config Path</span><input name=\"config_path\" readonly /></label>
             <label><span data-i18n=\"cfg_home\">Home</span><input name=\"home\" /></label>
@@ -1066,6 +1069,24 @@ HTML_PAGE = """<!doctype html>
 	      </div>
 	    </div>
 	  </div>
+    <div id=\"dangerModal\" class=\"modal\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Danger action confirmation\">
+      <div class=\"modal-head\">
+        <div style=\"display:flex; justify-content:space-between; gap:10px; align-items:flex-start;\">
+          <div>
+            <div class=\"modal-title\" id=\"dangerTitle\">Confirm Action</div>
+            <div class=\"small\" id=\"dangerSub\" style=\"margin-top:6px\"></div>
+          </div>
+          <button id=\"btnDangerClose\" class=\"secondary\" style=\"margin-top:0\">Close</button>
+        </div>
+      </div>
+      <div class=\"modal-body\">
+        <pre id=\"dangerBody\" class=\"mono\" style=\"white-space:pre-wrap; margin-top:0\"></pre>
+        <div class=\"row-btn\" style=\"margin-top:10px\">
+          <button id=\"btnDangerConfirm\" class=\"danger\" style=\"margin-top:0\">Confirm</button>
+          <button id=\"btnDangerCancel\" class=\"secondary\" style=\"margin-top:0\">Cancel</button>
+        </div>
+      </div>
+    </div>
 	  <div id=\"drawer\" class=\"drawer\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Memory details\">
 	    <div class=\"drawer-head\">
 	      <div style=\"display:flex; justify-content:space-between; gap:10px; align-items:flex-start;\">
@@ -1395,6 +1416,35 @@ HTML_PAGE = """<!doctype html>
         ui_confirm: 'Confirm',
         ui_archive_confirm_session: 'Archive session {sid}... from {from} -> {to}?',
         ui_archive_confirm_active_session: 'Archive active session {sid}... from {from} -> {to}?',
+        ui_cancel: 'Cancel',
+        ui_close: 'Close',
+        ui_danger_title: 'Confirm Risky Action',
+        ui_danger_archive_sub: 'Session archive',
+        ui_danger_archive_body: 'Session {sid} will be archived from {from} to {to} (limit {limit}).',
+        ui_danger_decay_sub: 'Decay apply',
+        ui_danger_decay_body: 'Apply decay with days={days}, layers={layers}, limit={limit}.',
+        ui_danger_consolidate_sub: 'Consolidate apply',
+        ui_danger_consolidate_body: 'Apply consolidate with limit={limit}, project={project}, session={session}.',
+        ui_danger_compress_sub: 'Session compress apply',
+        ui_danger_compress_body: 'Apply compress on session={session} with min_items={min_items}.',
+        ui_danger_auto_sub: 'Auto maintenance apply',
+        ui_danger_auto_body: 'Apply auto maintenance for project={project}, session={session}.',
+        ui_danger_revert_sub: 'Revert promote event',
+        ui_danger_revert_body: 'Revert memory {mid} from {to} back to {from}.',
+        ui_danger_workset_apply_sub: 'Apply workset',
+        ui_danger_workset_apply_body: 'Apply workset "{name}" to current view and filters.',
+        ui_danger_workset_delete_sub: 'Delete workset',
+        ui_danger_workset_delete_body: 'Delete workset "{name}". This cannot be undone.',
+        ui_ins_section_overview_summary: 'Overview: layer map and board operations for fast inspection and triage.',
+        ui_ins_section_governance_summary: 'Governance: threshold controls and promote/demote recommendations.',
+        ui_ins_section_sessions_summary: 'Sessions: session activation and archive-focused operations.',
+        ui_ins_section_operations_summary: 'Operations: maintenance and event-level operational actions.',
+        ui_ins_section_signals_summary: 'Signals: activity, kind distribution, tags, checkpoints, and quality.',
+        ui_ins_section_all_summary: 'All sections visible.',
+        ui_cfg_section_core_summary: 'Core: storage paths and git remote fundamentals.',
+        ui_cfg_section_github_summary: 'GitHub: OAuth sign-in, repo selection, and quick setup.',
+        ui_cfg_section_daemon_summary: 'Daemon & Maintenance: background sync and maintenance controls.',
+        ui_cfg_section_all_summary: 'All configuration sections visible.',
       },
       zh: {
         tip_auto_prefix: '说明：',
@@ -1432,6 +1482,35 @@ HTML_PAGE = """<!doctype html>
         ui_confirm: '确认',
         ui_archive_confirm_session: '归档会话 {sid}... 从 {from} -> {to}？',
         ui_archive_confirm_active_session: '归档当前会话 {sid}... 从 {from} -> {to}？',
+        ui_cancel: '取消',
+        ui_close: '关闭',
+        ui_danger_title: '确认高风险操作',
+        ui_danger_archive_sub: '会话归档',
+        ui_danger_archive_body: '将会话 {sid} 从 {from} 归档到 {to}（上限 {limit}）。',
+        ui_danger_decay_sub: '应用衰减',
+        ui_danger_decay_body: '按 days={days}、layers={layers}、limit={limit} 执行衰减。',
+        ui_danger_consolidate_sub: '应用整合',
+        ui_danger_consolidate_body: '按 limit={limit}、project={project}、session={session} 执行整合。',
+        ui_danger_compress_sub: '应用会话压缩',
+        ui_danger_compress_body: '在 session={session} 上执行压缩，min_items={min_items}。',
+        ui_danger_auto_sub: '应用自动维护',
+        ui_danger_auto_body: '对 project={project}、session={session} 执行自动维护。',
+        ui_danger_revert_sub: '回滚提升事件',
+        ui_danger_revert_body: '将记忆 {mid} 从 {to} 回滚到 {from}。',
+        ui_danger_workset_apply_sub: '应用工作集',
+        ui_danger_workset_apply_body: '应用工作集“{name}”到当前视图与过滤条件。',
+        ui_danger_workset_delete_sub: '删除工作集',
+        ui_danger_workset_delete_body: '删除工作集“{name}”，该操作不可撤销。',
+        ui_ins_section_overview_summary: '总览：快速查看层级分布并进行看板分拣操作。',
+        ui_ins_section_governance_summary: '治理：阈值控制与升降级建议。',
+        ui_ins_section_sessions_summary: '会话：会话激活与归档相关操作。',
+        ui_ins_section_operations_summary: '操作：维护任务与事件级操作。',
+        ui_ins_section_signals_summary: '信号：活跃度、类型分布、标签、检查点与质量。',
+        ui_ins_section_all_summary: '显示全部区块。',
+        ui_cfg_section_core_summary: '核心：存储路径与 Git 远端基础配置。',
+        ui_cfg_section_github_summary: 'GitHub：OAuth 登录、仓库选择与快速配置。',
+        ui_cfg_section_daemon_summary: '守护与维护：后台同步和维护控制。',
+        ui_cfg_section_all_summary: '显示全部配置区块。',
       },
       ja: {
         tip_auto_prefix: 'ヒント: ',
@@ -1974,8 +2053,9 @@ HTML_PAGE = """<!doctype html>
 		        o.classList.add('show');
 		        m.classList.add('show');
 		      } else {
-		        o.classList.remove('show');
 		        m.classList.remove('show');
+            const dm = document.getElementById('dangerModal');
+            if (!dm || !dm.classList.contains('show')) o.classList.remove('show');
 		      }
 		    }
 		
@@ -2022,11 +2102,12 @@ HTML_PAGE = """<!doctype html>
 		    let selectedEventIdx = -1;
 	    let eventsSort = { key: 'event_time', dir: 'desc' };
 	    let lastEventsCtx = { project_id:'', session_id:'', event_type:'' };
-        let governanceRecommended = null;
+	    let governanceRecommended = null;
 	    let pendingWsImport = null;
 	    let pendingWsSource = '';
       let insightsSection = 'overview';
       let configSection = 'core';
+      let dangerResolve = null;
 
     function t(key) {
       const dict = I18N[currentLang] || I18N.en;
@@ -2072,6 +2153,31 @@ HTML_PAGE = """<!doctype html>
       if (el) el.setAttribute('placeholder', t(key));
     }
 
+    function renderSectionSummaries() {
+      const ins = document.getElementById('insSectionSummary');
+      if (ins) {
+        const map = {
+          overview: t('ui_ins_section_overview_summary'),
+          governance: t('ui_ins_section_governance_summary'),
+          sessions: t('ui_ins_section_sessions_summary'),
+          operations: t('ui_ins_section_operations_summary'),
+          signals: t('ui_ins_section_signals_summary'),
+          all: t('ui_ins_section_all_summary')
+        };
+        ins.textContent = map[insightsSection] || map.overview;
+      }
+      const cfg = document.getElementById('cfgSectionSummary');
+      if (cfg) {
+        const map = {
+          core: t('ui_cfg_section_core_summary'),
+          github: t('ui_cfg_section_github_summary'),
+          daemon: t('ui_cfg_section_daemon_summary'),
+          all: t('ui_cfg_section_all_summary')
+        };
+        cfg.textContent = map[configSection] || map.core;
+      }
+    }
+
     function setInsightsSection(section) {
       const next = String(section || 'overview').trim() || 'overview';
       insightsSection = next;
@@ -2082,6 +2188,7 @@ HTML_PAGE = """<!doctype html>
         const s = card.getAttribute('data-ins-section') || '';
         card.style.display = (next === 'all' || s === next) ? '' : 'none';
       });
+      renderSectionSummaries();
     }
 
     function setConfigSection(section) {
@@ -2094,6 +2201,7 @@ HTML_PAGE = """<!doctype html>
         const s = block.getAttribute('data-cfg-section') || '';
         block.style.display = (next === 'all' || s === next) ? '' : 'none';
       });
+      renderSectionSummaries();
     }
 
     function setLabelPrefixForInput(inputId, key) {
@@ -2160,6 +2268,10 @@ HTML_PAGE = """<!doctype html>
       setTextById('btnClassifyEpisodic', 'ui_btn_tag_episodic');
       setTextById('btnClassifySemantic', 'ui_btn_tag_semantic');
       setTextById('btnClassifyProcedural', 'ui_btn_tag_procedural');
+      setTextById('dangerTitle', 'ui_danger_title');
+      setTextById('btnDangerConfirm', 'ui_confirm');
+      setTextById('btnDangerCancel', 'ui_cancel');
+      setTextById('btnDangerClose', 'ui_close');
 
       setPlaceholderById('boardTemplateName', 'ui_ph_template_name');
       setLabelPrefixForInput('insSessionId', 'ui_session_filter');
@@ -2341,6 +2453,40 @@ HTML_PAGE = """<!doctype html>
         overlay.classList.remove('show');
         drawer.classList.remove('show');
       }
+    }
+
+    function showDangerModal(show) {
+      const overlay = document.getElementById('modalOverlay');
+      const modal = document.getElementById('dangerModal');
+      if (!overlay || !modal) return;
+      if (show) {
+        overlay.classList.add('show');
+        modal.classList.add('show');
+      } else {
+        modal.classList.remove('show');
+        const ws = document.getElementById('wsModal');
+        if (!ws || !ws.classList.contains('show')) overlay.classList.remove('show');
+      }
+    }
+
+    function askDangerConfirm(title, sub, body) {
+      const tEl = document.getElementById('dangerTitle');
+      const sEl = document.getElementById('dangerSub');
+      const bEl = document.getElementById('dangerBody');
+      if (tEl) tEl.textContent = String(title || 'Confirm Action');
+      if (sEl) sEl.textContent = String(sub || '');
+      if (bEl) bEl.textContent = String(body || '');
+      showDangerModal(true);
+      return new Promise((resolve) => {
+        dangerResolve = resolve;
+      });
+    }
+
+    function settleDangerConfirm(ok) {
+      const r = dangerResolve;
+      dangerResolve = null;
+      showDangerModal(false);
+      if (typeof r === 'function') r(!!ok);
     }
 
     function fmtPct(v) {
@@ -3793,7 +3939,12 @@ HTML_PAGE = """<!doctype html>
 	          if (action === 'archive') {
 	            const pid = document.getElementById('insProjectId')?.value?.trim() || '';
 	            const opts = readSessionArchiveOpts();
-	            if (!confirm(tf('ui_archive_confirm_session', { sid: sid.slice(0,12), from: opts.from_layers.join('+'), to: opts.to_layer }))) return;
+	            const ok = await askDangerConfirm(
+                t('ui_danger_title'),
+                t('ui_danger_archive_sub'),
+                tf('ui_danger_archive_body', { sid: sid.slice(0,12), from: opts.from_layers.join('+'), to: opts.to_layer, limit: opts.limit })
+              );
+              if (!ok) return;
 	            const r = await jpost('/api/session/archive', {
 	              project_id: pid,
 	              session_id: sid,
@@ -3952,7 +4103,11 @@ HTML_PAGE = """<!doctype html>
 	    async function runDecay(dry_run) {
 	      const opts = readDecayOpts();
 	      if (!dry_run) {
-	        const ok = confirm(`Apply decay? days=${opts.days}, layers=${opts.layers.join(',')}, limit=${opts.limit}`);
+	        const ok = await askDangerConfirm(
+            t('ui_danger_title'),
+            t('ui_danger_decay_sub'),
+            tf('ui_danger_decay_body', { days: opts.days, layers: opts.layers.join(','), limit: opts.limit })
+          );
 	        if (!ok) return;
 	      }
 	      const d = await jpost('/api/maintenance/decay', Object.assign({}, opts, { dry_run: !!dry_run }));
@@ -4030,7 +4185,16 @@ HTML_PAGE = """<!doctype html>
 	    async function runConsolidate(dry_run) {
 	      const opts = readConsolidateOpts();
 	      if (!dry_run) {
-	        if (!confirm(`Apply consolidate? limit=${opts.limit}, project=${opts.project_id || '(all)'}, session=${opts.session_id || '(all)'}`)) return;
+	        const ok = await askDangerConfirm(
+            t('ui_danger_title'),
+            t('ui_danger_consolidate_sub'),
+            tf('ui_danger_consolidate_body', {
+              limit: opts.limit,
+              project: opts.project_id || '(all)',
+              session: opts.session_id || '(all)'
+            })
+          );
+          if (!ok) return;
 	      }
 	      const d = await jpost('/api/maintenance/consolidate', Object.assign({}, opts, { dry_run: !!dry_run }));
 	      const hint = document.getElementById('consHint');
@@ -4063,7 +4227,12 @@ HTML_PAGE = """<!doctype html>
 	        return;
 	      }
 	      if (!dry_run) {
-	        if (!confirm(`Apply session compress? session=${opts.session_id.slice(0,12)}... min_items=${opts.min_items}`)) return;
+	        const ok = await askDangerConfirm(
+            t('ui_danger_title'),
+            t('ui_danger_compress_sub'),
+            tf('ui_danger_compress_body', { session: opts.session_id.slice(0,12) + '...', min_items: opts.min_items })
+          );
+          if (!ok) return;
 	      }
 	      const d = await jpost('/api/maintenance/compress', Object.assign({}, opts, { dry_run: !!dry_run }));
 	      const hint = document.getElementById('compressHint');
@@ -4088,7 +4257,12 @@ HTML_PAGE = """<!doctype html>
 	      const sid = (document.getElementById('insSessionId')?.value || '').trim();
 	      const ack = (document.getElementById('autoMaintAck')?.value || '').trim();
 	      if (!dry_run) {
-	        if (!confirm(`Apply auto maintenance? project=${pid || '(all)'} session=${sid || '(auto hot sessions)'}`)) return;
+	        const ok = await askDangerConfirm(
+            t('ui_danger_title'),
+            t('ui_danger_auto_sub'),
+            tf('ui_danger_auto_body', { project: pid || '(all)', session: sid || '(auto hot sessions)' })
+          );
+          if (!ok) return;
 	      }
 	      const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: !!dry_run, ack_token: ack });
 	      const hint = document.getElementById('autoMaintHint');
@@ -4899,12 +5073,29 @@ HTML_PAGE = """<!doctype html>
           if (bPro) bPro.onclick = () => classifyDrawerMemory('procedural');
           if (bRollback) bRollback.onclick = () => rollbackDrawerMemoryToTime();
           if (bRollbackPreview) bRollbackPreview.onclick = () => previewRollbackDrawerMemory();
-		      const mo = document.getElementById('modalOverlay');
-	      if (mo) mo.onclick = () => { showWsModal(false); clearWsHash(); };
+	      const mo = document.getElementById('modalOverlay');
+	      if (mo) mo.onclick = () => {
+          const dm = document.getElementById('dangerModal');
+          if (dm && dm.classList.contains('show')) {
+            settleDangerConfirm(false);
+            return;
+          }
+          const wm = document.getElementById('wsModal');
+          if (wm && wm.classList.contains('show')) {
+            showWsModal(false);
+            clearWsHash();
+          }
+        };
 	      const mclose = document.getElementById('btnWsModalClose');
 	      if (mclose) mclose.onclick = () => { showWsModal(false); clearWsHash(); };
 	      const mCancel = document.getElementById('btnWsImportCancel');
 	      if (mCancel) mCancel.onclick = () => { showWsModal(false); clearWsHash(); };
+        const dClose = document.getElementById('btnDangerClose');
+        if (dClose) dClose.onclick = () => settleDangerConfirm(false);
+        const dCancel = document.getElementById('btnDangerCancel');
+        if (dCancel) dCancel.onclick = () => settleDangerConfirm(false);
+        const dConfirm = document.getElementById('btnDangerConfirm');
+        if (dConfirm) dConfirm.onclick = () => settleDangerConfirm(true);
 	      const mName = document.getElementById('wsImportName');
 	      if (mName) mName.oninput = () => updateWsImportPreview();
 	      ['wsApplyProject','wsApplySession','wsApplyPrefs'].forEach(id => {
@@ -4961,7 +5152,12 @@ HTML_PAGE = """<!doctype html>
 	          return;
 	        }
 	        const opts = readSessionArchiveOpts();
-	        if (!confirm(tf('ui_archive_confirm_active_session', { sid: sid.slice(0,12), from: opts.from_layers.join('+'), to: opts.to_layer }))) return;
+	        const ok = await askDangerConfirm(
+            t('ui_danger_title'),
+            t('ui_danger_archive_sub'),
+            tf('ui_danger_archive_body', { sid: sid.slice(0,12), from: opts.from_layers.join('+'), to: opts.to_layer, limit: opts.limit })
+          );
+          if (!ok) return;
 	        const r = await jpost('/api/session/archive', {
 	          project_id: pid,
 	          session_id: sid,
@@ -5030,8 +5226,12 @@ HTML_PAGE = """<!doctype html>
 	        const items = safeLoadWorksets();
 	        const w = items.find(x => (x && x.name) === name);
 	        if (w && safeGetWsConfirm()) {
-	          const msg = `Apply workset "${name}"?\n\n` + describeWorksetApply(w);
-	          if (!confirm(msg)) {
+	          const ok = await askDangerConfirm(
+              t('ui_danger_title'),
+              t('ui_danger_workset_apply_sub'),
+              tf('ui_danger_workset_apply_body', { name }) + `\n\n` + describeWorksetApply(w)
+            );
+            if (!ok) {
 	            wsSel.value = safeGetActiveWorksetName() || '';
 	            return;
 	          }
@@ -5061,7 +5261,12 @@ HTML_PAGE = """<!doctype html>
 	          toast('Workset', 'missing name', false);
 	          return;
 	        }
-	        if (!confirm(`Delete workset ${nm}?`)) return;
+	        const ok = await askDangerConfirm(
+            t('ui_danger_title'),
+            t('ui_danger_workset_delete_sub'),
+            tf('ui_danger_workset_delete_body', { name: nm })
+          );
+          if (!ok) return;
 	        const r = deleteWorkset(nm);
 	        if (!r.ok) {
 	          toast('Workset', r.error || 'delete failed', false);
@@ -5188,7 +5393,12 @@ HTML_PAGE = """<!doctype html>
 	        const mid = String(currentEvent.memory_id || '').trim();
 	        const from_layer = String(p.from_layer || '').trim();
 	        const to_layer = String(p.to_layer || '').trim();
-	        if (!confirm(`Revert promote: ${mid.slice(0,12)}... ${to_layer} -> ${from_layer}?`)) return;
+	        const ok = await askDangerConfirm(
+            t('ui_danger_title'),
+            t('ui_danger_revert_sub'),
+            tf('ui_danger_revert_body', { mid: mid.slice(0,12) + '...', to: to_layer, from: from_layer })
+          );
+          if (!ok) return;
 	        await moveLayer(mid, from_layer);
 	        toast('Event', 'reverted promote', true);
 	        // refresh event log to reflect state changes
@@ -5247,7 +5457,20 @@ HTML_PAGE = """<!doctype html>
         }
 
 	    window.addEventListener('keydown', (e) => {
-	      if (e.key === 'Escape') showDrawer(false);
+	      if (e.key === 'Escape') {
+          const dm = document.getElementById('dangerModal');
+          if (dm && dm.classList.contains('show')) {
+            settleDangerConfirm(false);
+            return;
+          }
+          const wm = document.getElementById('wsModal');
+          if (wm && wm.classList.contains('show')) {
+            showWsModal(false);
+            clearWsHash();
+            return;
+          }
+          showDrawer(false);
+        }
         if (shouldIgnoreKeys(e)) return;
         if (e.key === '/') {
           e.preventDefault();
