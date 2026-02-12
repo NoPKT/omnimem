@@ -14,6 +14,16 @@ Use this only to simplify GitHub OAuth login UX. It is not in memory sync data p
 
 Sync still runs locally via Git on user machine.
 
+Health check (replace `<BROKER_URL>`):
+
+```bash
+curl -sS -X POST "<BROKER_URL>/v1/github/device/start" \
+  -H 'Content-Type: application/json' \
+  -d '{}' | jq .
+```
+
+Expected: JSON error like `missing client_id` (endpoint reachable).
+
 ## One-Click Deploy Entry Points
 
 - Cloudflare Worker:

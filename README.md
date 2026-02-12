@@ -35,6 +35,16 @@ bash scripts/install.sh
 
 After deploy, paste broker URL in WebUI `Configuration` -> `OAuth Broker URL`.
 
+Quick health check (replace `<BROKER_URL>`):
+
+```bash
+curl -sS -X POST "<BROKER_URL>/v1/github/device/start" \
+  -H 'Content-Type: application/json' \
+  -d '{}' | jq .
+```
+
+Expected: JSON error like `missing client_id` (endpoint reachable).
+
 ## npm Usage
 
 Run without global install:

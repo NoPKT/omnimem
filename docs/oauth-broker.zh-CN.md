@@ -14,6 +14,16 @@ English: [oauth-broker.md](oauth-broker.md)
 
 记忆同步仍是用户机器上的本地 Git 操作。
 
+健康检查（将 `<BROKER_URL>` 替换为你的地址）：
+
+```bash
+curl -sS -X POST "<BROKER_URL>/v1/github/device/start" \
+  -H 'Content-Type: application/json' \
+  -d '{}' | jq .
+```
+
+预期：返回类似 `missing client_id` 的 JSON 错误（说明 broker 端点可达）。
+
 ## 平台一键部署入口
 
 - Cloudflare Worker：

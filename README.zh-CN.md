@@ -35,6 +35,16 @@ bash scripts/install.sh
 
 部署完成后，把 broker URL 填到 WebUI `Configuration` -> `OAuth Broker URL`。
 
+快速健康检查（把 `<BROKER_URL>` 替换成你的地址）：
+
+```bash
+curl -sS -X POST "<BROKER_URL>/v1/github/device/start" \
+  -H 'Content-Type: application/json' \
+  -d '{}' | jq .
+```
+
+预期：返回类似 `missing client_id` 的 JSON 错误（说明 broker 端点可达）。
+
 ## npm 使用
 
 无需全局安装直接运行：
