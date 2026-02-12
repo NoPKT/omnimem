@@ -22,6 +22,14 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Docs i18n check
+        run: python3 scripts/check_docs_i18n.py
+
+      - name: WebUI i18n coverage report
+        run: |
+          python3 scripts/report_webui_i18n_coverage.py --out eval/webui_i18n_report.json
+          echo "[i18n] report generated at eval/webui_i18n_report.json"
+
       - name: Release gate smoke
         run: |
           bash scripts/release_gate.sh \

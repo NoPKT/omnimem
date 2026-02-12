@@ -292,6 +292,11 @@ bash scripts/release_gate.sh --allow-clean --skip-doctor --skip-pack --project-i
 NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 ```
 
+Docs/WebUI i18n automation:
+
+- `python3 scripts/check_docs_i18n.py` validates bilingual doc pairs and language-navigation links.
+- `python3 scripts/report_webui_i18n_coverage.py --out eval/webui_i18n_report.json` emits WebUI i18n coverage + hardcoded-text candidate report.
+
 If `npm pack --dry-run` fails with cache permission errors (`EPERM` under `~/.npm`), run it with a writable cache:
 
 ```bash
