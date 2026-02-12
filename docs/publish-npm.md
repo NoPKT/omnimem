@@ -2,44 +2,63 @@
 
 Language: [English](publish-npm.md) | [简体中文](publish-npm.zh-CN.md)
 
-## Pre-check
+This guide is for maintainers.
+
+## 1) Prepare
 
 ```bash
 npm run release:gate
-```
-
-## Prepare release draft
-
-```bash
 npm run release:prepare
 ```
 
-Apply version/changelog updates:
+Apply version/changelog changes:
 
 ```bash
 bash scripts/release_prepare.sh --apply
 ```
 
-If needed, you can run a partial gate:
+Optional partial gate:
 
 ```bash
 bash scripts/release_gate.sh --skip-doctor --project-id OM --home ./.omnimem_gate
 ```
 
-## Publish
-
-1. Set real repository URLs in `package.json`.
-2. `npm login`
-3. `npm publish --access public`
-
-## User command after publish
+Optional pack dry-run (recommended):
 
 ```bash
-npx -y omnimem
+NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 ```
 
-Optional:
+## 2) Publish
+
+1. Ensure real repository URLs in `package.json`.
+2. Login: `npm login`
+3. Publish: `npm publish --access public`
+
+## 3) Post-publish Verify
 
 ```bash
-npx -y omnimem --host 127.0.0.1 --port 8765
+npm exec -y --package=omnimem --call "omnimem start"
 ```
+
+Optional global install check:
+
+```bash
+npm i -g omnimem
+omnimem start
+```
+
+## 4) Rollback / Mitigation
+
+If a bad version is published:
+
+- prefer `npm deprecate` with clear guidance instead of immediate unpublish
+- publish a fixed patch version quickly
+
+Example deprecate command:
+
+```bash
+npm deprecate omnimem@<bad_version> "Broken release, please use >= <fixed_version>"
+```
+
+Note: `npm unpublish` has strict time/policy limits and may break consumers. Use only when truly necessary.
