@@ -91,7 +91,7 @@ HTML_PAGE = """<!doctype html>
       min-height: 100vh;
     }
 
-    .wrap { max-width: 1120px; margin: 22px auto; padding: 0 16px 46px; }
+    .wrap { max-width: 1240px; margin: 22px auto; padding: 0 16px 54px; }
     .hero {
       padding: 18px;
       border: 1px solid var(--line);
@@ -100,10 +100,15 @@ HTML_PAGE = """<!doctype html>
       box-shadow: var(--shadow);
       backdrop-filter: blur(10px);
     }
-    h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: .2px; }
-    h3 { margin: 0 0 10px; font-size: 14px; letter-spacing: .2px; }
-    .small { font-size: 12px; color: var(--muted); }
+    h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: .2px; line-height: 1.15; }
+    h3 { margin: 0 0 10px; font-size: 15px; letter-spacing: .2px; line-height: 1.25; }
+    .small { font-size: 12px; color: var(--muted); line-height: 1.45; }
     .hero-head { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+    .hero-note { margin-top: 8px; max-width: 760px; }
+    .status-strip { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px; margin-top: 12px; }
+    .status-item { border: 1px solid var(--line); border-radius: var(--r14); background: rgba(255,255,255,.78); padding: 10px 12px; min-height: 68px; }
+    .status-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .55px; }
+    .status-value { margin-top: 6px; font-size: 12px; color: var(--ink); line-height: 1.4; }
 
     .lang {
       border: 1px solid var(--line);
@@ -142,6 +147,7 @@ HTML_PAGE = """<!doctype html>
       box-shadow: var(--shadow2);
     }
     .wide { grid-column: 1 / -1; }
+    .card-lead { margin-top: -2px; margin-bottom: 10px; }
 
 	    label { display:block; font-size: 12px; margin-top: 8px; color: var(--muted); }
 	    input {
@@ -196,12 +202,29 @@ HTML_PAGE = """<!doctype html>
     }
 	    button:hover { transform: translateY(-1px); filter: brightness(1.06); border-color: rgba(14,165,233,.35); }
 	    button:active { transform: translateY(0px); }
+      button.primary { border-color: rgba(14,165,233,.42); background: linear-gradient(180deg, rgba(14,165,233,.30), rgba(14,165,233,.12)); }
 	    button.secondary { border-color: rgba(11,18,32,.12); background: rgba(255,255,255,.76); box-shadow: 0 6px 14px rgba(11,18,32,.06); }
 	    button.danger { border-color: rgba(239,68,68,.30); background: linear-gradient(180deg, rgba(239,68,68,.18), rgba(239,68,68,.06)); }
 	    button:disabled { opacity: .45; cursor: not-allowed; transform: none; filter: none; }
 
     .row-btn { display:flex; gap:10px; flex-wrap:wrap; }
+    .row-btn > button,
+    .row-btn > select,
+    .row-btn > input,
+    .row-btn > label { margin-top: 0; }
+    .action-stack { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
     .section-nav { margin-bottom: 10px; }
+    .gate-summary { margin-top: 8px; }
+    .op-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:10px; margin-top: 10px; }
+    .op-card { border: 1px solid var(--line); border-radius: var(--r14); background: rgba(255,255,255,.72); padding: 10px; }
+    .op-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+    .op-steps { margin-top: 6px; }
+    .op-steps .pill { background: rgba(14,165,233,.08); }
+    .op-mode { margin-top: 10px; }
+    .mode-chip { border: 1px solid var(--line); background: rgba(255,255,255,.76); color: var(--muted); border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+    .mode-chip.active { color: var(--ink); border-color: rgba(14,165,233,.35); background: var(--tab); box-shadow: 0 8px 16px rgba(11,18,32,.06); }
+    .op-advanced { display: none; }
+    body.op-expert .op-advanced { display: block; }
     .section-chip {
       border: 1px solid var(--line);
       background: rgba(255,255,255,.76);
@@ -223,6 +246,8 @@ HTML_PAGE = """<!doctype html>
     body.advanced .advanced-only { display: revert !important; }
 
 	    table { width:100%; border-collapse: collapse; font-size: 13px; }
+      .table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r14); background: rgba(255,255,255,.78); }
+      .table-wrap table { min-width: 720px; }
 	    th, td { padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align: top; }
 	    th { font-size: 12px; color: var(--muted); font-weight: 600; }
 	    thead th { position: sticky; top: 0; background: rgba(255,255,255,.92); backdrop-filter: blur(10px); }
@@ -382,8 +407,22 @@ HTML_PAGE = """<!doctype html>
 	    .mem-card-sub { margin-top: 6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 	    .drop-hot { outline: 2px dashed rgba(14,165,233,.55); outline-offset: 3px; }
 
-	    @media (max-width: 920px) { .grid { grid-template-columns:1fr; } }
-	    @media (max-width: 920px) { .board { grid-template-columns:1fr; } }
+	    @media (max-width: 1024px) {
+        .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+	    @media (max-width: 920px) {
+        .grid { grid-template-columns:1fr; }
+        .board { grid-template-columns:1fr; }
+        .wrap { padding: 0 12px 40px; }
+        h1 { font-size: 24px; }
+      }
+      @media (max-width: 720px) {
+        .status-strip { grid-template-columns: 1fr; }
+        .hero { padding: 14px; }
+        .tab-btn { padding: 7px 10px; }
+        .card { padding: 14px; }
+        .op-grid { grid-template-columns: 1fr; }
+      }
 	  </style>
 </head>
 <body>
@@ -393,6 +432,7 @@ HTML_PAGE = """<!doctype html>
         <div>
           <h1 data-i18n=\"title\">OmniMem WebUI</h1>
 	          <div id=\"subTitle\" class=\"small\" data-i18n=\"subtitle_simple\">Simple mode: Status & Actions / Insights / Memory</div>
+            <div class=\"small hero-note\" data-i18n=\"ui_hero_note\">Human-centered console for memory sync, quality checks, and project workflow management.</div>
         </div>
 	        <div>
 	          <label class=\"small\"><span data-i18n=\"language\">Language</span></label>
@@ -410,10 +450,24 @@ HTML_PAGE = """<!doctype html>
             <span id=\"buildInfo\" class=\"small mono\" style=\"margin-left:10px\"></span>
 	        </div>
       </div>
-	      <div id=\"status\" class=\"small\"></div>
-	      <div id=\"daemonState\" class=\"small\"></div>
-	      <div id=\"daemonMetrics\" class=\"small\"></div>
-	      <div id=\"daemonAdvice\" class=\"small\"></div>
+      <div class=\"status-strip\">
+        <div class=\"status-item\">
+          <div class=\"status-label\">Sync</div>
+          <div id=\"status\" class=\"status-value\"></div>
+        </div>
+        <div class=\"status-item\">
+          <div class=\"status-label\">Daemon</div>
+          <div id=\"daemonState\" class=\"status-value\"></div>
+        </div>
+        <div class=\"status-item\">
+          <div class=\"status-label\">Runtime</div>
+          <div id=\"daemonMetrics\" class=\"status-value\"></div>
+        </div>
+        <div class=\"status-item\">
+          <div class=\"status-label\">Guidance</div>
+          <div id=\"daemonAdvice\" class=\"status-value\"></div>
+        </div>
+      </div>
 		      <div class=\"row-btn advanced-only\" style=\"margin-top:10px\">
 	        <button id=\"btnLiveToggle\" class=\"secondary\" style=\"margin-top:0\">Live: off</button>
 	        <select id=\"liveInterval\" class=\"lang\" style=\"max-width:200px\">
@@ -458,35 +512,43 @@ HTML_PAGE = """<!doctype html>
       <div class=\"grid\">
         <div class=\"card\">
           <h3 data-i18n=\"system_status\">System Status</h3>
+          <div class=\"small card-lead\" data-i18n=\"ui_status_lead\">Current setup health and sync readiness for this workspace.</div>
           <div id=\"initState\" class=\"small\"></div>
           <div id=\"syncHint\" class=\"small\" style=\"margin-top:8px\"></div>
         </div>
         <div class=\"card\">
           <h3 data-i18n=\"actions\">Actions</h3>
-          <div class=\"row-btn\">
-            <button id=\"btnSyncStatus\" data-i18n=\"btn_status\">Check Sync Status</button>
-            <button id=\"btnSyncBootstrap\" data-i18n=\"btn_bootstrap\">Bootstrap Device Sync</button>
-            <button id=\"btnSyncPush\" data-i18n=\"btn_push\">Push</button>
-            <button id=\"btnSyncPull\" data-i18n=\"btn_pull\">Pull</button>
-          </div>
-          <div class=\"row-btn\">
-            <button id=\"btnDaemonOn\" data-i18n=\"btn_daemon_on\">Enable Daemon</button>
-            <button id=\"btnDaemonOff\" data-i18n=\"btn_daemon_off\">Disable Daemon</button>
+          <div class=\"small card-lead\" data-i18n=\"ui_actions_lead\">Run checks first, then perform sync and daemon actions.</div>
+          <div class=\"action-stack\">
+            <div class=\"row-btn\">
+              <button id=\"btnSyncStatus\" class=\"primary\" data-i18n=\"btn_status\">Check Sync Status</button>
+              <button id=\"btnSyncBootstrap\" class=\"secondary\" data-i18n=\"btn_bootstrap\">Bootstrap Device Sync</button>
+            </div>
+            <div class=\"row-btn\">
+              <button id=\"btnSyncPush\" class=\"primary\" data-i18n=\"btn_push\">Push</button>
+              <button id=\"btnSyncPull\" class=\"primary\" data-i18n=\"btn_pull\">Pull</button>
+            </div>
+            <div class=\"row-btn\">
+              <button id=\"btnDaemonOn\" class=\"secondary\" data-i18n=\"btn_daemon_on\">Enable Daemon</button>
+              <button id=\"btnDaemonOff\" class=\"secondary\" data-i18n=\"btn_daemon_off\">Disable Daemon</button>
+            </div>
+            <div class=\"row-btn\">
             <button id=\"btnConflictRecovery\" style=\"display:none\">Conflict Recovery (status -> pull -> push)</button>
+            </div>
           </div>
           <pre id=\"syncOut\" class=\"small\"></pre>
         </div>
         <div class=\"card\">
           <h3>Health Check</h3>
-          <div class=\"small\">Quick runtime diagnostics for storage, daemon and file-descriptor pressure.</div>
+          <div class=\"small card-lead\" data-i18n=\"ui_health_check_hint\">Quick runtime diagnostics for storage, daemon and file-descriptor pressure.</div>
           <div class=\"row-btn\">
-            <button id=\"btnHealthCheck\">Run Health Check</button>
+            <button id=\"btnHealthCheck\" class=\"primary\">Run Health Check</button>
           </div>
           <pre id=\"healthOut\" class=\"small\"></pre>
         </div>
         <div class=\"card\">
           <h3>Getting Started</h3>
-          <div class=\"small\">Guided safe workflow: health check -> maintenance preview -> apply with approval.</div>
+          <div class=\"small card-lead\" data-i18n=\"ui_getting_started_hint\">Guided safe workflow: health check -> maintenance preview -> apply with approval.</div>
           <div class=\"row-btn\">
             <button id=\"btnGuideRun\" class=\"secondary\">Run Guided Check</button>
           </div>
@@ -503,6 +565,23 @@ HTML_PAGE = """<!doctype html>
         <button class=\"section-chip\" data-ins-section=\"operations\" style=\"margin-top:0\">Operations</button>
         <button class=\"section-chip\" data-ins-section=\"signals\" style=\"margin-top:0\">Signals</button>
         <button class=\"section-chip\" data-ins-section=\"all\" style=\"margin-top:0\">All</button>
+      </div>
+      <div class=\"advanced-only muted-box\" style=\"margin-bottom:10px\">
+        <div class=\"small\"><b data-i18n=\"ui_adv_assistant_title\">Advanced Assistant</b></div>
+        <div class=\"small\" data-i18n=\"ui_adv_assistant_hint\" style=\"margin-top:6px\">Choose your goal first, then jump to the relevant section with recommended actions.</div>
+        <div class=\"row-btn\" style=\"margin-top:8px\">
+          <label style=\"margin-top:0\"><span data-i18n=\"ui_adv_goal_label\">Goal</span>
+            <select id=\"advGoal\" class=\"lang\" style=\"max-width:360px\">
+              <option value=\"stabilize\" data-i18n=\"ui_adv_goal_stabilize\">Stabilize sync and runtime</option>
+              <option value=\"quality\" data-i18n=\"ui_adv_goal_quality\">Improve memory quality</option>
+              <option value=\"sessions\" data-i18n=\"ui_adv_goal_sessions\">Clean up active sessions</option>
+              <option value=\"maintenance\" data-i18n=\"ui_adv_goal_maintenance\">Run maintenance safely</option>
+              <option value=\"signals\" data-i18n=\"ui_adv_goal_signals\">Inspect signals and trends</option>
+            </select>
+          </label>
+          <button id=\"btnAdvGuideGo\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_adv_go\">Guide Me</button>
+        </div>
+        <div id=\"advGuideHint\" class=\"small\" style=\"margin-top:8px\"></div>
       </div>
       <div id=\"insSectionSummary\" class=\"advanced-only muted-box small section-summary\"></div>
       <div class=\"grid\">
@@ -647,69 +726,138 @@ HTML_PAGE = """<!doctype html>
 	              </label>
 	            </div>
 	          </div>
-	          <table style=\"margin-top:8px\">
-	            <thead>
-	              <tr>
-	                <th>Session</th>
-	                <th>Last</th>
-	                <th>Turns</th>
-	                <th>Retrieves</th>
-	                <th>Checkpoints</th>
-	                <th>Avg Drift</th>
-	                <th>Switches</th>
-	                <th>Actions</th>
-	              </tr>
-	            </thead>
-	            <tbody id=\"sessionsBody\"></tbody>
-	          </table>
+            <div class=\"table-wrap\" style=\"margin-top:8px\">
+	            <table>
+	              <thead>
+	                <tr>
+	                  <th>Session</th>
+	                  <th>Last</th>
+	                  <th>Turns</th>
+	                  <th>Retrieves</th>
+	                  <th>Checkpoints</th>
+	                  <th>Avg Drift</th>
+	                  <th>Switches</th>
+	                  <th>Actions</th>
+	                </tr>
+	              </thead>
+	              <tbody id=\"sessionsBody\"></tbody>
+	            </table>
+            </div>
 	        </div>
 	        <div class=\"card wide\" data-ins-section=\"operations\">
 	          <h3>Maintenance</h3>
 	          <div class=\"small\">Operational tools to keep the memory model healthy. Use preview first; apply writes a governance event.</div>
-	          <div class=\"row-btn\">
-	            <label style=\"margin-top:0\">days
-	              <input id=\"decayDays\" type=\"number\" min=\"1\" max=\"365\" value=\"14\" style=\"max-width:140px\" />
-	            </label>
-	            <label style=\"margin-top:0\">layers
-	              <input id=\"decayLayers\" value=\"instant,short,long\" style=\"max-width:260px\" />
-	            </label>
-	            <label style=\"margin-top:0\">limit
-	              <input id=\"decayLimit\" type=\"number\" min=\"1\" max=\"2000\" value=\"200\" style=\"max-width:140px\" />
-	            </label>
-	            <button id=\"btnDecayPreview\" class=\"secondary\" style=\"margin-top:0\">Decay Preview</button>
-	            <button id=\"btnDecayApply\" class=\"danger\" style=\"margin-top:0\">Apply Decay</button>
-	            <span id=\"decayHint\" class=\"small\" style=\"align-self:center\"></span>
-	          </div>
-	          <div id=\"decayOut\" class=\"muted-box\" style=\"margin-top:10px\"></div>
-	          <div class=\"divider\"></div>
-	          <div class=\"row-btn\">
-	            <label style=\"margin-top:0\">consolidate limit
-	              <input id=\"consLimit\" type=\"number\" min=\"1\" max=\"500\" value=\"80\" style=\"max-width:140px\" />
-	            </label>
-	            <button id=\"btnConsPreview\" class=\"secondary\" style=\"margin-top:0\">Consolidate Preview</button>
-	            <button id=\"btnConsApply\" class=\"danger\" style=\"margin-top:0\">Apply Consolidate</button>
-	            <span id=\"consHint\" class=\"small\" style=\"align-self:center\"></span>
-	          </div>
-	          <div class=\"row-btn\">
-	            <label style=\"margin-top:0\">compress session
-	              <input id=\"compressSessionId\" placeholder=\"session_id\" style=\"max-width:260px\" />
-	            </label>
-	            <label style=\"margin-top:0\">min items
-	              <input id=\"compressMinItems\" type=\"number\" min=\"2\" max=\"200\" value=\"8\" style=\"max-width:120px\" />
-	            </label>
-	            <button id=\"btnCompressPreview\" class=\"secondary\" style=\"margin-top:0\">Compress Preview</button>
-	            <button id=\"btnCompressApply\" class=\"danger\" style=\"margin-top:0\">Apply Compress</button>
-	            <span id=\"compressHint\" class=\"small\" style=\"align-self:center\"></span>
-	          </div>
+            <div class=\"muted-box\" style=\"margin-top:10px\">
+              <div class=\"small\"><b data-i18n=\"ui_maint_gate_title\">Apply Safety Gate</b></div>
+              <div class=\"small\" data-i18n=\"ui_maint_gate_hint\" style=\"margin-top:4px\">Each Apply action is locked until its matching Preview succeeds with current parameters.</div>
+              <div id=\"maintGateStatus\" class=\"row-btn gate-summary small\" style=\"margin-top:8px\"></div>
+              <div class=\"row-btn\" style=\"margin-top:8px\">
+                <button id=\"btnMaintGateReset\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_maint_gate_reset\">Reset Apply Locks</button>
+              </div>
+            </div>
+            <div class=\"row-btn op-mode\">
+              <span class=\"small\" data-i18n=\"ui_ops_mode_label\">View</span>
+              <button id=\"btnOpsBeginner\" class=\"mode-chip\" style=\"margin-top:0\" data-i18n=\"ui_ops_mode_beginner\">Beginner</button>
+              <button id=\"btnOpsExpert\" class=\"mode-chip\" style=\"margin-top:0\" data-i18n=\"ui_ops_mode_expert\">Expert</button>
+              <label style=\"margin-top:0\"><span data-i18n=\"ui_ops_defaults_profile\">Defaults Profile</span>
+                <select id=\"opsDefaultsProfile\" class=\"lang\" style=\"max-width:180px\">
+                  <option value=\"safe\" data-i18n=\"ui_ops_profile_safe\">Conservative</option>
+                  <option value=\"balanced\" data-i18n=\"ui_ops_profile_balanced\">Balanced</option>
+                  <option value=\"active\" data-i18n=\"ui_ops_profile_active\">Aggressive</option>
+                </select>
+              </label>
+              <button id=\"btnOpsRecommendDefaults\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_ops_recommend_defaults\">Use Recommended Defaults</button>
+              <span id=\"opsModeHint\" class=\"small\" style=\"align-self:center\"></span>
+              <span id=\"opsDefaultsHint\" class=\"small\" style=\"align-self:center\"></span>
+            </div>
+            <div id=\"opsProfileCard\" class=\"muted-box small\" style=\"margin-top:8px\"></div>
+            <div class=\"op-grid\">
+              <div class=\"op-card\">
+                <div class=\"op-title\" data-i18n=\"ui_op_decay_title\">Decay</div>
+                <div class=\"small\" data-i18n=\"ui_op_decay_hint\">Tune confidence/stability decay for aging memories.</div>
+                <div class=\"row-btn op-steps\">
+                  <span class=\"pill\" data-i18n=\"ui_op_step_prepare\">1. Set params</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_preview\">2. Preview</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_apply\">3. Apply</span>
+                </div>
+	              <div class=\"row-btn\" style=\"margin-top:8px\">
+	                <label style=\"margin-top:0\">days
+	                  <input id=\"decayDays\" type=\"number\" min=\"1\" max=\"365\" value=\"14\" style=\"max-width:140px\" />
+	                </label>
+	                <label style=\"margin-top:0\">limit
+	                  <input id=\"decayLimit\" type=\"number\" min=\"1\" max=\"2000\" value=\"200\" style=\"max-width:140px\" />
+	                </label>
+	                <button id=\"btnDecayPreview\" class=\"secondary\" style=\"margin-top:0\">Decay Preview</button>
+	                <button id=\"btnDecayApply\" class=\"danger\" style=\"margin-top:0\" disabled>Apply Decay</button>
+	              </div>
+                <div class=\"row-btn op-advanced\" style=\"margin-top:8px\">
+	                <label style=\"margin-top:0\">layers
+	                  <input id=\"decayLayers\" value=\"instant,short,long\" style=\"max-width:260px\" />
+	                </label>
+                </div>
+                <div id=\"decayHint\" class=\"small\" style=\"margin-top:8px\"></div>
+	              <div id=\"decayOut\" class=\"muted-box\" style=\"margin-top:10px\"></div>
+              </div>
+              <div class=\"op-card\">
+                <div class=\"op-title\" data-i18n=\"ui_op_consolidate_title\">Consolidate</div>
+                <div class=\"small\" data-i18n=\"ui_op_consolidate_hint\">Merge redundant items into cleaner long-form memory.</div>
+                <div class=\"row-btn op-steps\">
+                  <span class=\"pill\" data-i18n=\"ui_op_step_prepare\">1. Set params</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_preview\">2. Preview</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_apply\">3. Apply</span>
+                </div>
+	              <div class=\"row-btn\" style=\"margin-top:8px\">
+	                <label style=\"margin-top:0\">consolidate limit
+	                  <input id=\"consLimit\" type=\"number\" min=\"1\" max=\"500\" value=\"80\" style=\"max-width:140px\" />
+	                </label>
+	                <button id=\"btnConsPreview\" class=\"secondary\" style=\"margin-top:0\">Consolidate Preview</button>
+	                <button id=\"btnConsApply\" class=\"danger\" style=\"margin-top:0\" disabled>Apply Consolidate</button>
+	              </div>
+                <div id=\"consHint\" class=\"small\" style=\"margin-top:8px\"></div>
+              </div>
+              <div class=\"op-card\">
+                <div class=\"op-title\" data-i18n=\"ui_op_compress_title\">Compress Session</div>
+                <div class=\"small\" data-i18n=\"ui_op_compress_hint\">Summarize noisy session trails into compact context memory.</div>
+                <div class=\"row-btn op-steps\">
+                  <span class=\"pill\" data-i18n=\"ui_op_step_prepare\">1. Set params</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_preview\">2. Preview</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_apply\">3. Apply</span>
+                </div>
+	              <div class=\"row-btn\" style=\"margin-top:8px\">
+	                <label style=\"margin-top:0\">compress session
+	                  <input id=\"compressSessionId\" placeholder=\"session_id\" style=\"max-width:260px\" />
+	                </label>
+	                <button id=\"btnCompressPreview\" class=\"secondary\" style=\"margin-top:0\">Compress Preview</button>
+	                <button id=\"btnCompressApply\" class=\"danger\" style=\"margin-top:0\" disabled>Apply Compress</button>
+	              </div>
+                <div class=\"row-btn op-advanced\" style=\"margin-top:8px\">
+	                <label style=\"margin-top:0\">min items
+	                  <input id=\"compressMinItems\" type=\"number\" min=\"2\" max=\"200\" value=\"8\" style=\"max-width:120px\" />
+	                </label>
+                </div>
+                <div id=\"compressHint\" class=\"small\" style=\"margin-top:8px\"></div>
+              </div>
+              <div class=\"op-card\">
+                <div class=\"op-title\" data-i18n=\"ui_op_auto_title\">Auto Maintenance</div>
+                <div class=\"small\" data-i18n=\"ui_op_auto_hint\">Run one combined maintenance pass with risk forecast.</div>
+                <div class=\"row-btn op-steps\">
+                  <span class=\"pill\" data-i18n=\"ui_op_step_prepare\">1. Set params</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_preview\">2. Preview</span>
+                  <span class=\"pill\" data-i18n=\"ui_op_step_apply\">3. Apply</span>
+                </div>
+	              <div class=\"row-btn\" style=\"margin-top:8px\">
+	                <button id=\"btnAutoMaintPreview\" class=\"secondary\" style=\"margin-top:0\">Auto Maintain Preview</button>
+	                <button id=\"btnAutoMaintApply\" class=\"danger\" style=\"margin-top:0\" disabled>Apply Auto Maintain</button>
+	              </div>
+                <div class=\"row-btn op-advanced\" style=\"margin-top:8px\">
+	                <label style=\"margin-top:0\">Ack
+	                  <input id=\"autoMaintAck\" placeholder=\"type APPLY if required\" style=\"max-width:220px\" />
+	                </label>
+                </div>
+                <div id=\"autoMaintHint\" class=\"small\" style=\"margin-top:8px\"></div>
+              </div>
+            </div>
 	          <div id=\"maintOut\" class=\"muted-box\" style=\"margin-top:10px\"></div>
-	          <div class=\"row-btn\">
-	            <button id=\"btnAutoMaintPreview\" class=\"secondary\" style=\"margin-top:0\">Auto Maintain Preview</button>
-	            <button id=\"btnAutoMaintApply\" class=\"danger\" style=\"margin-top:0\">Apply Auto Maintain</button>
-	            <label style=\"margin-top:0\">Ack
-	              <input id=\"autoMaintAck\" placeholder=\"type APPLY if required\" style=\"max-width:220px\" />
-	            </label>
-	            <span id=\"autoMaintHint\" class=\"small\" style=\"align-self:center\"></span>
-	          </div>
             <div id=\"maintForecast\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	          <div id=\"maintStats\" class=\"muted-box\" style=\"margin-top:10px\"></div>
 	        </div>
@@ -747,7 +895,8 @@ HTML_PAGE = """<!doctype html>
 	            <button id=\"btnEventCopy\" class=\"secondary\" style=\"margin-top:0\" disabled>Copy Payload</button>
 	            <span id=\"eventHint\" class=\"small\" style=\"align-self:center\"></span>
 	          </div>
-	          <table style=\"margin-top:8px; table-layout:fixed\">
+            <div class=\"table-wrap\" style=\"margin-top:8px\">
+	          <table style=\"table-layout:fixed\">
 	            <colgroup>
 	              <col style=\"width:160px\" />
 	              <col style=\"width:150px\" />
@@ -768,6 +917,7 @@ HTML_PAGE = """<!doctype html>
 	            </thead>
 	            <tbody id=\"eventsBody\"></tbody>
 	          </table>
+            </div>
 	          <div class=\"divider\"></div>
 		          <div class=\"small\"><b>Event Payload</b></div>
 		          <pre id=\"eventView\" class=\"mono\" style=\"white-space:pre-wrap; margin-top:8px\"></pre>
@@ -780,6 +930,7 @@ HTML_PAGE = """<!doctype html>
       <div class=\"grid\">
         <div class=\"card wide\">
           <h3 data-i18n=\"config_title\">Configuration</h3>
+          <div class=\"small card-lead\" data-i18n=\"ui_config_lead\">Set storage and integration defaults. Save once after edits to apply immediately.</div>
           <form id=\"cfgForm\">
             <div id=\"cfgSectionNav\" class=\"row-btn section-nav\">
               <button class=\"section-chip active\" data-cfg-section=\"core\" type=\"button\" style=\"margin-top:0\">Core</button>
@@ -833,6 +984,16 @@ HTML_PAGE = """<!doctype html>
             <div class=\"divider\"></div>
             </div>
             <div class=\"cfg-block\" data-cfg-section=\"daemon\">
+            <div class=\"muted-box small\" style=\"margin-top:4px; margin-bottom:10px\">
+              <div><b data-i18n=\"ui_daemon_profile_title\">Daemon Profile Presets</b></div>
+              <div data-i18n=\"ui_daemon_profile_hint\" style=\"margin-top:6px\">Pick a profile to prefill daemon and maintenance parameters, then review and save.</div>
+              <div class=\"row-btn\" style=\"margin-top:8px\">
+                <button type=\"button\" id=\"btnDaemonProfileSafe\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_daemon_profile_safe\">Conservative</button>
+                <button type=\"button\" id=\"btnDaemonProfileBalanced\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_daemon_profile_balanced\">Balanced</button>
+                <button type=\"button\" id=\"btnDaemonProfileActive\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_daemon_profile_active\">Aggressive</button>
+              </div>
+              <div id=\"daemonProfileHint\" class=\"small\" style=\"margin-top:6px\"></div>
+            </div>
             <label><span>Daemon Scan Interval (s)</span><input name=\"daemon_scan_interval\" type=\"number\" min=\"1\" max=\"3600\" /></label>
             <label><span>Daemon Pull Interval (s)</span><input name=\"daemon_pull_interval\" type=\"number\" min=\"5\" max=\"86400\" /></label>
             <label><span>Daemon Retry Max Attempts</span><input name=\"daemon_retry_max_attempts\" type=\"number\" min=\"1\" max=\"20\" /></label>
@@ -873,6 +1034,7 @@ HTML_PAGE = """<!doctype html>
       <div class=\"grid\">
         <div class=\"card wide\">
           <h3 data-i18n=\"project_title\">Project Integration</h3>
+          <div class=\"small card-lead\" data-i18n=\"ui_project_lead\">Attach local repositories so OmniMem can enforce project-level memory protocol automatically.</div>
           <label><span data-i18n=\"project_path\">Project Path</span><input id=\"projectPath\" placeholder=\"/path/to/your/project\" /></label>
           <div class=\"row-btn\">
             <button id=\"btnBrowseProject\" data-i18n=\"btn_browse_project\">Browse Directory</button>
@@ -901,25 +1063,28 @@ HTML_PAGE = """<!doctype html>
           <div class=\"row-btn\">
             <button id=\"btnProjectsReload\" data-i18n=\"btn_projects_reload\">Reload Projects</button>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th data-i18n=\"th_project\">Project</th>
-                <th data-i18n=\"project_path\">Project Path</th>
-                <th data-i18n=\"th_updated\">Updated At</th>
-                <th data-i18n=\"th_actions\">Actions</th>
-              </tr>
-            </thead>
-            <tbody id=\"projectsBody\"></tbody>
-          </table>
+          <div class=\"table-wrap\">
+            <table>
+              <thead>
+                <tr>
+                  <th data-i18n=\"th_project\">Project</th>
+                  <th data-i18n=\"project_path\">Project Path</th>
+                  <th data-i18n=\"th_updated\">Updated At</th>
+                  <th data-i18n=\"th_actions\">Actions</th>
+                </tr>
+              </thead>
+              <tbody id=\"projectsBody\"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
 
     <div id=\"memoryTab\" class=\"panel\">
       <div class=\"grid\">
-	        <div class=\"card wide\">
-	          <h3 data-i18n=\"mem_recent\">Recent Memories</h3>
+        <div class=\"card wide\">
+          <h3 data-i18n=\"mem_recent\">Recent Memories</h3>
+          <div class=\"small card-lead\" data-i18n=\"ui_memory_lead\">Search and tune retrieval first, then open records to edit or promote/demote layers.</div>
 	          <div id=\"layerStats\" class=\"small\" style=\"margin:6px 0\"></div>
 	          <label><span data-i18n=\"mem_project_filter\">Project ID Filter</span><input id=\"memProjectId\" placeholder=\"(empty = all projects)\" /></label>
 	          <label>Session ID Filter <input id=\"memSessionId\" placeholder=\"(empty = all sessions)\" /></label>
@@ -1017,19 +1182,21 @@ HTML_PAGE = """<!doctype html>
 		            <button id=\"btnMemOpenBoard\" class=\"secondary\" style=\"margin-top:0\">Layer Board</button>
 		          </div>
 	          <div class=\"small\" data-i18n=\"mem_hint\">Click an ID to open full content</div>
-          <table>
-            <thead>
-              <tr>
-                <th data-i18n=\"th_id\">ID</th>
-                <th data-i18n=\"th_project\">Project</th>
-                <th data-i18n=\"th_layer\">Layer</th>
-                <th data-i18n=\"th_kind\">Kind</th>
-                <th data-i18n=\"th_summary\">Summary</th>
-                <th data-i18n=\"th_updated\">Updated At</th>
-              </tr>
-            </thead>
-            <tbody id=\"memBody\"></tbody>
-          </table>
+          <div class=\"table-wrap\">
+            <table>
+              <thead>
+                <tr>
+                  <th data-i18n=\"th_id\">ID</th>
+                  <th data-i18n=\"th_project\">Project</th>
+                  <th data-i18n=\"th_layer\">Layer</th>
+                  <th data-i18n=\"th_kind\">Kind</th>
+                  <th data-i18n=\"th_summary\">Summary</th>
+                  <th data-i18n=\"th_updated\">Updated At</th>
+                </tr>
+              </thead>
+              <tbody id=\"memBody\"></tbody>
+            </table>
+          </div>
         </div>
         <div class=\"card wide\">
           <h3 data-i18n=\"mem_content\">Memory Content</h3>
@@ -1562,6 +1729,12 @@ HTML_PAGE = """<!doctype html>
         ui_btn_health_check: 'Run Health Check',
         ui_getting_started_title: 'Getting Started',
         ui_getting_started_hint: 'Guided safe workflow: health check -> maintenance preview -> apply with approval.',
+        ui_hero_note: 'Human-centered console for memory sync, quality checks, and project workflow management.',
+        ui_status_lead: 'Current setup health and sync readiness for this workspace.',
+        ui_actions_lead: 'Run checks first, then perform sync and daemon actions.',
+        ui_config_lead: 'Set storage and integration defaults. Save once after edits to apply immediately.',
+        ui_project_lead: 'Attach local repositories so OmniMem can enforce project-level memory protocol automatically.',
+        ui_memory_lead: 'Search and tune retrieval first, then open records to edit or promote/demote layers.',
         ui_btn_guided_check: 'Run Guided Check',
         ui_guide_default: '1) Run Health Check\\n2) Open Insights and preview Auto Maintenance\\n3) Apply only after checking recommendations',
         ui_session_filter: 'Session ID Filter',
@@ -1609,6 +1782,95 @@ HTML_PAGE = """<!doctype html>
         ui_cfg_section_github_summary: 'GitHub: OAuth sign-in, repo selection, and quick setup.',
         ui_cfg_section_daemon_summary: 'Daemon & Maintenance: background sync and maintenance controls.',
         ui_cfg_section_all_summary: 'All configuration sections visible.',
+        ui_adv_assistant_title: 'Advanced Assistant',
+        ui_adv_assistant_hint: 'Choose your goal first, then jump to the relevant section with recommended actions.',
+        ui_adv_goal_label: 'Goal',
+        ui_adv_goal_stabilize: 'Stabilize sync and runtime',
+        ui_adv_goal_quality: 'Improve memory quality',
+        ui_adv_goal_sessions: 'Clean up active sessions',
+        ui_adv_goal_maintenance: 'Run maintenance safely',
+        ui_adv_goal_signals: 'Inspect signals and trends',
+        ui_adv_go: 'Guide Me',
+        ui_adv_hint_stabilize: 'Opened Overview and ran status + health checks.',
+        ui_adv_hint_quality: 'Opened Governance and refreshed quality signals.',
+        ui_adv_hint_sessions: 'Opened Sessions and refreshed session console.',
+        ui_adv_hint_maintenance: 'Opened Operations and generated maintenance preview first.',
+        ui_adv_hint_signals: 'Opened Signals and refreshed insight cards.',
+        ui_daemon_profile_title: 'Daemon Profile Presets',
+        ui_daemon_profile_hint: 'Pick a profile to prefill daemon and maintenance parameters, then review and save.',
+        ui_daemon_profile_safe: 'Conservative',
+        ui_daemon_profile_balanced: 'Balanced',
+        ui_daemon_profile_active: 'Aggressive',
+        ui_daemon_profile_applied: 'Profile applied: {name}. Review values and click Save Configuration.',
+        ui_maint_gate_title: 'Apply Safety Gate',
+        ui_maint_gate_hint: 'Each Apply action is locked until its matching Preview succeeds with current parameters.',
+        ui_maint_gate_reset: 'Reset Apply Locks',
+        ui_maint_gate_locked: '{name}: locked',
+        ui_maint_gate_ready: '{name}: ready ({count})',
+        ui_maint_need_preview: 'Run preview first for {name} with current parameters.',
+        ui_ops_mode_label: 'View',
+        ui_ops_mode_beginner: 'Beginner',
+        ui_ops_mode_expert: 'Expert',
+        ui_ops_mode_hint_beginner: 'Beginner view: focus on safe defaults and core parameters.',
+        ui_ops_mode_hint_expert: 'Expert view: advanced parameters are visible.',
+        ui_ops_defaults_profile: 'Defaults Profile',
+        ui_ops_profile_safe: 'Conservative',
+        ui_ops_profile_balanced: 'Balanced',
+        ui_ops_profile_active: 'Aggressive',
+        ui_ops_profile_safe_hint: 'Lower change pressure, slower cleanup, best for cautious operation.',
+        ui_ops_profile_balanced_hint: 'Balanced change pressure and maintenance throughput.',
+        ui_ops_profile_active_hint: 'Higher cleanup intensity, suitable for noisy/high-volume projects.',
+        ui_ops_profile_card_title: 'Profile Forecast',
+        ui_ops_profile_card_risk: 'Risk',
+        ui_ops_profile_card_scene: 'Best for',
+        ui_ops_profile_card_effect: 'Expected touch pressure',
+        ui_ops_profile_card_recommended: 'Recommended',
+        ui_ops_profile_card_current: 'Current',
+        ui_ops_profile_card_confidence: 'Confidence',
+        ui_ops_profile_apply_recommended: 'Apply Recommended',
+        ui_ops_profile_confirm_sub: 'Apply recommended defaults',
+        ui_ops_profile_confirm_body: 'Apply profile {profile} with these parameter updates?\\n{diff}',
+        ui_ops_profile_preview_title: 'Latest Auto Preview',
+        ui_ops_profile_preview_none: 'No preview has been run in this session yet.',
+        ui_ops_profile_preview_time: 'time',
+        ui_ops_profile_preview_touches: 'touches',
+        ui_ops_profile_reason_nodata: 'No recent maintenance data; conservative default is safer.',
+        ui_ops_profile_reason_idle: 'Recent maintenance activity is very low.',
+        ui_ops_profile_reason_balanced: 'Recent maintenance pressure is moderate.',
+        ui_ops_profile_reason_active: 'Recent maintenance pressure is high.',
+        ui_ops_profile_reason_preview_safe: 'Latest preview suggests low touch pressure.',
+        ui_ops_profile_reason_preview_balanced: 'Latest preview suggests medium touch pressure.',
+        ui_ops_profile_reason_preview_active: 'Latest preview suggests high touch pressure.',
+        ui_ops_conf_preview: 'high (preview-based)',
+        ui_ops_conf_summary: 'medium (summary-based)',
+        ui_ops_conf_nodata: 'low (no data)',
+        ui_ops_risk_low: 'low',
+        ui_ops_risk_mid: 'medium',
+        ui_ops_risk_high: 'high',
+        ui_ops_scene_safe: 'Stable repositories and low daily memory churn.',
+        ui_ops_scene_balanced: 'General daily usage with moderate write/retrieve volume.',
+        ui_ops_scene_active: 'High-churn projects requiring faster cleanup cycles.',
+        ui_ops_effect_safe: '≈ low',
+        ui_ops_effect_balanced: '≈ medium',
+        ui_ops_effect_active: '≈ high',
+        ui_ops_recommend_defaults: 'Use Recommended Defaults',
+        ui_ops_recommend_applied: 'Applied {profile} defaults for maintenance flow.',
+        ui_ops_recommend_preview_started: 'Recommended defaults applied; running Auto Maintenance preview.',
+        ui_op_step_prepare: '1. Set params',
+        ui_op_step_preview: '2. Preview',
+        ui_op_step_apply: '3. Apply',
+        ui_op_decay_title: 'Decay',
+        ui_op_decay_hint: 'Tune confidence/stability decay for aging memories.',
+        ui_op_consolidate_title: 'Consolidate',
+        ui_op_consolidate_hint: 'Merge redundant items into cleaner long-form memory.',
+        ui_op_compress_title: 'Compress Session',
+        ui_op_compress_hint: 'Summarize noisy session trails into compact context memory.',
+        ui_op_auto_title: 'Auto Maintenance',
+        ui_op_auto_hint: 'Run one combined maintenance pass with risk forecast.',
+        ui_word_ready: 'ready',
+        ui_word_locked: 'locked',
+        ui_maint_next_preview: '{name}: run Preview first before Apply.',
+        ui_maint_next_apply: '{name}: ready to apply, estimated impact {count} (preview {time}).',
         ui_github_quick_setup_title: 'GitHub Quick Setup',
         ui_github_assistant_title: 'Migration & Setup Assistant',
         ui_github_assistant_refresh: 'Refresh Setup State',
@@ -1635,6 +1897,38 @@ HTML_PAGE = """<!doctype html>
         ui_github_setup_next_repo: 'Load repo list and select a repository next.',
         ui_github_setup_next_apply: 'Apply GitHub setup to write remote URL and branch.',
         ui_github_setup_next_done: 'GitHub setup is complete.',
+        tip_btn_toggle_advanced: 'Switch between simple mode (daily operations) and advanced console.',
+        tip_tab_status: 'Daily operations panel: sync, daemon and quick health actions.',
+        tip_tab_insights: 'Review memory distribution, quality and governance recommendations.',
+        tip_tab_config: 'Set storage paths, Git remote and integration defaults.',
+        tip_tab_project: 'Attach or detach local projects and manage injected agent rules.',
+        tip_tab_memory: 'Search, inspect and edit memory records.',
+        tip_btn_status: 'Check Git sync status and auth readiness without mutating data.',
+        tip_btn_bootstrap: 'Initialize device sync and create required git baseline files.',
+        tip_btn_push: 'Push local memory updates to configured remote branch.',
+        tip_btn_pull: 'Pull remote updates into local memory store.',
+        tip_btn_daemon_on: 'Enable background daemon for periodic sync and maintenance.',
+        tip_btn_daemon_off: 'Disable background daemon and stop periodic sync jobs.',
+        tip_btn_reload_insights: 'Refresh all insight cards and charts with latest data.',
+        tip_btn_mem_reload: 'Reload memory list using current filters and ranking settings.',
+        tip_field_project_filter: 'Limit results to one project ID; leave empty for all projects.',
+        tip_field_mem_query: 'Natural-language query used for find/retrieve routes.',
+        tip_field_mem_session: 'Limit recall to one session ID when you want thread-local context.',
+        tip_field_project_path: 'Absolute path of the project to attach.',
+        tip_field_project_id: 'Stable ID used to group and filter memories for this project.',
+        tip_btn_browse_project: 'Open directory browser and pick a local project folder.',
+        tip_btn_use_cwd: 'Set project path to the WebUI server current working directory.',
+        tip_btn_project_attach: 'Create .omnimem metadata and inject managed memory protocol blocks.',
+        tip_btn_project_detach: 'Remove managed project attachment metadata for this path.',
+        tip_btn_projects_reload: 'Refresh local attached project table from disk.',
+        tip_btn_browser_up: 'Move to parent folder in directory browser.',
+        tip_btn_browser_select: 'Use current browser path as project path.',
+        tip_btn_github_signin: 'Start GitHub OAuth device flow in your browser.',
+        tip_btn_github_complete_oauth: 'Poll broker/device flow and store auth token on success.',
+        tip_btn_github_check_auth: 'Verify whether current GitHub auth is valid.',
+        tip_btn_github_refresh_repos: 'Fetch repository candidates for current account and filter.',
+        tip_btn_github_use_selected: 'Copy selected repository into config form fields.',
+        tip_btn_github_apply_setup: 'Write remote URL/branch and apply GitHub integration settings.',
       },
       zh: {
         tip_auto_prefix: '说明：',
@@ -1654,6 +1948,12 @@ HTML_PAGE = """<!doctype html>
         ui_btn_health_check: '运行健康检查',
         ui_getting_started_title: '快速开始',
         ui_getting_started_hint: '安全引导流程：健康检查 -> 维护预览 -> 确认后应用。',
+        ui_hero_note: '面向人类使用的控制台：用于记忆同步、质量检查和项目工作流管理。',
+        ui_status_lead: '展示当前工作区的配置健康状态与同步就绪情况。',
+        ui_actions_lead: '建议先执行检查，再进行同步与守护进程操作。',
+        ui_config_lead: '设置存储与集成默认项。修改后保存即可立即生效。',
+        ui_project_lead: '挂载本地仓库后，OmniMem 可自动执行项目级记忆协议规则。',
+        ui_memory_lead: '先检索并调优召回，再打开记录进行编辑或层级升降。',
         ui_btn_guided_check: '运行引导检查',
         ui_guide_default: '1) 运行健康检查\\n2) 打开洞察并预览自动维护\\n3) 检查建议后再应用',
         ui_session_filter: '会话 ID 过滤',
@@ -1701,6 +2001,95 @@ HTML_PAGE = """<!doctype html>
         ui_cfg_section_github_summary: 'GitHub：OAuth 登录、仓库选择与快速配置。',
         ui_cfg_section_daemon_summary: '守护与维护：后台同步和维护控制。',
         ui_cfg_section_all_summary: '显示全部配置区块。',
+        ui_adv_assistant_title: '高级助手',
+        ui_adv_assistant_hint: '先选择目标，再跳转到对应区块并执行推荐动作。',
+        ui_adv_goal_label: '目标',
+        ui_adv_goal_stabilize: '稳定同步与运行状态',
+        ui_adv_goal_quality: '提升记忆质量',
+        ui_adv_goal_sessions: '清理活跃会话',
+        ui_adv_goal_maintenance: '安全执行维护',
+        ui_adv_goal_signals: '检查信号与趋势',
+        ui_adv_go: '引导执行',
+        ui_adv_hint_stabilize: '已切到总览，并执行状态与健康检查。',
+        ui_adv_hint_quality: '已切到治理，并刷新质量信号。',
+        ui_adv_hint_sessions: '已切到会话，并刷新会话控制台。',
+        ui_adv_hint_maintenance: '已切到操作区，并先生成维护预览。',
+        ui_adv_hint_signals: '已切到信号区，并刷新洞察卡片。',
+        ui_daemon_profile_title: '守护进程参数模板',
+        ui_daemon_profile_hint: '选择模板自动填充守护与维护参数，然后复核并保存。',
+        ui_daemon_profile_safe: '保守',
+        ui_daemon_profile_balanced: '平衡',
+        ui_daemon_profile_active: '积极',
+        ui_daemon_profile_applied: '已应用模板：{name}。请复核参数后点击保存配置。',
+        ui_maint_gate_title: '应用安全门禁',
+        ui_maint_gate_hint: '每个 Apply 都需要先使用当前参数成功执行对应 Preview 才会解锁。',
+        ui_maint_gate_reset: '重置应用锁',
+        ui_maint_gate_locked: '{name}：已锁定',
+        ui_maint_gate_ready: '{name}：已就绪（影响 {count}）',
+        ui_maint_need_preview: '请先对 {name} 用当前参数执行 Preview。',
+        ui_ops_mode_label: '视图',
+        ui_ops_mode_beginner: '新手',
+        ui_ops_mode_expert: '专家',
+        ui_ops_mode_hint_beginner: '新手视图：优先展示安全默认与核心参数。',
+        ui_ops_mode_hint_expert: '专家视图：显示高级参数。',
+        ui_ops_defaults_profile: '默认策略',
+        ui_ops_profile_safe: '保守',
+        ui_ops_profile_balanced: '平衡',
+        ui_ops_profile_active: '积极',
+        ui_ops_profile_safe_hint: '变更压力更低，清理更稳健，适合谨慎运行。',
+        ui_ops_profile_balanced_hint: '在变更压力和维护吞吐之间保持平衡。',
+        ui_ops_profile_active_hint: '清理强度更高，适合噪声/体量较高的项目。',
+        ui_ops_profile_card_title: '策略预估',
+        ui_ops_profile_card_risk: '风险',
+        ui_ops_profile_card_scene: '适用场景',
+        ui_ops_profile_card_effect: '预计变更强度',
+        ui_ops_profile_card_recommended: '推荐',
+        ui_ops_profile_card_current: '当前',
+        ui_ops_profile_card_confidence: '可信度',
+        ui_ops_profile_apply_recommended: '应用推荐档',
+        ui_ops_profile_confirm_sub: '应用推荐默认值',
+        ui_ops_profile_confirm_body: '将应用 {profile} 档并更新以下参数：\\n{diff}',
+        ui_ops_profile_preview_title: '最近一次自动预览',
+        ui_ops_profile_preview_none: '当前会话尚未执行预览。',
+        ui_ops_profile_preview_time: '时间',
+        ui_ops_profile_preview_touches: '影响条数',
+        ui_ops_profile_reason_nodata: '近期缺少维护数据，优先建议保守策略。',
+        ui_ops_profile_reason_idle: '近期维护活动较低。',
+        ui_ops_profile_reason_balanced: '近期维护压力中等。',
+        ui_ops_profile_reason_active: '近期维护压力较高。',
+        ui_ops_profile_reason_preview_safe: '最近一次预览显示变更压力较低。',
+        ui_ops_profile_reason_preview_balanced: '最近一次预览显示变更压力中等。',
+        ui_ops_profile_reason_preview_active: '最近一次预览显示变更压力较高。',
+        ui_ops_conf_preview: '高（基于预览）',
+        ui_ops_conf_summary: '中（基于汇总）',
+        ui_ops_conf_nodata: '低（无数据）',
+        ui_ops_risk_low: '低',
+        ui_ops_risk_mid: '中',
+        ui_ops_risk_high: '高',
+        ui_ops_scene_safe: '仓库稳定、日常记忆变更较少。',
+        ui_ops_scene_balanced: '常规日常使用，写入/检索量中等。',
+        ui_ops_scene_active: '高频变更项目，需要更快清理节奏。',
+        ui_ops_effect_safe: '约低',
+        ui_ops_effect_balanced: '约中',
+        ui_ops_effect_active: '约高',
+        ui_ops_recommend_defaults: '使用推荐默认值',
+        ui_ops_recommend_applied: '已应用 {profile} 默认策略。',
+        ui_ops_recommend_preview_started: '已应用推荐参数，正在自动执行 Auto Maintenance 预览。',
+        ui_op_step_prepare: '1. 设置参数',
+        ui_op_step_preview: '2. 预览影响',
+        ui_op_step_apply: '3. 执行应用',
+        ui_op_decay_title: '衰减（Decay）',
+        ui_op_decay_hint: '对老化记忆的置信度/稳定性执行衰减调节。',
+        ui_op_consolidate_title: '整合（Consolidate）',
+        ui_op_consolidate_hint: '将冗余记忆整合为更干净的长时记忆。',
+        ui_op_compress_title: '会话压缩（Compress）',
+        ui_op_compress_hint: '把噪声较高的会话轨迹压缩为紧凑上下文记忆。',
+        ui_op_auto_title: '自动维护（Auto）',
+        ui_op_auto_hint: '执行一次组合式维护并给出风险预测。',
+        ui_word_ready: '已就绪',
+        ui_word_locked: '已锁定',
+        ui_maint_next_preview: '{name}：请先执行 Preview 后再 Apply。',
+        ui_maint_next_apply: '{name}：可执行 Apply，预计影响 {count}（预览时间 {time}）。',
         ui_github_quick_setup_title: 'GitHub 快速配置',
         ui_github_assistant_title: '迁移与配置助手',
         ui_github_assistant_refresh: '刷新配置状态',
@@ -1727,6 +2116,38 @@ HTML_PAGE = """<!doctype html>
         ui_github_setup_next_repo: '下一步加载仓库列表并选择目标仓库。',
         ui_github_setup_next_apply: '下一步应用 GitHub 配置写入远端与分支。',
         ui_github_setup_next_done: 'GitHub 配置已完成。',
+        tip_btn_toggle_advanced: '在简洁模式（日常操作）与高级控制台之间切换。',
+        tip_tab_status: '日常操作面板：同步、守护进程和快速健康检查。',
+        tip_tab_insights: '查看记忆分布、质量与治理建议。',
+        tip_tab_config: '配置存储路径、Git 远端和集成默认项。',
+        tip_tab_project: '挂载/解绑本地项目，并管理注入的代理规则。',
+        tip_tab_memory: '检索、查看和编辑记忆记录。',
+        tip_btn_status: '只检查 Git 同步状态和认证可用性，不改动数据。',
+        tip_btn_bootstrap: '初始化设备同步并创建所需 Git 基线文件。',
+        tip_btn_push: '将本地记忆更新推送到配置的远端分支。',
+        tip_btn_pull: '将远端更新拉取到本地记忆存储。',
+        tip_btn_daemon_on: '开启后台守护进程，定期执行同步与维护。',
+        tip_btn_daemon_off: '关闭后台守护进程并停止定期同步任务。',
+        tip_btn_reload_insights: '用最新数据刷新全部洞察卡片和图表。',
+        tip_btn_mem_reload: '按当前过滤和排序策略重新加载记忆列表。',
+        tip_field_project_filter: '按单个项目 ID 过滤；留空表示全部项目。',
+        tip_field_mem_query: '用于 find/retrieve 路由的自然语言查询。',
+        tip_field_mem_session: '按会话 ID 限定召回范围，便于线程内排查。',
+        tip_field_project_path: '要挂载项目的绝对路径。',
+        tip_field_project_id: '该项目对应的稳定 ID，用于记忆分组和过滤。',
+        tip_btn_browse_project: '打开目录浏览器并选择本地项目文件夹。',
+        tip_btn_use_cwd: '把项目路径设置为 WebUI 服务端当前工作目录。',
+        tip_btn_project_attach: '创建 .omnimem 元数据并注入托管记忆协议块。',
+        tip_btn_project_detach: '移除该路径下的托管项目挂载元数据。',
+        tip_btn_projects_reload: '从磁盘刷新本地已挂载项目列表。',
+        tip_btn_browser_up: '在目录浏览器中移动到上级目录。',
+        tip_btn_browser_select: '将当前浏览路径设置为项目路径。',
+        tip_btn_github_signin: '在浏览器中启动 GitHub OAuth 设备登录流程。',
+        tip_btn_github_complete_oauth: '轮询设备流程并在成功后保存认证令牌。',
+        tip_btn_github_check_auth: '检查当前 GitHub 认证是否有效。',
+        tip_btn_github_refresh_repos: '拉取当前账号可选仓库并应用过滤。',
+        tip_btn_github_use_selected: '把已选仓库写入配置表单字段。',
+        tip_btn_github_apply_setup: '写入远端 URL/分支并应用 GitHub 集成配置。',
       },
       ja: {
         tip_auto_prefix: 'ヒント: ',
@@ -2104,6 +2525,12 @@ HTML_PAGE = """<!doctype html>
     function safeSetAdvanced(v) {
       try { localStorage.setItem('omnimem.advanced', v ? '1' : '0'); } catch (_) {}
     }
+    function safeGetOpsExpert() {
+      try { return (localStorage.getItem('omnimem.ops_expert') || '0') === '1'; } catch (_) { return false; }
+    }
+    function safeSetOpsExpert(v) {
+      try { localStorage.setItem('omnimem.ops_expert', v ? '1' : '0'); } catch (_) {}
+    }
     function safeGetToken() {
       try { return localStorage.getItem('omnimem.token') || ''; } catch (_) { return ''; }
     }
@@ -2302,6 +2729,7 @@ HTML_PAGE = """<!doctype html>
 		    let currentLang = safeGetLang();
 		    if (!I18N[currentLang]) currentLang = 'en';
         let advancedOn = safeGetAdvanced();
+        let opsExpert = safeGetOpsExpert();
 		    let daemonCache = { running:false, enabled:false, initialized:false };
 		    let browserPath = '';
 	    let liveOn = false;
@@ -2318,14 +2746,22 @@ HTML_PAGE = """<!doctype html>
 		    let selectedEventIdx = -1;
 	    let eventsSort = { key: 'event_time', dir: 'desc' };
 	    let lastEventsCtx = { project_id:'', session_id:'', event_type:'' };
-	    let governanceRecommended = null;
-	    let pendingWsImport = null;
-	    let pendingWsSource = '';
+      let governanceRecommended = null;
+      let pendingWsImport = null;
+      let pendingWsSource = '';
       let insightsSection = 'overview';
       let configSection = 'core';
       let dangerResolve = null;
       let githubSetupPlan = null;
       let githubGuidePrompted = false;
+      let maintenanceSummaryCache = null;
+      let opsPreviewCache = null;
+      let maintGate = {
+        decay: { ready: false, sig: '', impact: 0, preview_at: '' },
+        consolidate: { ready: false, sig: '', impact: 0, preview_at: '' },
+        compress: { ready: false, sig: '', impact: 0, preview_at: '' },
+        auto: { ready: false, sig: '', impact: 0, preview_at: '' },
+      };
 
     function t(key) {
       const dict = I18N[currentLang] || I18N.en;
@@ -2364,6 +2800,134 @@ HTML_PAGE = """<!doctype html>
     function setTextById(id, key) {
       const el = document.getElementById(id);
       if (el) el.textContent = t(key);
+    }
+
+    function maintOpLabel(op) {
+      const map = {
+        decay: 'Decay',
+        consolidate: 'Consolidate',
+        compress: 'Compress',
+        auto: 'Auto',
+      };
+      return map[String(op || '')] || String(op || '');
+    }
+
+    function estimateImpactCount(op, d) {
+      if (!d || typeof d !== 'object') return 0;
+      const opKey = String(op || '');
+      if (opKey === 'decay') return Number(d.count || (Array.isArray(d.items) ? d.items.length : 0) || 0);
+      if (opKey === 'consolidate') {
+        return Number(
+          d.count || d.consolidated || d.updated || d.merged_count ||
+          (Array.isArray(d.items) ? d.items.length : 0) || 0
+        );
+      }
+      if (opKey === 'compress') {
+        if (Number.isFinite(Number(d.count))) return Number(d.count);
+        if (d.compressed || d.summary_preview) return 1;
+        return 0;
+      }
+      if (opKey === 'auto') {
+        const ex = d.forecast && d.forecast.expected ? d.forecast.expected : {};
+        return Number(ex.total_touches || ((Number(ex.decay || 0) + Number(ex.promote || 0) + Number(ex.demote || 0) + Number(ex.compress || 0))) || 0);
+      }
+      return Number(d.count || 0);
+    }
+
+    function currentMaintSig(op) {
+      const opKey = String(op || '');
+      if (opKey === 'decay') return JSON.stringify(readDecayOpts());
+      if (opKey === 'consolidate') return JSON.stringify(readConsolidateOpts());
+      if (opKey === 'compress') return JSON.stringify(readCompressOpts());
+      if (opKey === 'auto') {
+        const pid = (document.getElementById('insProjectId')?.value || '').trim();
+        const sid = (document.getElementById('insSessionId')?.value || '').trim();
+        return JSON.stringify({ project_id: pid, session_id: sid });
+      }
+      return '';
+    }
+
+    function renderMaintGateStatus() {
+      const el = document.getElementById('maintGateStatus');
+      if (!el) return;
+      const pairs = [
+        ['decay', 'btnDecayApply'],
+        ['consolidate', 'btnConsApply'],
+        ['compress', 'btnCompressApply'],
+        ['auto', 'btnAutoMaintApply'],
+      ];
+      const html = pairs.map(([op, btnId]) => {
+        const st = maintGate[op] || { ready: false, impact: 0 };
+        const btn = document.getElementById(btnId);
+        if (btn) btn.disabled = !st.ready;
+        const name = maintOpLabel(op);
+        if (st.ready) {
+          return `<span class="pill"><b>${escHtml(tf('ui_maint_gate_ready', { name, count: st.impact || 0 }))}</b><span class="ok">${escHtml(t('ui_word_ready'))}</span></span>`;
+        }
+        return `<span class="pill"><b>${escHtml(tf('ui_maint_gate_locked', { name }))}</b><span class="warn">${escHtml(t('ui_word_locked'))}</span></span>`;
+      }).join('');
+      el.innerHTML = html;
+      const hintMap = {
+        decay: 'decayHint',
+        consolidate: 'consHint',
+        compress: 'compressHint',
+        auto: 'autoMaintHint',
+      };
+      Object.entries(hintMap).forEach(([op, hintId]) => {
+        const st = maintGate[op] || { ready: false, impact: 0, preview_at: '' };
+        const hintEl = document.getElementById(hintId);
+        if (!hintEl) return;
+        const name = maintOpLabel(op);
+        if (!st.ready) {
+          hintEl.textContent = tf('ui_maint_next_preview', { name });
+          return;
+        }
+        let ts = '-';
+        try {
+          if (st.preview_at) {
+            ts = new Date(st.preview_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          }
+        } catch (_) {}
+        hintEl.textContent = tf('ui_maint_next_apply', { name, count: st.impact || 0, time: ts });
+      });
+    }
+
+    function setMaintGateReady(op, d) {
+      const opKey = String(op || '');
+      maintGate[opKey] = {
+        ready: true,
+        sig: currentMaintSig(opKey),
+        impact: estimateImpactCount(opKey, d),
+        preview_at: new Date().toISOString(),
+      };
+      renderMaintGateStatus();
+    }
+
+    function lockMaintGate(op) {
+      if (op) {
+        const opKey = String(op);
+        maintGate[opKey] = { ready: false, sig: '', impact: 0, preview_at: '' };
+      } else {
+        maintGate = {
+          decay: { ready: false, sig: '', impact: 0, preview_at: '' },
+          consolidate: { ready: false, sig: '', impact: 0, preview_at: '' },
+          compress: { ready: false, sig: '', impact: 0, preview_at: '' },
+          auto: { ready: false, sig: '', impact: 0, preview_at: '' },
+        };
+      }
+      renderMaintGateStatus();
+    }
+
+    function ensureMaintGateReady(op) {
+      const opKey = String(op || '');
+      const st = maintGate[opKey] || { ready: false, sig: '' };
+      const sig = currentMaintSig(opKey);
+      if (!st.ready || st.sig !== sig) {
+        lockMaintGate(opKey);
+        toast('Maintenance', tf('ui_maint_need_preview', { name: maintOpLabel(opKey) }), false);
+        return false;
+      }
+      return true;
     }
 
     function setPlaceholderById(id, key) {
@@ -2420,6 +2984,108 @@ HTML_PAGE = """<!doctype html>
         block.style.display = (next === 'all' || s === next) ? '' : 'none';
       });
       renderSectionSummaries();
+    }
+
+    function clickIfEnabled(id) {
+      const el = document.getElementById(id);
+      if (el && !el.disabled) el.click();
+    }
+
+    function applyAdvancedGuide() {
+      const sel = document.getElementById('advGoal');
+      const hint = document.getElementById('advGuideHint');
+      const goal = String(sel?.value || 'stabilize');
+      let hintKey = 'ui_adv_hint_stabilize';
+      if (goal === 'stabilize') {
+        setActiveTab('statusTab');
+        clickIfEnabled('btnSyncStatus');
+        clickIfEnabled('btnHealthCheck');
+      } else if (goal === 'quality') {
+        setActiveTab('insightsTab');
+        setInsightsSection('governance');
+        clickIfEnabled('btnQualityRefresh');
+        hintKey = 'ui_adv_hint_quality';
+      } else if (goal === 'sessions') {
+        setActiveTab('insightsTab');
+        setInsightsSection('sessions');
+        clickIfEnabled('btnSessionsReload');
+        hintKey = 'ui_adv_hint_sessions';
+      } else if (goal === 'maintenance') {
+        setActiveTab('insightsTab');
+        setInsightsSection('operations');
+        clickIfEnabled('btnAutoMaintPreview');
+        hintKey = 'ui_adv_hint_maintenance';
+      } else if (goal === 'signals') {
+        setActiveTab('insightsTab');
+        setInsightsSection('signals');
+        clickIfEnabled('btnInsightsReload');
+        hintKey = 'ui_adv_hint_signals';
+      }
+      if (hint) hint.textContent = t(hintKey);
+    }
+
+    function setCfgValue(name, value) {
+      const el = document.querySelector(`#cfgForm [name="${name}"]`);
+      if (!el) return;
+      el.value = String(value);
+      try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    }
+
+    function applyDaemonProfile(profile) {
+      const key = String(profile || 'balanced');
+      const profiles = {
+        safe: {
+          daemon_scan_interval: 180,
+          daemon_pull_interval: 1200,
+          daemon_retry_max_attempts: 3,
+          daemon_retry_initial_backoff: 3,
+          daemon_retry_max_backoff: 30,
+          daemon_maintenance_enabled: 'true',
+          daemon_maintenance_interval: 21600,
+          daemon_maintenance_decay_days: 21,
+          daemon_maintenance_decay_limit: 120,
+          daemon_maintenance_consolidate_limit: 40,
+          daemon_maintenance_compress_sessions: 2,
+          daemon_maintenance_compress_min_items: 12,
+          webui_approval_required: 'true',
+        },
+        balanced: {
+          daemon_scan_interval: 90,
+          daemon_pull_interval: 600,
+          daemon_retry_max_attempts: 4,
+          daemon_retry_initial_backoff: 2,
+          daemon_retry_max_backoff: 45,
+          daemon_maintenance_enabled: 'true',
+          daemon_maintenance_interval: 14400,
+          daemon_maintenance_decay_days: 14,
+          daemon_maintenance_decay_limit: 180,
+          daemon_maintenance_consolidate_limit: 80,
+          daemon_maintenance_compress_sessions: 4,
+          daemon_maintenance_compress_min_items: 8,
+          webui_approval_required: 'true',
+        },
+        active: {
+          daemon_scan_interval: 45,
+          daemon_pull_interval: 300,
+          daemon_retry_max_attempts: 5,
+          daemon_retry_initial_backoff: 2,
+          daemon_retry_max_backoff: 60,
+          daemon_maintenance_enabled: 'true',
+          daemon_maintenance_interval: 7200,
+          daemon_maintenance_decay_days: 10,
+          daemon_maintenance_decay_limit: 260,
+          daemon_maintenance_consolidate_limit: 120,
+          daemon_maintenance_compress_sessions: 6,
+          daemon_maintenance_compress_min_items: 6,
+          webui_approval_required: 'true',
+        }
+      };
+      const plan = profiles[key] || profiles.balanced;
+      Object.keys(plan).forEach(name => setCfgValue(name, plan[name]));
+      const hint = document.getElementById('daemonProfileHint');
+      const nameKey = key === 'safe' ? 'ui_daemon_profile_safe' : (key === 'active' ? 'ui_daemon_profile_active' : 'ui_daemon_profile_balanced');
+      if (hint) hint.textContent = tf('ui_daemon_profile_applied', { name: t(nameKey) });
+      setConfigSection('daemon');
     }
 
     function setLabelPrefixForInput(inputId, key) {
@@ -2558,47 +3224,64 @@ HTML_PAGE = """<!doctype html>
     }
 
     function applyAutoTips() {
-      const prefix = t('tip_auto_prefix');
       const tipKeyById = {
-        btnLiveToggle: 'ui_live_on',
-        scopeMode: 'ui_scope_auto',
-        worksetSelect: 'ui_workset_none',
-        shareMode: 'ui_share_full',
-        btnHealthCheck: 'ui_btn_health_check',
-        btnGuideRun: 'ui_btn_guided_check',
-        btnBoardSelectToggle: 'ui_select_off',
-        btnBoardPromote: 'ui_btn_promote_long',
-        btnBoardDemote: 'ui_btn_demote_short',
-        btnBoardArchive: 'ui_btn_archive',
-        btnPromote: 'ui_btn_promote_long',
-        btnDemote: 'ui_btn_demote_short',
-        btnArchive: 'ui_btn_archive',
+        btnToggleAdvanced: 'tip_btn_toggle_advanced',
+        btnSyncStatus: 'tip_btn_status',
+        btnSyncBootstrap: 'tip_btn_bootstrap',
+        btnSyncPush: 'tip_btn_push',
+        btnSyncPull: 'tip_btn_pull',
+        btnDaemonOn: 'tip_btn_daemon_on',
+        btnDaemonOff: 'tip_btn_daemon_off',
+        btnInsightsReload: 'tip_btn_reload_insights',
+        btnMemReload: 'tip_btn_mem_reload',
+        insProjectId: 'tip_field_project_filter',
+        memProjectId: 'tip_field_project_filter',
+        memQuery: 'tip_field_mem_query',
+        memSessionId: 'tip_field_mem_session',
+        projectPath: 'tip_field_project_path',
+        projectId: 'tip_field_project_id',
+        btnBrowseProject: 'tip_btn_browse_project',
+        btnUseCwd: 'tip_btn_use_cwd',
+        btnProjectAttach: 'tip_btn_project_attach',
+        btnProjectDetach: 'tip_btn_project_detach',
+        btnProjectsReload: 'tip_btn_projects_reload',
+        btnBrowserUp: 'tip_btn_browser_up',
+        btnBrowserSelect: 'tip_btn_browser_select',
+        btnGithubAuthStart: 'tip_btn_github_signin',
+        btnGithubAuthPoll: 'tip_btn_github_complete_oauth',
+        btnGithubStatus: 'tip_btn_github_check_auth',
+        btnGithubRepos: 'tip_btn_github_refresh_repos',
+        btnGithubUseSelected: 'tip_btn_github_use_selected',
+        btnGithubQuickSetup: 'tip_btn_github_apply_setup',
       };
+      const tipKeyByI18n = {
+        tab_status: 'tip_tab_status',
+        tab_insights: 'tip_tab_insights',
+        tab_config: 'tip_tab_config',
+        tab_project: 'tip_tab_project',
+        tab_memory: 'tip_tab_memory',
+      };
+
       document.querySelectorAll('button, h3, label span, input, select, textarea, th, .tab-btn').forEach(el => {
-        const id = String(el.id || '');
-        const k = tipKeyById[id];
-        if (k) {
-          el.setAttribute('title', t(k));
-          return;
-        }
         const dk = el.getAttribute('data-i18n-title');
         if (dk) {
-          const tv = hasLocaleKey(dk) ? t(dk) : String(el.getAttribute('title') || '').trim();
-          if (tv) el.setAttribute('title', tv);
+          const tv = t(dk);
+          if (tv && tv !== dk) el.setAttribute('title', tv);
+          else el.removeAttribute('title');
           return;
         }
-        const di = el.getAttribute('data-i18n');
-        let text = '';
-        if (di) {
-          if (hasLocaleKey(di)) {
-            text = t(di);
-          } else {
-            text = l(String((el.getAttribute('placeholder') || el.textContent || '')).trim());
-          }
-        } else {
-          text = l(String((el.getAttribute('placeholder') || el.textContent || '')).trim());
+
+        const id = String(el.id || '');
+        const di = String(el.getAttribute('data-i18n') || '').trim();
+        const tipKey = tipKeyById[id] || tipKeyByI18n[di] || '';
+        if (tipKey) {
+          const tv = t(tipKey);
+          if (tv && tv !== tipKey) el.setAttribute('title', tv);
+          else el.removeAttribute('title');
+          return;
         }
-        if (text) el.setAttribute('title', prefix + text.replace(/\\s+/g, ' ').trim());
+
+        el.removeAttribute('title');
       });
     }
 
@@ -2614,6 +3297,166 @@ HTML_PAGE = """<!doctype html>
       }
       setInsightsSection(insightsSection);
       setConfigSection(configSection);
+    }
+
+    function renderOpsMode() {
+      document.body.classList.toggle('op-expert', !!opsExpert);
+      const bBegin = document.getElementById('btnOpsBeginner');
+      const bExpert = document.getElementById('btnOpsExpert');
+      if (bBegin) bBegin.classList.toggle('active', !opsExpert);
+      if (bExpert) bExpert.classList.toggle('active', !!opsExpert);
+      const hint = document.getElementById('opsModeHint');
+      if (hint) hint.textContent = t(opsExpert ? 'ui_ops_mode_hint_expert' : 'ui_ops_mode_hint_beginner');
+      renderOpsDefaultsProfileHint();
+    }
+
+    function setInputValue(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = String(value);
+      try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    }
+
+    function getOpsDefaultsProfile() {
+      return String(document.getElementById('opsDefaultsProfile')?.value || 'safe').trim() || 'safe';
+    }
+
+    function profileLabelByKey(key) {
+      if (key === 'active') return t('ui_ops_profile_active');
+      if (key === 'balanced') return t('ui_ops_profile_balanced');
+      return t('ui_ops_profile_safe');
+    }
+
+    function recommendOpsProfile() {
+      const pv = opsPreviewCache && typeof opsPreviewCache === 'object' ? opsPreviewCache : null;
+      if (pv) {
+        const touches = Number(pv.touches || 0);
+        const risk = String(pv.risk || '').toLowerCase();
+        if (risk === 'high' || touches > 220) return { key: 'active', reasonKey: 'ui_ops_profile_reason_preview_active', confidenceKey: 'ui_ops_conf_preview' };
+        if (risk === 'warn' || touches > 80) return { key: 'balanced', reasonKey: 'ui_ops_profile_reason_preview_balanced', confidenceKey: 'ui_ops_conf_preview' };
+        return { key: 'safe', reasonKey: 'ui_ops_profile_reason_preview_safe', confidenceKey: 'ui_ops_conf_preview' };
+      }
+      const data = maintenanceSummaryCache && typeof maintenanceSummaryCache === 'object' ? maintenanceSummaryCache : null;
+      const ac = data && data.auto_maintenance && typeof data.auto_maintenance === 'object' ? data.auto_maintenance : {};
+      const runs = Number(ac.runs || 0);
+      const decay = Number(ac.decay_total || 0);
+      const promoted = Number(ac.promoted_total || 0);
+      const demoted = Number(ac.demoted_total || 0);
+      if (!data) return { key: 'safe', reasonKey: 'ui_ops_profile_reason_nodata', confidenceKey: 'ui_ops_conf_nodata' };
+      const pressure = decay + promoted + demoted;
+      if (runs === 0 && pressure === 0) return { key: 'safe', reasonKey: 'ui_ops_profile_reason_idle', confidenceKey: 'ui_ops_conf_summary' };
+      if (pressure > 220 || runs >= 8) return { key: 'active', reasonKey: 'ui_ops_profile_reason_active', confidenceKey: 'ui_ops_conf_summary' };
+      if (pressure > 80 || runs >= 3) return { key: 'balanced', reasonKey: 'ui_ops_profile_reason_balanced', confidenceKey: 'ui_ops_conf_summary' };
+      return { key: 'safe', reasonKey: 'ui_ops_profile_reason_idle', confidenceKey: 'ui_ops_conf_summary' };
+    }
+
+    function renderOpsDefaultsProfileHint() {
+      const el = document.getElementById('opsDefaultsHint');
+      if (!el) return;
+      const key = getOpsDefaultsProfile();
+      const hk = key === 'active' ? 'ui_ops_profile_active_hint' : (key === 'balanced' ? 'ui_ops_profile_balanced_hint' : 'ui_ops_profile_safe_hint');
+      el.textContent = t(hk);
+      const card = document.getElementById('opsProfileCard');
+      if (!card) return;
+      const rk = key === 'active' ? 'ui_ops_risk_high' : (key === 'balanced' ? 'ui_ops_risk_mid' : 'ui_ops_risk_low');
+      const sk = key === 'active' ? 'ui_ops_scene_active' : (key === 'balanced' ? 'ui_ops_scene_balanced' : 'ui_ops_scene_safe');
+      const ek = key === 'active' ? 'ui_ops_effect_active' : (key === 'balanced' ? 'ui_ops_effect_balanced' : 'ui_ops_effect_safe');
+      const riskCls = key === 'active' ? 'forecast-risk-high' : (key === 'balanced' ? 'forecast-risk-warn' : 'forecast-risk-ok');
+      const reco = recommendOpsProfile();
+      const recoLabel = profileLabelByKey(reco.key);
+      const curLabel = profileLabelByKey(key);
+      const recoCls = reco.key === 'active' ? 'forecast-risk-high' : (reco.key === 'balanced' ? 'forecast-risk-warn' : 'forecast-risk-ok');
+      const conf = t(reco.confidenceKey || 'ui_ops_conf_nodata');
+      const pv = opsPreviewCache && typeof opsPreviewCache === 'object' ? opsPreviewCache : null;
+      let previewHtml = `<div style="margin-top:6px"><b>${escHtml(t('ui_ops_profile_preview_title'))}:</b> ${escHtml(t('ui_ops_profile_preview_none'))}</div>`;
+      if (pv) {
+        let ptime = '-';
+        try {
+          if (pv.ts) ptime = new Date(pv.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        } catch (_) {}
+        const priskCls = String(pv.risk || '') === 'high' ? 'forecast-risk-high' : (String(pv.risk || '') === 'warn' ? 'forecast-risk-warn' : 'forecast-risk-ok');
+        previewHtml =
+          `<div style="margin-top:6px"><b>${escHtml(t('ui_ops_profile_preview_title'))}:</b></div>` +
+          `<div class="row-btn" style="margin-top:6px">` +
+          `<span class="pill"><b>${escHtml(t('ui_ops_profile_preview_time'))}</b><span class="mono">${escHtml(ptime)}</span></span>` +
+          `<span class="pill"><b>${escHtml(t('ui_ops_profile_preview_touches'))}</b><span class="mono">${escHtml(String(pv.touches || 0))}</span></span>` +
+          `<span class="pill"><b>${escHtml(t('ui_ops_profile_card_risk'))}</b><span class="${escHtml(priskCls)}">${escHtml(String(pv.risk || '-'))}</span></span>` +
+          `</div>`;
+      }
+      card.innerHTML =
+        `<div><b>${escHtml(t('ui_ops_profile_card_title'))}</b></div>` +
+        `<div class="row-btn" style="margin-top:6px">` +
+        `<span class="pill"><b>${escHtml(t('ui_ops_profile_card_risk'))}</b><span class="${escHtml(riskCls)}">${escHtml(t(rk))}</span></span>` +
+        `<span class="pill"><b>${escHtml(t('ui_ops_profile_card_effect'))}</b><span class="mono">${escHtml(t(ek))}</span></span>` +
+        `<span class="pill"><b>${escHtml(t('ui_ops_profile_card_current'))}</b><span class="mono">${escHtml(curLabel)}</span></span>` +
+        `<span class="pill"><b>${escHtml(t('ui_ops_profile_card_recommended'))}</b><span class="${escHtml(recoCls)}">${escHtml(recoLabel)}</span></span>` +
+        `<span class="pill"><b>${escHtml(t('ui_ops_profile_card_confidence'))}</b><span class="mono">${escHtml(conf)}</span></span>` +
+        `</div>` +
+        `<div style="margin-top:6px"><b>${escHtml(t('ui_ops_profile_card_scene'))}:</b> ${escHtml(t(sk))}</div>` +
+        `<div style="margin-top:6px"><b>${escHtml(t('ui_ops_profile_card_recommended'))}:</b> ${escHtml(t(reco.reasonKey || 'ui_ops_profile_reason_nodata'))}</div>` +
+        previewHtml +
+        `<div class="row-btn" style="margin-top:8px"><button id="btnOpsApplyRecommended" class="secondary" style="margin-top:0">${escHtml(t('ui_ops_profile_apply_recommended'))}</button></div>`;
+      const br = document.getElementById('btnOpsApplyRecommended');
+      if (br) br.onclick = () => applyRecommendedProfileWithConfirm();
+    }
+
+    function getOpsDefaultsPlan(profileKey) {
+      const key = String(profileKey || getOpsDefaultsProfile() || 'safe');
+      if (key === 'active') {
+        return { key, values: { decayDays: 7, decayLayers: 'instant,short,long', decayLimit: 260, consLimit: 120, compressMinItems: 6 } };
+      }
+      if (key === 'balanced') {
+        return { key, values: { decayDays: 10, decayLayers: 'instant,short,long', decayLimit: 180, consLimit: 80, compressMinItems: 8 } };
+      }
+      return { key: 'safe', values: { decayDays: 14, decayLayers: 'instant,short', decayLimit: 120, consLimit: 60, compressMinItems: 10 } };
+    }
+
+    function buildOpsDefaultsDiff(values) {
+      const keys = ['decayDays', 'decayLayers', 'decayLimit', 'consLimit', 'compressMinItems'];
+      return keys.map(k => {
+        const cur = String(document.getElementById(k)?.value || '').trim();
+        const nxt = String(values[k] ?? '').trim();
+        return `${k}: ${cur || '(empty)'} -> ${nxt || '(empty)'}`;
+      }).join('\\n');
+    }
+
+    async function applyRecommendedProfileWithConfirm() {
+      const reco = recommendOpsProfile();
+      const plan = getOpsDefaultsPlan(reco.key);
+      const profile = profileLabelByKey(plan.key);
+      const diff = buildOpsDefaultsDiff(plan.values);
+      const ok = await askDangerConfirm(
+        t('ui_danger_title'),
+        t('ui_ops_profile_confirm_sub'),
+        tf('ui_ops_profile_confirm_body', { profile, diff })
+      );
+      if (!ok) return;
+      await applyRecommendedOpsDefaults(plan.key, { autoPreview: true });
+    }
+
+    async function applyRecommendedOpsDefaults(profileKey, options) {
+      const plan = getOpsDefaultsPlan(profileKey);
+      const key = plan.key;
+      const values = plan.values || {};
+      const opts = options || {};
+      Object.keys(values).forEach(k => setInputValue(k, values[k]));
+      const profileSel = document.getElementById('opsDefaultsProfile');
+      if (profileSel) profileSel.value = key;
+      if (!String(document.getElementById('compressSessionId')?.value || '').trim()) {
+        setInputValue('compressSessionId', (document.getElementById('insSessionId')?.value || '').trim());
+      }
+      lockMaintGate();
+      const hint = document.getElementById('opsModeHint');
+      const profile = profileLabelByKey(key);
+      if (hint) hint.textContent = tf('ui_ops_recommend_applied', { profile });
+      renderOpsDefaultsProfileHint();
+      toast('Maintenance', tf('ui_ops_recommend_applied', { profile }), true);
+      if (opts.autoPreview) {
+        if (hint) hint.textContent = t('ui_ops_recommend_preview_started');
+        setActiveTab('insightsTab');
+        setInsightsSection('operations');
+        await runAutoMaintenance(true);
+      }
     }
 
 	    function applyI18n() {
@@ -2635,6 +3478,8 @@ HTML_PAGE = """<!doctype html>
       applyLiteralTranslations();
       applyAutoTips();
       renderMode();
+      renderOpsMode();
+      renderMaintGateStatus();
 	      renderDaemonState();
 	    }
 
@@ -4347,8 +5192,6 @@ HTML_PAGE = """<!doctype html>
 
 	    function renderDecayOut(d) {
 	      const out = document.getElementById('decayOut');
-	      const hint = document.getElementById('decayHint');
-	      if (hint) hint.textContent = d && d.ok ? (d.dry_run ? 'preview' : 'applied') : '';
 	      if (!out) return;
 	      if (!d || !d.ok) {
 	        out.innerHTML = `<span class="err">${escHtml((d && d.error) || 'decay failed')}</span>`;
@@ -4414,6 +5257,7 @@ HTML_PAGE = """<!doctype html>
 	    async function runDecay(dry_run) {
 	      const opts = readDecayOpts();
 	      if (!dry_run) {
+	        if (!ensureMaintGateReady('decay')) return;
 	        const ok = await askDangerConfirm(
             t('ui_danger_title'),
             t('ui_danger_decay_sub'),
@@ -4424,9 +5268,12 @@ HTML_PAGE = """<!doctype html>
 	      const d = await jpost('/api/maintenance/decay', Object.assign({}, opts, { dry_run: !!dry_run }));
 	      renderDecayOut(d);
 	      if (!d.ok) {
+	        if (dry_run) lockMaintGate('decay');
 	        toast('Maintenance', d.error || 'decay failed', false);
 	        return;
 	      }
+	      if (dry_run) setMaintGateReady('decay', d);
+	      else lockMaintGate('decay');
 	      toast('Maintenance', (dry_run ? 'previewed ' : 'applied ') + String(d.count || 0), true);
 	      // Applied decay changes signals; refresh boards and analytics.
 	      if (!dry_run) {
@@ -4450,7 +5297,20 @@ HTML_PAGE = """<!doctype html>
 	        out.innerHTML = `<span class="err">${escHtml((d && d.error) || (title + ' failed'))}</span>`;
 	        return;
 	      }
-	      out.innerHTML = `<div class="small"><b>${escHtml(title)}</b></div><pre class="mono" style="white-space:pre-wrap">${escHtml(JSON.stringify(d, null, 2))}</pre>`;
+        let opKey = 'decay';
+        const ttl = String(title || '');
+        if (/compress/i.test(ttl)) opKey = 'compress';
+        else if (/consolidate/i.test(ttl)) opKey = 'consolidate';
+        else if (/auto/i.test(ttl)) opKey = 'auto';
+        const impact = estimateImpactCount(opKey, d);
+        const mode = d.dry_run ? 'preview' : 'apply';
+	      out.innerHTML =
+          `<div class="small"><b>${escHtml(title)}</b></div>` +
+          `<div class="row-btn" style="margin-top:8px">` +
+          `<span class="pill"><b>mode</b><span class="mono">${escHtml(mode)}</span></span>` +
+          `<span class="pill"><b>impact</b><span class="mono">${escHtml(String(impact || 0))}</span></span>` +
+          `</div>` +
+          `<details class="disclosure" style="margin-top:8px"><summary>raw output</summary><pre class="mono" style="white-space:pre-wrap; margin-top:8px">${escHtml(JSON.stringify(d, null, 2))}</pre></details>`;
 	    }
 
       function renderMaintenanceForecast(d) {
@@ -4496,6 +5356,7 @@ HTML_PAGE = """<!doctype html>
 	    async function runConsolidate(dry_run) {
 	      const opts = readConsolidateOpts();
 	      if (!dry_run) {
+	        if (!ensureMaintGateReady('consolidate')) return;
 	        const ok = await askDangerConfirm(
             t('ui_danger_title'),
             t('ui_danger_consolidate_sub'),
@@ -4508,13 +5369,14 @@ HTML_PAGE = """<!doctype html>
           if (!ok) return;
 	      }
 	      const d = await jpost('/api/maintenance/consolidate', Object.assign({}, opts, { dry_run: !!dry_run }));
-	      const hint = document.getElementById('consHint');
-	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
 	      renderMaintOut('Consolidate', d);
 	      if (!d.ok) {
+	        if (dry_run) lockMaintGate('consolidate');
 	        toast('Maintenance', d.error || 'consolidate failed', false);
 	        return;
 	      }
+	      if (dry_run) setMaintGateReady('consolidate', d);
+	      else lockMaintGate('consolidate');
 	      toast('Maintenance', dry_run ? 'consolidate previewed' : 'consolidate applied', true);
 	      if (!dry_run) {
 	        await loadInsights();
@@ -4534,10 +5396,12 @@ HTML_PAGE = """<!doctype html>
 	    async function runCompress(dry_run) {
 	      const opts = readCompressOpts();
 	      if (!opts.session_id) {
+	        lockMaintGate('compress');
 	        toast('Maintenance', 'session_id is required', false);
 	        return;
 	      }
 	      if (!dry_run) {
+	        if (!ensureMaintGateReady('compress')) return;
 	        const ok = await askDangerConfirm(
             t('ui_danger_title'),
             t('ui_danger_compress_sub'),
@@ -4546,13 +5410,14 @@ HTML_PAGE = """<!doctype html>
           if (!ok) return;
 	      }
 	      const d = await jpost('/api/maintenance/compress', Object.assign({}, opts, { dry_run: !!dry_run }));
-	      const hint = document.getElementById('compressHint');
-	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
 	      renderMaintOut('Session Compress', d);
 	      if (!d.ok) {
+	        if (dry_run) lockMaintGate('compress');
 	        toast('Maintenance', d.error || 'compress failed', false);
 	        return;
 	      }
+	      if (dry_run) setMaintGateReady('compress', d);
+	      else lockMaintGate('compress');
 	      if (!dry_run && d.compressed) {
 	        toast('Maintenance', `compressed into ${String(d.memory_id || '').slice(0,10)}...`, true);
 	        await loadMem();
@@ -4568,6 +5433,7 @@ HTML_PAGE = """<!doctype html>
 	      const sid = (document.getElementById('insSessionId')?.value || '').trim();
 	      const ack = (document.getElementById('autoMaintAck')?.value || '').trim();
 	      if (!dry_run) {
+	        if (!ensureMaintGateReady('auto')) return;
 	        const ok = await askDangerConfirm(
             t('ui_danger_title'),
             t('ui_danger_auto_sub'),
@@ -4576,14 +5442,28 @@ HTML_PAGE = """<!doctype html>
           if (!ok) return;
 	      }
 	      const d = await jpost('/api/maintenance/auto', { project_id: pid, session_id: sid, dry_run: !!dry_run, ack_token: ack });
-	      const hint = document.getElementById('autoMaintHint');
-	      if (hint) hint.textContent = d && d.ok ? (dry_run ? 'preview' : 'applied') : '';
         renderMaintenanceForecast(d);
 	      renderMaintOut('Auto Maintenance', d);
 	      if (!d.ok) {
+	        if (dry_run) lockMaintGate('auto');
+          if (dry_run) {
+            opsPreviewCache = null;
+            renderOpsDefaultsProfileHint();
+          }
 	        toast('Maintenance', d.error || 'auto maintenance failed', false);
 	        return;
 	      }
+        if (dry_run) {
+          const fx = d.forecast && d.forecast.expected ? d.forecast.expected : {};
+          opsPreviewCache = {
+            ts: new Date().toISOString(),
+            touches: Number(fx.total_touches || (Number(fx.decay || 0) + Number(fx.promote || 0) + Number(fx.demote || 0) + Number(fx.compress || 0)) || 0),
+            risk: String((d.forecast && d.forecast.risk_level) || 'low').toLowerCase(),
+          };
+          renderOpsDefaultsProfileHint();
+        }
+	      if (dry_run) setMaintGateReady('auto', d);
+	      else lockMaintGate('auto');
 	      toast('Maintenance', dry_run ? 'auto maintenance previewed' : 'auto maintenance applied', true);
 	      if (!dry_run) {
 	        await loadInsights();
@@ -4601,9 +5481,13 @@ HTML_PAGE = """<!doctype html>
 	      const el = document.getElementById('maintStats');
 	      if (!el) return;
 	      if (!d.ok) {
+	        maintenanceSummaryCache = null;
+          renderOpsDefaultsProfileHint();
 	        el.innerHTML = `<span class="err">${escHtml(d.error || 'maintenance summary failed')}</span>`;
 	        return;
 	      }
+        maintenanceSummaryCache = d;
+        renderOpsDefaultsProfileHint();
 	      const ac = d.auto_maintenance || {};
 	      const ec = d.event_counts || {};
         const runs = Number(ac.runs || 0);
@@ -5299,8 +6183,8 @@ HTML_PAGE = """<!doctype html>
             mq.onkeydown = (e) => { if (e.key === 'Enter') loadMem(); };
           }
           document.getElementById('btnInsightsReload').onclick = () => loadInsights();
-          document.getElementById('insProjectId').onchange = () => loadInsights();
-          document.getElementById('insSessionId').onchange = () => loadInsights();
+          document.getElementById('insProjectId').onchange = () => { lockMaintGate(); opsPreviewCache = null; renderOpsDefaultsProfileHint(); loadInsights(); };
+          document.getElementById('insSessionId').onchange = () => { lockMaintGate(); opsPreviewCache = null; renderOpsDefaultsProfileHint(); loadInsights(); };
           const gov = document.getElementById('btnGovernReload');
           if (gov) {
             gov.onclick = async () => {
@@ -5490,6 +6374,24 @@ HTML_PAGE = """<!doctype html>
 	        document.getElementById('insProjectId')?.value?.trim() || '',
 	        document.getElementById('insSessionId')?.value?.trim() || ''
 	      );
+        const gateReset = document.getElementById('btnMaintGateReset');
+        if (gateReset) gateReset.onclick = () => lockMaintGate();
+        const opsBegin = document.getElementById('btnOpsBeginner');
+        if (opsBegin) opsBegin.onclick = () => {
+          opsExpert = false;
+          safeSetOpsExpert(false);
+          renderOpsMode();
+        };
+        const opsExpertBtn = document.getElementById('btnOpsExpert');
+        if (opsExpertBtn) opsExpertBtn.onclick = () => {
+          opsExpert = true;
+          safeSetOpsExpert(true);
+          renderOpsMode();
+        };
+        const opsDefaults = document.getElementById('btnOpsRecommendDefaults');
+        if (opsDefaults) opsDefaults.onclick = () => applyRecommendedOpsDefaults(undefined, { autoPreview: true });
+        const opsProfile = document.getElementById('opsDefaultsProfile');
+        if (opsProfile) opsProfile.onchange = () => renderOpsDefaultsProfileHint();
 	      const dp = document.getElementById('btnDecayPreview');
 	      if (dp) dp.onclick = () => runDecay(true);
 	      const da = document.getElementById('btnDecayApply');
@@ -5506,6 +6408,21 @@ HTML_PAGE = """<!doctype html>
 	      if (amp) amp.onclick = () => runAutoMaintenance(true);
 	      const ama = document.getElementById('btnAutoMaintApply');
 	      if (ama) ama.onclick = () => runAutoMaintenance(false);
+        ['decayDays', 'decayLayers', 'decayLimit'].forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.onchange = () => lockMaintGate('decay');
+        });
+        ['consLimit'].forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.onchange = () => lockMaintGate('consolidate');
+        });
+        ['compressSessionId', 'compressMinItems'].forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.onchange = () => lockMaintGate('compress');
+        });
 	      const evType = document.getElementById('evtType');
 	      if (evType) evType.onchange = () => loadEvents(
 	        document.getElementById('insProjectId')?.value?.trim() || '',
@@ -5752,9 +6669,17 @@ HTML_PAGE = """<!doctype html>
         document.querySelectorAll('#insSectionNav .section-chip').forEach(btn => {
           btn.onclick = () => setInsightsSection(btn.dataset.insSection || 'overview');
         });
+        const advGo = document.getElementById('btnAdvGuideGo');
+        if (advGo) advGo.onclick = () => applyAdvancedGuide();
         document.querySelectorAll('#cfgSectionNav .section-chip').forEach(btn => {
           btn.onclick = () => setConfigSection(btn.dataset.cfgSection || 'core');
         });
+        const btnDpSafe = document.getElementById('btnDaemonProfileSafe');
+        if (btnDpSafe) btnDpSafe.onclick = () => applyDaemonProfile('safe');
+        const btnDpBalanced = document.getElementById('btnDaemonProfileBalanced');
+        if (btnDpBalanced) btnDpBalanced.onclick = () => applyDaemonProfile('balanced');
+        const btnDpActive = document.getElementById('btnDaemonProfileActive');
+        if (btnDpActive) btnDpActive.onclick = () => applyDaemonProfile('active');
 	      const liveBtn = document.getElementById('btnLiveToggle');
 	      if (liveBtn) liveBtn.onclick = () => setLive(!liveOn);
           const liveSel = document.getElementById('liveInterval');
