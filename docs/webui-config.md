@@ -1,5 +1,7 @@
 # WebUI and Configuration
 
+Language: [English](webui-config.md) | [简体中文](webui-config.zh-CN.md)
+
 Default config path:
 
 - `$OMNIMEM_HOME/omnimem.config.json`

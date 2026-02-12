@@ -1,5 +1,7 @@
 # Startup Guide QA Checklist
 
+Language: [English](qa-startup-guide.md) | [简体中文](qa-startup-guide.zh-CN.md)
+
 Use this checklist for a real first-time user run:
 
 1. Prepare clean environment

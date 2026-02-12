@@ -1,5 +1,7 @@
 # Optional GitHub OAuth Broker
 
+Language: [English](oauth-broker.md) | [简体中文](oauth-broker.zh-CN.md)
+
 Use this only to simplify login UX. It is not used for memory sync data flow.
 
 ## Why

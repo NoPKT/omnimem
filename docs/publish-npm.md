@@ -1,5 +1,7 @@
 # npm Publish Guide
 
+Language: [English](publish-npm.md) | [简体中文](publish-npm.zh-CN.md)
+
 ## Pre-check
 
 ```bash

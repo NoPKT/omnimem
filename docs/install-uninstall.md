@@ -1,5 +1,7 @@
 # Install / Attach / Uninstall
 
+Language: [English](install-uninstall.md) | [简体中文](install-uninstall.zh-CN.md)
+
 ## Install
 
 ```bash

@@ -1,5 +1,7 @@
 # Quickstart (10 minutes)
 
+Language: [English](quickstart-10min.md) | [简体中文](quickstart-10min.zh-CN.md)
+
 ## New device
 
 After npm publish:

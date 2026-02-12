@@ -49,6 +49,7 @@
 - QA docs: add `docs/qa-startup-guide.md` with first-run acceptance checklist.
 - WebUI i18n: add locale patch layer for previously hard-coded advanced-panel labels/buttons/options and make dynamic toggle text translatable.
 - WebUI UX: add auto-generated localized `title` tips for major visible controls/headings/inputs to improve discoverability for non-expert users.
+- Docs i18n: add Chinese (`zh-CN`) versions for README and key user-facing docs (quickstart/webui-config/oauth-broker/publish/install/startup-qa) with bilingual navigation links.
 - Sync auth: add `oauth_token_file` support in Git sync pipeline and use `GIT_ASKPASS` for HTTPS GitHub remotes, so OAuth device tokens can authenticate `github-pull`/`github-push` without embedding secrets in remote URLs.
 - CI reliability: fix `nightly-memory-eval` `ModuleNotFoundError` by adding repo-root `sys.path` bootstrap in `scripts/tune_core_merge_from_eval.py` (and `tune_governance_from_eval.py` for parity).
 - CI reliability: set `PYTHONPATH=.` in `nightly-memory-eval` workflow step to make script/module resolution robust in runner environments.

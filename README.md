@@ -1,5 +1,7 @@
 # OmniMem
 
+Language: [English](README.md) | [简体中文](README.zh-CN.md)
+
 OmniMem is reusable, low-coupling memory infrastructure for AI agents across tools, devices, projects, and accounts.
 
 Current status: `Phase D implemented (WebUI + auto sync daemon + bootstrap + uninstall)`
@@ -356,6 +358,15 @@ Nightly memory-eval workflow:
 
 ## Docs
 
+- Chinese:
+  - `README.zh-CN.md`
+  - `docs/quickstart-10min.zh-CN.md`
+  - `docs/webui-config.zh-CN.md`
+  - `docs/oauth-broker.zh-CN.md`
+  - `docs/qa-startup-guide.zh-CN.md`
+  - `docs/publish-npm.zh-CN.md`
+  - `docs/install-uninstall.zh-CN.md`
+- English:
 - `docs/quickstart-10min.md`
 - `docs/webui-config.md`
 - `docs/oauth-broker.md`
