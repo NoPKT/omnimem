@@ -1089,6 +1089,98 @@ def _oauth_broker_recommend_provider() -> str:
     return "cloudflare"
 
 
+def _run_status_cmd(cmd: list[str], timeout_s: float = 8.0) -> dict[str, object]:
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_s)
+        return {
+            "ok": bool(cp.returncode == 0),
+            "exit_code": int(cp.returncode),
+            "stdout": (cp.stdout or "")[-1200:],
+            "stderr": (cp.stderr or "")[-1200:],
+        }
+    except Exception as exc:
+        return {"ok": False, "exit_code": -1, "error": str(exc), "stdout": "", "stderr": ""}
+
+
+def _oauth_broker_doctor_data(*, cfg_path: Path | None, client_id: str = "") -> dict[str, object]:
+    cfg, resolved_cfg_path = load_config_with_path(cfg_path)
+    cfg_client_id = str(cfg.get("sync", {}).get("github", {}).get("oauth", {}).get("client_id", "") or "").strip()
+    env_client_id = str(os.environ.get("OMNIMEM_GITHUB_OAUTH_CLIENT_ID", "")).strip()
+    effective_client_id = str(client_id or "").strip() or env_client_id or cfg_client_id
+
+    providers: list[dict[str, object]] = []
+    table = [
+        ("cloudflare", "wrangler", ["wrangler", "whoami"], "wrangler login"),
+        ("vercel", "vercel", ["vercel", "whoami"], "vercel login"),
+        ("railway", "railway", ["railway", "whoami"], "railway login"),
+        ("fly", "flyctl", ["flyctl", "auth", "whoami"], "flyctl auth login"),
+    ]
+    for provider, bin_name, whoami_cmd, login_hint in table:
+        installed = bool(shutil.which(bin_name))
+        status: dict[str, object] = {"ok": False, "exit_code": -1, "stdout": "", "stderr": ""}
+        logged_in = False
+        if installed:
+            status = _run_status_cmd(whoami_cmd)
+            logged_in = bool(status.get("ok", False))
+        providers.append(
+            {
+                "provider": provider,
+                "binary": bin_name,
+                "installed": installed,
+                "logged_in": logged_in,
+                "login_hint": login_hint,
+                "status": status,
+                "template_exists": bool(_oauth_broker_template_dir(provider).exists()),
+            }
+        )
+
+    preferred = ""
+    for p in providers:
+        if bool(p.get("installed")) and bool(p.get("logged_in")):
+            preferred = str(p.get("provider"))
+            break
+    if not preferred:
+        for p in providers:
+            if bool(p.get("installed")):
+                preferred = str(p.get("provider"))
+                break
+    if not preferred:
+        preferred = "cloudflare"
+
+    issues: list[str] = []
+    actions: list[str] = []
+    if not effective_client_id:
+        issues.append("missing GitHub OAuth client id")
+        actions.append("set OMNIMEM_GITHUB_OAUTH_CLIENT_ID or provide --client-id")
+    installed_any = any(bool(p.get("installed")) for p in providers)
+    if not installed_any:
+        issues.append("no provider CLI found in PATH")
+        actions.append("install one provider CLI (wrangler/vercel/railway/flyctl)")
+    logged_any = any(bool(p.get("logged_in")) for p in providers if bool(p.get("installed")))
+    if installed_any and not logged_any:
+        issues.append("no provider is authenticated")
+        for p in providers:
+            if bool(p.get("installed")):
+                actions.append(str(p.get("login_hint")))
+    return {
+        "ok": True,
+        "config_path": str(resolved_cfg_path),
+        "oauth_client_id_available": bool(effective_client_id),
+        "oauth_client_id_source": "arg" if bool(str(client_id or "").strip()) else ("env" if bool(env_client_id) else ("config" if bool(cfg_client_id) else "none")),
+        "recommended_provider": preferred,
+        "providers": providers,
+        "issues": issues,
+        "actions": actions,
+        "note": "auth-only broker; memory sync data path remains local",
+    }
+
+
+def cmd_oauth_broker_doctor(args: argparse.Namespace) -> int:
+    out = _oauth_broker_doctor_data(cfg_path=cfg_path_arg(args), client_id=str(getattr(args, "client_id", "") or ""))
+    print_json(out)
+    return 0 if not out.get("issues") else 1
+
+
 def _prompt(default: str, message: str) -> str:
     raw = input(f"{message} [{default}]: ").strip()
     return raw or default
@@ -1106,13 +1198,20 @@ def cmd_oauth_broker_wizard(args: argparse.Namespace) -> int:
     if not sys.stdin.isatty():
         print_json({"ok": False, "error": "wizard requires interactive terminal", "hint": "use oauth-broker init/deploy flags"})
         return 1
-    provider = _prompt(_oauth_broker_recommend_provider(), "Provider (cloudflare/vercel/railway/fly)").strip().lower()
+    diag = _oauth_broker_doctor_data(cfg_path=cfg_path_arg(args), client_id=str(getattr(args, "client_id", "") or ""))
+    print_json({"ok": True, "action": "wizard-doctor", **diag})
+    provider = _prompt(str(diag.get("recommended_provider") or _oauth_broker_recommend_provider()), "Provider (cloudflare/vercel/railway/fly)").strip().lower()
     if provider not in {"cloudflare", "vercel", "railway", "fly"}:
         print_json({"ok": False, "error": f"unsupported provider: {provider}"})
         return 1
     target_dir = Path(_prompt(f"./oauth-broker-{provider}", "Template directory")).expanduser().resolve()
     name = _prompt("omnimem-oauth-broker", "Broker app name")
-    client_id = _prompt("", "GitHub OAuth client id (optional; press Enter to skip)")
+    cid_default = ""
+    if str(diag.get("oauth_client_id_source") or "") != "none":
+        cid_default = "<from-env-or-config>"
+    client_id = _prompt(cid_default, "GitHub OAuth client id (optional; press Enter to keep default source)")
+    if client_id.strip() == "<from-env-or-config>":
+        client_id = ""
     force = _prompt("false", "Overwrite target if exists? (true/false)").strip().lower() in {"1", "true", "yes", "y"}
 
     init_out = _oauth_broker_init_action(
@@ -1150,6 +1249,8 @@ def cmd_oauth_broker_wizard(args: argparse.Namespace) -> int:
 def cmd_oauth_broker(args: argparse.Namespace) -> int:
     if args.oauth_cmd == "wizard":
         return cmd_oauth_broker_wizard(args)
+    if args.oauth_cmd == "doctor":
+        return cmd_oauth_broker_doctor(args)
     provider = str(args.provider or "").strip().lower()
     target_dir = Path(args.dir or f"./oauth-broker-{provider}").expanduser().resolve()
     name = str(args.name or "omnimem-oauth-broker")
@@ -2861,7 +2962,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_oauth_wizard = p_oauth_sub.add_parser("wizard", help="interactive guided setup/deploy for auth-only broker")
     p_oauth_wizard.add_argument("--config", help="path to omnimem config json")
+    p_oauth_wizard.add_argument("--client-id", default="", help="optional GitHub OAuth client id override")
     p_oauth_wizard.set_defaults(func=cmd_oauth_broker)
+
+    p_oauth_doctor = p_oauth_sub.add_parser("doctor", help="diagnose provider CLI/login/client-id readiness")
+    p_oauth_doctor.add_argument("--config", help="path to omnimem config json")
+    p_oauth_doctor.add_argument("--client-id", default="", help="optional GitHub OAuth client id override")
+    p_oauth_doctor.set_defaults(func=cmd_oauth_broker)
 
     p_adapter = sub.add_parser("adapter", help="external adapters")
     p_adapter.add_argument("--config", help="path to omnimem config json")

@@ -29,6 +29,12 @@ Or use guided mode (minimal prompts):
 omnimem oauth-broker wizard
 ```
 
+Pre-check readiness and suggested next actions:
+
+```bash
+omnimem oauth-broker doctor
+```
+
 Supported providers:
 
 - `cloudflare`
