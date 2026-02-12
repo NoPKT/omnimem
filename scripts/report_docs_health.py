@@ -34,6 +34,20 @@ def _analyze_file(path: Path, max_line_length: int) -> dict[str, object]:
     blank_run_len = 0
 
     in_fence = False
+    def _ignore_long_line(s: str, in_code_fence: bool) -> bool:
+        if in_code_fence:
+            return True
+        stripped = s.strip()
+        if not stripped:
+            return True
+        if stripped.startswith("|") and stripped.endswith("|"):
+            return True
+        if re.match(r"^[-*]\s+`https?://[^`]+`$", stripped):
+            return True
+        if re.match(r"^<https?://[^>]+>$", stripped):
+            return True
+        return False
+
     for idx, line in enumerate(lines, start=1):
         if re.match(r"^\s*```", line):
             in_fence = not in_fence
@@ -41,7 +55,7 @@ def _analyze_file(path: Path, max_line_length: int) -> dict[str, object]:
             trailing_ws.append(idx)
         if "\t" in line:
             tab_lines.append(idx)
-        if len(line) > max_line_length:
+        if len(line) > max_line_length and not _ignore_long_line(line, in_fence):
             long_lines.append({"line": idx, "length": len(line)})
 
         if not in_fence:
