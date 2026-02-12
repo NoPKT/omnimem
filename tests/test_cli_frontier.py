@@ -132,6 +132,9 @@ class CLIFrontierCommandTest(unittest.TestCase):
         a4 = p.parse_args(["oauth-broker", "doctor"])
         self.assertEqual(a4.cmd, "oauth-broker")
         self.assertEqual(a4.oauth_cmd, "doctor")
+        a5 = p.parse_args(["oauth-broker", "auto", "--provider", "cloudflare", "--apply"])
+        self.assertEqual(a5.cmd, "oauth-broker")
+        self.assertEqual(a5.oauth_cmd, "auto")
 
 
 if __name__ == "__main__":

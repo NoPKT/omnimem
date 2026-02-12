@@ -35,6 +35,19 @@ Pre-check readiness and suggested next actions:
 omnimem oauth-broker doctor
 ```
 
+Semi-automatic pipeline (doctor + init + deploy preview/apply):
+
+```bash
+# preview deploy command
+omnimem oauth-broker auto
+
+# actually deploy
+omnimem oauth-broker auto --apply
+
+# deploy and write broker_url into local omnimem config
+omnimem oauth-broker auto --apply --set-config-broker-url --broker-url https://your-broker.example.com
+```
+
 Supported providers:
 
 - `cloudflare`

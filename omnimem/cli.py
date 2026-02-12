@@ -1246,11 +1246,64 @@ def cmd_oauth_broker_wizard(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_oauth_broker_auto(args: argparse.Namespace) -> int:
+    provider_arg = str(getattr(args, "provider", "") or "").strip().lower()
+    diag = _oauth_broker_doctor_data(cfg_path=cfg_path_arg(args), client_id=str(getattr(args, "client_id", "") or ""))
+    print_json({"ok": True, "action": "auto-doctor", **diag})
+    if provider_arg:
+        provider = provider_arg
+    else:
+        provider = str(diag.get("recommended_provider") or "cloudflare").strip().lower()
+    if provider not in {"cloudflare", "vercel", "railway", "fly"}:
+        print_json({"ok": False, "error": f"unsupported provider: {provider}"})
+        return 1
+
+    target_dir = Path(getattr(args, "dir", None) or f"./oauth-broker-{provider}").expanduser().resolve()
+    name = str(getattr(args, "name", "omnimem-oauth-broker") or "omnimem-oauth-broker")
+    client_id = str(getattr(args, "client_id", "") or "")
+    force = bool(getattr(args, "force", False))
+    apply = bool(getattr(args, "apply", False))
+    set_cfg = bool(getattr(args, "set_config_broker_url", False))
+    broker_url = str(getattr(args, "broker_url", "") or "").strip()
+
+    init_out = _oauth_broker_init_action(
+        provider=provider,
+        target_dir=target_dir,
+        name=name,
+        client_id=client_id,
+        force=force,
+    )
+    print_json(init_out)
+    if not bool(init_out.get("ok")):
+        return 1
+
+    deploy_out = _oauth_broker_deploy_action(
+        provider=provider,
+        target_dir=target_dir,
+        name=name,
+        client_id=client_id,
+        apply=apply,
+    )
+    print_json(deploy_out)
+    if not bool(deploy_out.get("ok")):
+        return 1
+
+    if set_cfg:
+        if not broker_url:
+            print_json({"ok": False, "error": "broker_url is required when --set-config-broker-url is enabled"})
+            return 1
+        cfg_out = _update_cfg_broker_url(cfg_path=cfg_path_arg(args), broker_url=broker_url)
+        print_json({"ok": True, "action": "config-update", **cfg_out})
+    return 0
+
+
 def cmd_oauth_broker(args: argparse.Namespace) -> int:
     if args.oauth_cmd == "wizard":
         return cmd_oauth_broker_wizard(args)
     if args.oauth_cmd == "doctor":
         return cmd_oauth_broker_doctor(args)
+    if args.oauth_cmd == "auto":
+        return cmd_oauth_broker_auto(args)
     provider = str(args.provider or "").strip().lower()
     target_dir = Path(args.dir or f"./oauth-broker-{provider}").expanduser().resolve()
     name = str(args.name or "omnimem-oauth-broker")
@@ -2969,6 +3022,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_oauth_doctor.add_argument("--config", help="path to omnimem config json")
     p_oauth_doctor.add_argument("--client-id", default="", help="optional GitHub OAuth client id override")
     p_oauth_doctor.set_defaults(func=cmd_oauth_broker)
+
+    p_oauth_auto = p_oauth_sub.add_parser("auto", help="auto-run doctor + init + deploy (preview by default)")
+    p_oauth_auto.add_argument("--config", help="path to omnimem config json")
+    p_oauth_auto.add_argument("--provider", choices=["cloudflare", "vercel", "railway", "fly"], help="override provider")
+    p_oauth_auto.add_argument("--dir", help="target directory for generated files")
+    p_oauth_auto.add_argument("--name", default="omnimem-oauth-broker")
+    p_oauth_auto.add_argument("--client-id", default="", help="optional GitHub OAuth client id override")
+    p_oauth_auto.add_argument("--force", action="store_true", help="overwrite target directory if non-empty")
+    p_oauth_auto.add_argument("--apply", action="store_true", help="execute provider deploy command")
+    p_oauth_auto.add_argument(
+        "--set-config-broker-url",
+        action="store_true",
+        help="after auto run, write broker_url to local OmniMem config",
+    )
+    p_oauth_auto.add_argument("--broker-url", default="", help="broker URL used with --set-config-broker-url")
+    p_oauth_auto.set_defaults(func=cmd_oauth_broker)
 
     p_adapter = sub.add_parser("adapter", help="external adapters")
     p_adapter.add_argument("--config", help="path to omnimem config json")

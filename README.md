@@ -335,6 +335,7 @@ Optional OAuth broker deploy shortcuts (auth-only service, no memory data path):
   - `omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare --apply`
   - `omnimem oauth-broker wizard` (guided mode with minimal prompts)
   - `omnimem oauth-broker doctor` (readiness diagnostics + suggested fixes)
+  - `omnimem oauth-broker auto --apply` (doctor + auto-select provider + init + deploy)
 
 Nightly memory-eval workflow:
 
