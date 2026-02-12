@@ -53,6 +53,8 @@ Startup-triggered guide:
 - `omnimem start` / `omnimem webui` can auto-prompt setup when sync/auth is missing.
 - It uses one confirm step, then executes `oauth-broker auto --apply` automatically.
 - If OmniMem detects a provider CLI that is already logged in and an available OAuth client id, it can auto-run without prompting.
+- If OAuth client id is missing, startup guide asks once inline and then continues.
+- If recommended provider CLI exists but is not logged in, startup guide can run provider login command and resume auto flow.
 - It also attempts to auto-detect broker URL from deploy output and write local config directly.
 - If URL detection fails, it will not block startup and prints a manual follow-up command.
 - Disable via `--no-startup-guide` or env `OMNIMEM_STARTUP_GUIDE=0`.

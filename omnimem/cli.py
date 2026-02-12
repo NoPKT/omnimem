@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import signal
 import sqlite3
 import threading
@@ -1396,6 +1397,35 @@ def _startup_guide_can_autorun(diag: dict[str, object]) -> bool:
     return False
 
 
+def _provider_install_hint(provider: str) -> str:
+    p = str(provider or "").strip().lower()
+    if p == "cloudflare":
+        return "npm i -g wrangler"
+    if p == "vercel":
+        return "npm i -g vercel"
+    if p == "railway":
+        return "npm i -g @railway/cli"
+    if p == "fly":
+        return "brew install flyctl"
+    return "install provider CLI"
+
+
+def _find_provider_status(diag: dict[str, object], provider: str) -> dict[str, object]:
+    providers = diag.get("providers", [])
+    if not isinstance(providers, list):
+        return {}
+    for item in providers:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("provider", "")).strip().lower() == str(provider or "").strip().lower():
+            return item
+    return {}
+
+
+def _is_never_choice(raw: str) -> bool:
+    return str(raw or "").strip().lower() in {"never", "nvr", "disable", "off"}
+
+
 def _maybe_run_startup_sync_guide(args: argparse.Namespace, cfg: dict[str, object], cfg_path: Path) -> None:
     if not _startup_guide_enabled(args):
         return
@@ -1410,27 +1440,85 @@ def _maybe_run_startup_sync_guide(args: argparse.Namespace, cfg: dict[str, objec
     if _startup_guide_disabled_in_cfg(cfg):
         return
 
-    diag = _oauth_broker_doctor_data(cfg_path=cfg_path, client_id="")
+    client_id_override = ""
+    diag = _oauth_broker_doctor_data(cfg_path=cfg_path, client_id=client_id_override)
     autorun = _startup_guide_can_autorun(diag)
-    if not autorun:
+
+    if not bool(diag.get("oauth_client_id_available", False)):
         print_json(
             {
                 "ok": True,
                 "action": "startup-guide",
-                "message": "sync/auth is not configured yet. run guided setup now?",
-                "choices": ["yes", "no", "never"],
-                "note": "auth-only broker never carries memory content; sync data path stays local",
-                "recommended_provider": str(diag.get("recommended_provider", "cloudflare")),
+                "step": "client-id",
+                "message": "GitHub OAuth client id is missing; enter it once to continue startup automation.",
             }
         )
-        raw = input("Run startup guide now? [Y/n/never]: ").strip().lower()
-        if raw in {"never", "nvr", "disable", "off"}:
+        raw = input("GitHub OAuth client id (Enter to skip / 'never' to disable prompt): ").strip()
+        if _is_never_choice(raw):
+            _set_startup_guide_disabled(cfg, cfg_path, True)
+            print_json({"ok": True, "action": "startup-guide", "disabled": True})
+            return
+        if not raw:
+            return
+        client_id_override = raw
+        diag = _oauth_broker_doctor_data(cfg_path=cfg_path, client_id=client_id_override)
+        autorun = _startup_guide_can_autorun(diag)
+
+    recommended_provider = str(diag.get("recommended_provider", "cloudflare"))
+    provider_status = _find_provider_status(diag, recommended_provider)
+    if not bool(provider_status.get("installed", False)):
+        print_json(
+            {
+                "ok": True,
+                "action": "startup-guide",
+                "step": "provider-install",
+                "provider": recommended_provider,
+                "message": "recommended provider CLI is missing",
+                "install_hint": _provider_install_hint(recommended_provider),
+            }
+        )
+        raw = input("Open guided wizard instead? [Y/n/never]: ").strip().lower()
+        if _is_never_choice(raw):
+            _set_startup_guide_disabled(cfg, cfg_path, True)
+            print_json({"ok": True, "action": "startup-guide", "disabled": True})
+            return
+        if raw in {"n", "no", "skip", ""}:
+            return
+        wz_args = argparse.Namespace(config=str(cfg_path), client_id=client_id_override)
+        cmd_oauth_broker_wizard(wz_args)
+        return
+
+    if bool(provider_status.get("installed", False)) and not bool(provider_status.get("logged_in", False)):
+        login_hint = str(provider_status.get("login_hint", "")).strip()
+        print_json(
+            {
+                "ok": True,
+                "action": "startup-guide",
+                "step": "provider-login",
+                "provider": recommended_provider,
+                "message": "provider CLI is installed but not authenticated",
+                "login_hint": login_hint,
+            }
+        )
+        raw = input(f"Run `{login_hint}` now and continue? [Y/n/never]: ").strip().lower()
+        if _is_never_choice(raw):
             _set_startup_guide_disabled(cfg, cfg_path, True)
             print_json({"ok": True, "action": "startup-guide", "disabled": True})
             return
         if raw in {"n", "no", "skip"}:
             return
-    else:
+        try:
+            cp = subprocess.run(shlex.split(login_hint), check=False)
+        except Exception as exc:
+            print_json({"ok": False, "action": "startup-guide", "error": "provider login command failed", "detail": str(exc)})
+            return
+        if cp.returncode != 0:
+            print_json({"ok": False, "action": "startup-guide", "error": "provider login command failed", "exit_code": int(cp.returncode)})
+            return
+        diag = _oauth_broker_doctor_data(cfg_path=cfg_path, client_id=client_id_override)
+        autorun = _startup_guide_can_autorun(diag)
+
+    if autorun:
         print_json(
             {
                 "ok": True,
@@ -1440,13 +1528,23 @@ def _maybe_run_startup_sync_guide(args: argparse.Namespace, cfg: dict[str, objec
                 "note": "detected ready provider login + oauth client id; proceeding automatically",
             }
         )
+    else:
+        print_json(
+            {
+                "ok": True,
+                "action": "startup-guide",
+                "mode": "manual-needed",
+                "hint": "run `omnimem oauth-broker wizard` to complete remaining setup",
+            }
+        )
+        return
 
     auto_args = argparse.Namespace(
         oauth_cmd="auto",
         provider=str(diag.get("recommended_provider", "") or ""),
         dir="",
         name="omnimem-oauth-broker",
-        client_id="",
+        client_id=client_id_override,
         force=False,
         apply=True,
         set_config_broker_url=True,

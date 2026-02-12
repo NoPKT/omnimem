@@ -44,6 +44,7 @@
 - Startup UX: `omnimem start/webui` now auto-detect missing sync/auth setup and can launch guided broker automation with one prompt + direct auto-apply flow; supports `--no-startup-guide` and `OMNIMEM_STARTUP_GUIDE=0`.
 - Startup UX: broker URL can now be auto-detected from deploy output and written to local config automatically (manual paste is optional fallback).
 - Startup UX: when provider CLI login + OAuth client id are already available, startup guide now auto-runs without prompt for near-zero-touch setup.
+- Startup UX: startup guide can now inline-capture missing OAuth client id and optionally run provider login command before continuing auto deploy flow.
 - Sync auth: add `oauth_token_file` support in Git sync pipeline and use `GIT_ASKPASS` for HTTPS GitHub remotes, so OAuth device tokens can authenticate `github-pull`/`github-push` without embedding secrets in remote URLs.
 - CI reliability: fix `nightly-memory-eval` `ModuleNotFoundError` by adding repo-root `sys.path` bootstrap in `scripts/tune_core_merge_from_eval.py` (and `tune_governance_from_eval.py` for parity).
 - CI reliability: set `PYTHONPATH=.` in `nightly-memory-eval` workflow step to make script/module resolution robust in runner environments.
