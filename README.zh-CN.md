@@ -1,84 +1,34 @@
 # OmniMem（中文说明）
 
-> English: [README.md](README.md)
+English: [README.md](README.md)
 
 OmniMem 是一套可复用、低耦合的 AI Agent 记忆基础设施，支持跨工具、跨设备、跨项目与跨账号。
 
-当前状态：`Phase D 已完成（WebUI + 自动同步守护进程 + bootstrap + uninstall）`
+## 3 分钟上手
 
-## 目标
-
-- 跨工具：通过统一 CLI 协议保持一致行为（Claude Code / Codex / Cursor）。
-- 跨设备：通过私有 Git 仓库同步。
-- 跨项目：复用记忆模式与引用。
-- 低耦合：最小化项目侵入，易于挂载/移除。
-- 人机双视图：Markdown + JSONL + SQLite FTS。
-- 安全：记忆正文不存密钥，只存凭据引用。
-
-## 目录结构
-
-- `omnimem/`：CLI 与 WebUI 核心实现
-- `bin/omnimem`：启动器
-- `scripts/`：安装、引导、挂载、校验等脚本
-- `templates/project-minimal/`：项目最小接入模板
-- `spec/`：协议与 schema
-- `db/schema.sql`：SQLite + FTS 表结构
-- `docs/`：架构与运维文档
-
-## 一条命令启动
-
-```bash
-~/.omnimem/bin/omnimem
-```
-
-可选主机/端口：
-
-```bash
-~/.omnimem/bin/omnimem --host 127.0.0.1 --port 8765
-```
-
-可选 WebUI Token：
-
-```bash
-OMNIMEM_WEBUI_TOKEN='your-token' ~/.omnimem/bin/omnimem start
-```
-
-说明：
-
-- 非本地监听需显式开启：`--allow-non-localhost`
-- 非本地监听时必须启用 WebUI 鉴权（`OMNIMEM_WEBUI_TOKEN` 或 `--webui-token`）
-- 启用 token 后，API 请求必须带 `X-OmniMem-Token`
-
-## 安装与设备引导
-
-本地安装：
+1. 安装：
 
 ```bash
 bash scripts/install.sh
 ```
 
-新设备引导：
+2. 启动 WebUI + 守护进程：
 
 ```bash
-bash scripts/bootstrap.sh --repo <your-omnimem-repo-url>
+~/.omnimem/bin/omnimem start
 ```
 
-## 项目挂载/移除
+3. 打开：
 
-```bash
-bash scripts/attach_project.sh /path/to/project my-project-id
-bash scripts/detach_project.sh /path/to/project
-```
+- `http://127.0.0.1:8765`
 
-## 卸载
+4. 在 WebUI 完成 GitHub 同步登录（可选）：
 
-```bash
-~/.omnimem/bin/omnimem uninstall --yes
-```
+- `Configuration` -> `GitHub Quick Setup` -> `Sign In via GitHub`。
 
-## npm 安装方式
+## npm 使用
 
-用户可直接运行（无需全局安装）：
+无需全局安装直接运行：
 
 ```bash
 npm exec -y --package=omnimem --call "omnimem start"
@@ -91,50 +41,55 @@ npm i -g omnimem
 omnimem start
 ```
 
-## Agent 模式（Codex / Claude）
+## Agent 模式
 
 ```bash
 omnimem codex
 omnimem claude
 ```
 
-排障时可显式关闭 sidecar：
-
-```bash
-omnimem stop
-omnimem stop --all
-```
-
-诊断：
+排障命令：
 
 ```bash
 omnimem doctor
+omnimem stop
 ```
+
+## 常见问题
+
+- 需要手动创建 SSH key 或 token 吗？
+  - 常规流程不需要。可直接用 WebUI 的 GitHub OAuth 登录。
+- 记忆同步是否经过服务器中转？
+  - 不会。记忆同步仍是本机 Git 操作。
+- OAuth broker 是做什么的？
+  - 仅用于简化 GitHub OAuth 登录，不在记忆数据链路中。
+- OAuth broker 一键部署按钮在哪？
+  - 见 `docs/oauth-broker.zh-CN.md`（Cloudflare/Vercel/Railway/Fly + CLI 兜底）。
 
 ## 维护者文档
 
-- npm 发布流程：`docs/publish-npm.zh-CN.md`
-- 启动/OAuth QA 清单：`docs/qa-startup-guide.zh-CN.md`
-- WebUI 与同步配置细节：`docs/webui-config.zh-CN.md`
+- 发布：`docs/publish-npm.zh-CN.md`
+- 启动/OAuth QA：`docs/qa-startup-guide.zh-CN.md`
+- WebUI 配置：`docs/webui-config.zh-CN.md`
 - 高级运维/评测/调参：`docs/advanced-ops.zh-CN.md`
+- OAuth broker 部署细节：`docs/oauth-broker.zh-CN.md`
 
-## 文档（中文）
+## 文档索引
 
-- [docs/quickstart-10min.zh-CN.md](docs/quickstart-10min.zh-CN.md)
-- [docs/webui-config.zh-CN.md](docs/webui-config.zh-CN.md)
-- [docs/oauth-broker.zh-CN.md](docs/oauth-broker.zh-CN.md)
-- [docs/qa-startup-guide.zh-CN.md](docs/qa-startup-guide.zh-CN.md)
-- [docs/publish-npm.zh-CN.md](docs/publish-npm.zh-CN.md)
-- [docs/install-uninstall.zh-CN.md](docs/install-uninstall.zh-CN.md)
-- [docs/advanced-ops.zh-CN.md](docs/advanced-ops.zh-CN.md)
-
-## 文档（英文原版）
-
-- [README.md](README.md)
-- [docs/quickstart-10min.md](docs/quickstart-10min.md)
-- [docs/webui-config.md](docs/webui-config.md)
-- [docs/oauth-broker.md](docs/oauth-broker.md)
-- [docs/qa-startup-guide.md](docs/qa-startup-guide.md)
-- [docs/publish-npm.md](docs/publish-npm.md)
-- [docs/install-uninstall.md](docs/install-uninstall.md)
-- [docs/advanced-ops.md](docs/advanced-ops.md)
+- 中文：
+  - `docs/quickstart-10min.zh-CN.md`
+  - `docs/webui-config.zh-CN.md`
+  - `docs/oauth-broker.zh-CN.md`
+  - `docs/qa-startup-guide.zh-CN.md`
+  - `docs/install-uninstall.zh-CN.md`
+  - `docs/publish-npm.zh-CN.md`
+  - `docs/advanced-ops.zh-CN.md`
+- English:
+  - `README.md`
+  - `docs/quickstart-10min.md`
+  - `docs/webui-config.md`
+  - `docs/oauth-broker.md`
+  - `docs/qa-startup-guide.md`
+  - `docs/install-uninstall.md`
+  - `docs/publish-npm.md`
+  - `docs/advanced-ops.md`
