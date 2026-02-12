@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import sqlite3
 import threading
@@ -995,6 +996,45 @@ def _run_ext_cmd(cmd: list[str], cwd: Path) -> dict[str, object]:
         return {"ok": False, "cmd": cmd, "exit_code": -1, "error": str(exc)}
 
 
+def _extract_https_urls(text: str) -> list[str]:
+    if not str(text or "").strip():
+        return []
+    urls: list[str] = []
+    for m in re.finditer(r"https://[^\s\"'<>]+", text):
+        raw = str(m.group(0) or "").strip()
+        url = raw.rstrip(".,);:!?")
+        if url:
+            urls.append(url)
+    return urls
+
+
+def _detect_broker_url_from_deploy_output(provider: str, deploy_out: dict[str, object]) -> str:
+    p = str(provider or "").strip().lower()
+    txt = "\n".join(
+        [
+            str(deploy_out.get("stdout", "") or ""),
+            str(deploy_out.get("stderr", "") or ""),
+        ]
+    )
+    urls = _extract_https_urls(txt)
+    if not urls:
+        return ""
+
+    if p == "cloudflare":
+        preferred = [u for u in urls if ".workers.dev" in u]
+    elif p == "vercel":
+        preferred = [u for u in urls if ".vercel.app" in u]
+    elif p == "railway":
+        preferred = [u for u in urls if ".railway.app" in u]
+    elif p == "fly":
+        preferred = [u for u in urls if ".fly.dev" in u]
+    else:
+        preferred = []
+    if preferred:
+        return preferred[0]
+    return urls[0]
+
+
 def _oauth_broker_init_action(
     *,
     provider: str,
@@ -1266,6 +1306,7 @@ def cmd_oauth_broker_auto(args: argparse.Namespace) -> int:
     apply = bool(getattr(args, "apply", False))
     set_cfg = bool(getattr(args, "set_config_broker_url", False))
     broker_url = str(getattr(args, "broker_url", "") or "").strip()
+    provided_broker_url = bool(broker_url)
 
     init_out = _oauth_broker_init_action(
         provider=provider,
@@ -1290,11 +1331,21 @@ def cmd_oauth_broker_auto(args: argparse.Namespace) -> int:
         return 1
 
     if set_cfg:
+        if not broker_url and bool(apply):
+            broker_url = _detect_broker_url_from_deploy_output(provider, deploy_out)
         if not broker_url:
-            print_json({"ok": False, "error": "broker_url is required when --set-config-broker-url is enabled"})
-            return 1
+            print_json(
+                {
+                    "ok": True,
+                    "action": "config-update",
+                    "config_updated": False,
+                    "warning": "broker_url not detected automatically",
+                    "hint": "run `omnimem oauth-broker auto --set-config-broker-url --broker-url <https://...>`",
+                }
+            )
+            return 0
         cfg_out = _update_cfg_broker_url(cfg_path=cfg_path_arg(args), broker_url=broker_url)
-        print_json({"ok": True, "action": "config-update", **cfg_out})
+        print_json({"ok": True, "action": "config-update", "detected": (not provided_broker_url), **cfg_out})
     return 0
 
 
@@ -1369,28 +1420,16 @@ def _maybe_run_startup_sync_guide(args: argparse.Namespace, cfg: dict[str, objec
         name="omnimem-oauth-broker",
         client_id="",
         force=False,
-        apply=False,
-        set_config_broker_url=False,
+        apply=True,
+        set_config_broker_url=True,
         broker_url="",
         config=str(cfg_path),
     )
-    rc_preview = cmd_oauth_broker_auto(auto_args)
-    if rc_preview != 0:
-        print_json({"ok": False, "action": "startup-guide", "error": "auto preview failed", "hint": "run `omnimem oauth-broker doctor`"})
-        return
-
-    do_apply = input("Execute deploy now? [y/N]: ").strip().lower() in {"y", "yes"}
-    if not do_apply:
-        return
-    auto_args.apply = True
     rc_apply = cmd_oauth_broker_auto(auto_args)
     if rc_apply != 0:
-        print_json({"ok": False, "action": "startup-guide", "error": "deploy failed", "hint": "check previous output and login status"})
+        print_json({"ok": False, "action": "startup-guide", "error": "auto apply failed", "hint": "run `omnimem oauth-broker doctor`"})
         return
-    broker_url = input("Broker URL (optional, write into local config): ").strip()
-    if broker_url:
-        _update_cfg_broker_url(cfg_path=cfg_path, broker_url=broker_url)
-        print_json({"ok": True, "action": "startup-guide", "config_updated": True, "broker_url": broker_url})
+    print_json({"ok": True, "action": "startup-guide", "applied": True, "note": "auto deploy attempted; broker_url saved when detected"})
 
 
 def cmd_oauth_broker(args: argparse.Namespace) -> int:

@@ -340,6 +340,9 @@ Optional OAuth broker deploy shortcuts (auth-only service, no memory data path):
 Startup auto-guidance:
 
 - `omnimem start` / `omnimem webui` now auto-detect missing sync/auth config in interactive terminals and can launch guided setup automatically.
+- Startup guide uses a single confirmation prompt, then runs broker `auto --apply` directly.
+- When deploy output contains a service URL, OmniMem auto-writes `sync.github.oauth.broker_url` (no manual paste needed).
+- If URL auto-detection fails, startup still continues and prints a one-line follow-up command for manual URL write-back.
 - Disable once permanently in prompt via `never`, or disable explicitly with `--no-startup-guide`.
 - Environment switch: `OMNIMEM_STARTUP_GUIDE=0` disables startup guidance globally.
 

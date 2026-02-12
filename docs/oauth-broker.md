@@ -51,6 +51,9 @@ omnimem oauth-broker auto --apply --set-config-broker-url --broker-url https://y
 Startup-triggered guide:
 
 - `omnimem start` / `omnimem webui` can auto-prompt setup when sync/auth is missing.
+- It uses one confirm step, then executes `oauth-broker auto --apply` automatically.
+- It also attempts to auto-detect broker URL from deploy output and write local config directly.
+- If URL detection fails, it will not block startup and prints a manual follow-up command.
 - Disable via `--no-startup-guide` or env `OMNIMEM_STARTUP_GUIDE=0`.
 
 Supported providers:
