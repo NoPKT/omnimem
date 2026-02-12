@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.22 - 2026-02-12
+
 - Profile modeling: add deterministic user profile builder (`omnimem profile`) and WebUI API endpoint (`GET /api/profile`) to summarize preferences/goals/focus tags from memory traces.
 - Ingestion: add `omnimem ingest` for URL/file/text sources with safe URL query redaction and structured source refs, improving external knowledge onboarding workflow.
 - Ingestion upgrade: support structured chunking (`--chunk-mode heading|fixed`) with multi-memory writes and chunk metadata for long document ingestion.

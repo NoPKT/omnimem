@@ -26,6 +26,15 @@ bash scripts/install.sh
 
 - `Configuration` -> `GitHub Quick Setup` -> `Sign In via GitHub`.
 
+### OAuth Broker One-Click Deploy
+
+[![Deploy to Cloudflare Worker](https://img.shields.io/badge/Deploy-Cloudflare%20Worker-F38020?logo=cloudflare&logoColor=white)](https://deploy.workers.cloudflare.com/?url=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/cloudflare-worker)
+[![Deploy to Vercel](https://img.shields.io/badge/Deploy-Vercel-000000?logo=vercel&logoColor=white)](https://vercel.com/new/clone?repository-url=https://github.com/NoPKT/omnimem&root-directory=examples%2Foauth-broker%2Fvercel&project-name=omnimem-oauth-broker)
+[![Deploy to Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?logo=railway&logoColor=white)](https://railway.app/new/template?template=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/railway)
+[![Fly.io Template](https://img.shields.io/badge/Template-Fly.io-8B5CF6?logo=flydotio&logoColor=white)](https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/fly)
+
+After deploy, paste broker URL in WebUI `Configuration` -> `OAuth Broker URL`.
+
 ## npm Usage
 
 Run without global install:
@@ -64,7 +73,7 @@ omnimem stop
 - What is OAuth broker for?
   - Only to simplify GitHub OAuth login. It is not in memory data path.
 - One-click deploy buttons for OAuth broker?
-  - Use `docs/oauth-broker.md` (Cloudflare/Vercel/Railway/Fly links + CLI fallback).
+  - Already listed above in this README. Full details: `docs/oauth-broker.md`.
 
 ## Maintainer Docs
 

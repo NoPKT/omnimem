@@ -26,6 +26,15 @@ bash scripts/install.sh
 
 - `Configuration` -> `GitHub Quick Setup` -> `Sign In via GitHub`。
 
+### OAuth Broker 一键部署
+
+[![部署到 Cloudflare Worker](https://img.shields.io/badge/Deploy-Cloudflare%20Worker-F38020?logo=cloudflare&logoColor=white)](https://deploy.workers.cloudflare.com/?url=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/cloudflare-worker)
+[![部署到 Vercel](https://img.shields.io/badge/Deploy-Vercel-000000?logo=vercel&logoColor=white)](https://vercel.com/new/clone?repository-url=https://github.com/NoPKT/omnimem&root-directory=examples%2Foauth-broker%2Fvercel&project-name=omnimem-oauth-broker)
+[![部署到 Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?logo=railway&logoColor=white)](https://railway.app/new/template?template=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/railway)
+[![Fly.io 模板](https://img.shields.io/badge/Template-Fly.io-8B5CF6?logo=flydotio&logoColor=white)](https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/fly)
+
+部署完成后，把 broker URL 填到 WebUI `Configuration` -> `OAuth Broker URL`。
+
 ## npm 使用
 
 无需全局安装直接运行：
@@ -64,7 +73,7 @@ omnimem stop
 - OAuth broker 是做什么的？
   - 仅用于简化 GitHub OAuth 登录，不在记忆数据链路中。
 - OAuth broker 一键部署按钮在哪？
-  - 见 `docs/oauth-broker.zh-CN.md`（Cloudflare/Vercel/Railway/Fly + CLI 兜底）。
+  - 已在本 README 上方给出。完整说明见 `docs/oauth-broker.zh-CN.md`。
 
 ## 文档索引
 
