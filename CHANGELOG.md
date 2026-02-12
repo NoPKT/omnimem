@@ -37,6 +37,7 @@
 - WebUI UX upgrade: add one-click GitHub browser auth start (`/api/github/auth/start`) so users can authenticate via `gh auth login --web` without manual SSH key/token setup in OM.
 - WebUI OAuth: add pure GitHub OAuth device flow (`Sign In via GitHub` + `Complete OAuth Login`) that works without local `gh` CLI; stores token in runtime credential file and supports OAuth-backed repo listing/creation.
 - WebUI OAuth UX: `Sign In via GitHub` now auto-polls device-flow completion until success/timeout, reducing manual poll clicks.
+- WebUI OAuth architecture: add optional `OAuth Broker URL` path so device-flow start/poll can be proxied by a tiny external service (for easier auth bootstrap) while sync remains local-only.
 - Sync auth: add `oauth_token_file` support in Git sync pipeline and use `GIT_ASKPASS` for HTTPS GitHub remotes, so OAuth device tokens can authenticate `github-pull`/`github-push` without embedding secrets in remote URLs.
 - CI reliability: fix `nightly-memory-eval` `ModuleNotFoundError` by adding repo-root `sys.path` bootstrap in `scripts/tune_core_merge_from_eval.py` (and `tune_governance_from_eval.py` for parity).
 - CI reliability: set `PYTHONPATH=.` in `nightly-memory-eval` workflow step to make script/module resolution robust in runner environments.

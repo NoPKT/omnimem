@@ -63,6 +63,7 @@ WebUI provides:
 - GitHub quick auth/setup actions on Config tab:
   - `Sign In via GitHub`: launches browser auth via local `gh auth login --web`
   - Pure OAuth device flow (no `gh` needed): fill `OAuth Client ID`, click `Sign In via GitHub`; WebUI auto-polls completion (manual `Complete OAuth Login` is also available)
+  - Optional OAuth broker mode: set `OAuth Broker URL` to route device-flow `start/poll` via a lightweight server while keeping sync local-only
   - `Check GitHub Auth`: checks local `gh auth status`
   - `Refresh Repo List` + `Use Selected Repo`: pick `owner/repo` from `gh repo list`
   - `Apply GitHub Setup`: writes sync remote settings from selected protocol/repo
@@ -72,6 +73,7 @@ OAuth token handling:
 - Token file is stored at `<OMNIMEM_HOME>/runtime/github_oauth_token.json` by default.
 - Git sync (`github-pull`/`github-push`) uses this token via `GIT_ASKPASS` for `https://github.com/...` remotes.
 - Do not commit token files; runtime folder is excluded from sync.
+- See `docs/oauth-broker.md` for broker API contract and a Cloudflare Worker reference implementation.
 
 Recommended safe rollout:
 

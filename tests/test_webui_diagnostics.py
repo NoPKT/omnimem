@@ -26,6 +26,7 @@ from omnimem.webui import (
     _maintenance_impact_forecast,
     _maintenance_status_feedback,
     _normalize_memory_route,
+    _normalize_broker_url,
     _parse_float_param,
     _parse_int_param,
     _parse_memories_request,
@@ -275,6 +276,11 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         self.assertEqual(_infer_memory_route("how to run omnimem script"), "procedural")
         self.assertEqual(_infer_memory_route("what is memory graph"), "semantic")
         self.assertEqual(_infer_memory_route("when did we change daemon"), "episodic")
+
+    def test_normalize_broker_url(self) -> None:
+        self.assertEqual(_normalize_broker_url("broker.example.com"), "https://broker.example.com")
+        self.assertEqual(_normalize_broker_url("https://broker.example.com/"), "https://broker.example.com")
+        self.assertEqual(_normalize_broker_url(""), "")
 
     def test_quality_alerts(self) -> None:
         alerts = _quality_alerts(

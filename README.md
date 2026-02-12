@@ -317,6 +317,7 @@ GitHub quick setup in WebUI:
 - `Sign In via GitHub` starts browser auth (`gh auth login --web`) so you can authenticate without manually creating SSH keys/tokens in OM.
 - Pure OAuth path (no local `gh` required): set `OAuth Client ID`, click `Sign In via GitHub`, authorize in browser, then click `Complete OAuth Login`.
 - OAuth login now auto-polls after start; manual `Complete OAuth Login` remains available as fallback.
+- Optional `OAuth Broker URL` can offload device-flow start/poll to a lightweight service (Cloudflare/Fly/Vercel/Railway), while memory sync still stays local.
 - OAuth token is stored locally at `<OMNIMEM_HOME>/runtime/github_oauth_token.json` (outside synced markdown/jsonl data) and used for HTTPS Git sync auth via `GIT_ASKPASS`.
 - `Check GitHub Auth` uses local `gh auth status` (if `gh` is installed).
 - `Refresh Repo List` can pull account-visible repos (via `gh repo list`) and fill `owner/repo` by selection.
@@ -332,5 +333,6 @@ Nightly memory-eval workflow:
 
 - `docs/quickstart-10min.md`
 - `docs/webui-config.md`
+- `docs/oauth-broker.md`
 - `docs/publish-npm.md`
 - `docs/install-uninstall.md`

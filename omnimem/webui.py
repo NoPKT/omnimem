@@ -766,6 +766,7 @@ HTML_PAGE = """<!doctype html>
             <div class=\"small\"><b>GitHub Quick Setup</b></div>
             <label><span>Repo (owner/repo)</span><input name=\"gh_full_name\" placeholder=\"yourname/omnimem-memory\" /></label>
             <label><span>OAuth Client ID (optional)</span><input name=\"gh_oauth_client_id\" placeholder=\"Iv1.xxxxx\" /></label>
+            <label><span>OAuth Broker URL (optional)</span><input name=\"gh_oauth_broker_url\" placeholder=\"https://your-broker.example.com\" /></label>
             <label><span>Protocol</span><select name=\"gh_protocol\"><option value=\"ssh\">ssh</option><option value=\"https\">https</option></select></label>
             <label><span>Create If Missing</span><select name=\"gh_create_if_missing\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
             <label><span>Create As Private</span><select name=\"gh_private_repo\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
@@ -1978,7 +1979,7 @@ HTML_PAGE = """<!doctype html>
       const f = document.getElementById('cfgForm');
       for (const k of [
         'config_path','home','markdown','jsonl','sqlite','remote_name','remote_url','branch',
-        'gh_oauth_client_id',
+        'gh_oauth_client_id','gh_oauth_broker_url',
         'daemon_scan_interval','daemon_pull_interval',
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
@@ -2042,6 +2043,7 @@ HTML_PAGE = """<!doctype html>
       const payload = {
         protocol: f.elements['gh_protocol'].value || 'https',
         client_id: f.elements['gh_oauth_client_id'].value || '',
+        broker_url: f.elements['gh_oauth_broker_url'].value || '',
       };
       const d = await jpost('/api/github/auth/start', payload);
       out.textContent = JSON.stringify(d, null, 2);
@@ -2564,7 +2566,7 @@ HTML_PAGE = """<!doctype html>
       const payload = {};
       for (const k of [
         'home','markdown','jsonl','sqlite','remote_name','remote_url','branch',
-        'gh_oauth_client_id',
+        'gh_oauth_client_id','gh_oauth_broker_url',
         'daemon_scan_interval','daemon_pull_interval',
         'daemon_retry_max_attempts','daemon_retry_initial_backoff','daemon_retry_max_backoff',
         'daemon_maintenance_enabled','daemon_maintenance_interval','daemon_maintenance_decay_days',
@@ -4587,6 +4589,7 @@ def _cfg_to_ui(cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]:
         "remote_url": gh.get("remote_url", ""),
         "branch": gh.get("branch", "main"),
         "gh_oauth_client_id": gh.get("oauth", {}).get("client_id", "") if isinstance(gh.get("oauth"), dict) else "",
+        "gh_oauth_broker_url": gh.get("oauth", {}).get("broker_url", "") if isinstance(gh.get("oauth"), dict) else "",
         "sync_include_layers": ",".join([str(x).strip() for x in (gh.get("include_layers") or []) if str(x).strip()]),
         "sync_include_jsonl": bool(gh.get("include_jsonl", True)),
         "daemon_scan_interval": dm.get("scan_interval", 8),
@@ -4681,6 +4684,31 @@ def _github_oauth_client_id(cfg: dict[str, Any], client_id: str = "") -> str:
     return str(cfg.get("sync", {}).get("github", {}).get("oauth", {}).get("client_id", "")).strip()
 
 
+def _normalize_broker_url(raw: str) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if "://" not in s:
+        s = "https://" + s
+    try:
+        p = urlparse(s)
+    except Exception:
+        return ""
+    if p.scheme not in {"http", "https"} or not p.netloc:
+        return ""
+    return f"{p.scheme}://{p.netloc}{p.path}".rstrip("/")
+
+
+def _github_oauth_broker_url(cfg: dict[str, Any], broker_url: str = "") -> str:
+    b = _normalize_broker_url(broker_url)
+    if b:
+        return b
+    env_b = _normalize_broker_url(str(os.environ.get("OMNIMEM_GITHUB_OAUTH_BROKER_URL", "")).strip())
+    if env_b:
+        return env_b
+    return _normalize_broker_url(str(cfg.get("sync", {}).get("github", {}).get("oauth", {}).get("broker_url", "")).strip())
+
+
 def _github_oauth_token_file(cfg: dict[str, Any]) -> Path:
     oauth = cfg.get("sync", {}).get("github", {}).get("oauth", {})
     raw = str((oauth or {}).get("token_file", "")).strip() if isinstance(oauth, dict) else ""
@@ -4752,18 +4780,41 @@ def _github_api_request(
         return {"ok": False, "status": 0, "json": {}, "error": str(exc)}
 
 
+def _github_oauth_broker_request(
+    *,
+    broker_url: str,
+    action: str,
+    payload: dict[str, Any],
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    base = _normalize_broker_url(broker_url)
+    if not base:
+        return {"ok": False, "status": 0, "json": {}, "error": "invalid broker_url"}
+    path = "/v1/github/device/start" if action == "start" else "/v1/github/device/poll"
+    return _github_api_request(
+        method="POST",
+        url=f"{base}{path}",
+        json_payload=payload,
+        timeout=timeout,
+    )
+
+
 def _github_oauth_status(cfg: dict[str, Any]) -> dict[str, Any]:
     oauth = cfg.get("sync", {}).get("github", {}).get("oauth", {})
     token_obj = _read_github_oauth_token(cfg)
     token = str(token_obj.get("access_token") or "").strip()
     pending = bool(str((oauth or {}).get("device_code", "")).strip()) if isinstance(oauth, dict) else False
+    broker_url = _github_oauth_broker_url(cfg)
+    client_id = _github_oauth_client_id(cfg)
     return {
-        "configured": bool(_github_oauth_client_id(cfg)),
+        "configured": bool(client_id or broker_url),
         "authenticated": bool(token),
         "pending": pending and not bool(token),
         "token_file": str(_github_oauth_token_file(cfg)),
         "scope": str(token_obj.get("scope") or ""),
         "updated_at": str(token_obj.get("updated_at") or ""),
+        "broker_url": broker_url,
+        "mode": "broker" if broker_url else ("direct" if client_id else "none"),
     }
 
 
@@ -4917,8 +4968,54 @@ def _github_oauth_start(
     cfg: dict[str, Any],
     cfg_path: Path,
     client_id: str = "",
+    broker_url: str = "",
     scope: str = "repo",
 ) -> dict[str, Any]:
+    b_url = _github_oauth_broker_url(cfg, broker_url=broker_url)
+    if b_url:
+        req = _github_oauth_broker_request(
+            broker_url=b_url,
+            action="start",
+            payload={"scope": str(scope or "repo"), "client_id": str(client_id or "").strip()},
+            timeout=12,
+        )
+        if not bool(req.get("ok")):
+            msg = str((req.get("json") or {}).get("error") or (req.get("json") or {}).get("message") or req.get("error") or "broker start failed")
+            return {"ok": False, "error": msg[:1200]}
+        data = req.get("json") if isinstance(req.get("json"), dict) else {}
+        device_code = str(data.get("device_code") or "").strip()
+        user_code = str(data.get("user_code") or "").strip()
+        if not device_code or not user_code:
+            return {"ok": False, "error": "broker start missing device_code/user_code"}
+        interval = max(2, int(data.get("interval", 5) or 5))
+        expires_in = max(interval, int(data.get("expires_in", 900) or 900))
+        oauth = _github_oauth_cfg(cfg)
+        if str(data.get("client_id") or "").strip():
+            oauth["client_id"] = str(data.get("client_id") or "").strip()
+        oauth["broker_url"] = b_url
+        oauth["scope"] = str(scope or "repo").strip() or "repo"
+        oauth["device_code"] = device_code
+        oauth["user_code"] = user_code
+        oauth["verification_uri"] = str(data.get("verification_uri") or "https://github.com/login/device")
+        oauth["verification_uri_complete"] = str(data.get("verification_uri_complete") or "")
+        oauth["interval"] = int(interval)
+        oauth["expires_at"] = (
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        ).replace(microsecond=0).isoformat()
+        save_config(cfg_path, cfg)
+        return {
+            "ok": True,
+            "started": True,
+            "auth_method": "oauth-device",
+            "oauth_source": "broker",
+            "user_code": oauth["user_code"],
+            "verification_uri": oauth["verification_uri"],
+            "verification_uri_complete": oauth.get("verification_uri_complete", ""),
+            "interval": oauth["interval"],
+            "expires_at": oauth["expires_at"],
+            "hint": "Open verification_uri, authorize app, then click Complete OAuth Login.",
+        }
+
     cid = _github_oauth_client_id(cfg, client_id=client_id)
     if not cid:
         return {
@@ -4943,6 +5040,7 @@ def _github_oauth_start(
     expires_in = max(interval, int(data.get("expires_in", 900) or 900))
     oauth = _github_oauth_cfg(cfg)
     oauth["client_id"] = cid
+    oauth["broker_url"] = ""
     oauth["scope"] = str(scope or "repo").strip() or "repo"
     oauth["device_code"] = device_code
     oauth["user_code"] = user_code
@@ -4957,6 +5055,7 @@ def _github_oauth_start(
         "ok": True,
         "started": True,
         "auth_method": "oauth-device",
+        "oauth_source": "direct",
         "user_code": oauth["user_code"],
         "verification_uri": oauth["verification_uri"],
         "verification_uri_complete": oauth.get("verification_uri_complete", ""),
@@ -4970,19 +5069,30 @@ def _github_oauth_poll(*, cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]
     oauth = _github_oauth_cfg(cfg)
     cid = _github_oauth_client_id(cfg, client_id=str(oauth.get("client_id", "")))
     dcode = str(oauth.get("device_code") or "").strip()
+    b_url = _github_oauth_broker_url(cfg, broker_url=str(oauth.get("broker_url", "")))
     retry_after = max(2, int(oauth.get("interval", 5) or 5))
-    if not cid or not dcode:
+    if not dcode:
         return {"ok": False, "error": "oauth device flow is not started"}
-    req = _github_api_request(
-        method="POST",
-        url="https://github.com/login/oauth/access_token",
-        form={
-            "client_id": cid,
-            "device_code": dcode,
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-        },
-        timeout=15,
-    )
+    if b_url:
+        req = _github_oauth_broker_request(
+            broker_url=b_url,
+            action="poll",
+            payload={"device_code": dcode, "client_id": cid},
+            timeout=15,
+        )
+    else:
+        if not cid:
+            return {"ok": False, "error": "missing oauth client_id for direct poll"}
+        req = _github_api_request(
+            method="POST",
+            url="https://github.com/login/oauth/access_token",
+            form={
+                "client_id": cid,
+                "device_code": dcode,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+            timeout=15,
+        )
     data = req.get("json") if isinstance(req.get("json"), dict) else {}
     access_token = str((data or {}).get("access_token") or "").strip()
     if not access_token:
@@ -5015,18 +5125,27 @@ def _github_oauth_poll(*, cfg: dict[str, Any], cfg_path: Path) -> dict[str, Any]
         "ok": True,
         "authenticated": True,
         "auth_method": "oauth-device",
+        "oauth_source": "broker" if b_url else "direct",
         "token_file": str(token_path),
         "scope": str(token_payload.get("scope") or ""),
     }
 
 
-def _github_auth_start(*, cfg: dict[str, Any], cfg_path: Path, protocol: str = "https", client_id: str = "") -> dict[str, Any]:
+def _github_auth_start(
+    *,
+    cfg: dict[str, Any],
+    cfg_path: Path,
+    protocol: str = "https",
+    client_id: str = "",
+    broker_url: str = "",
+) -> dict[str, Any]:
+    b_url = _github_oauth_broker_url(cfg, broker_url=broker_url)
     cid = _github_oauth_client_id(cfg, client_id=client_id)
-    if cid:
-        return _github_oauth_start(cfg=cfg, cfg_path=cfg_path, client_id=cid, scope="repo")
+    if cid or b_url:
+        return _github_oauth_start(cfg=cfg, cfg_path=cfg_path, client_id=cid, broker_url=b_url, scope="repo")
     gh = shutil.which("gh")
     if not gh:
-        return {"ok": False, "error": "gh CLI is not installed and OAuth client_id is not configured"}
+        return {"ok": False, "error": "gh CLI is not installed and neither OAuth client_id nor broker_url is configured"}
     proto = str(protocol or "https").strip().lower()
     if proto not in {"https", "ssh"}:
         proto = "https"
@@ -7735,6 +7854,9 @@ def run_webui(
                 if not isinstance(cfg["sync"]["github"].get("oauth"), dict):
                     cfg["sync"]["github"]["oauth"] = {}
                 cfg["sync"]["github"]["oauth"]["client_id"] = str(data.get("gh_oauth_client_id", cfg["sync"]["github"]["oauth"].get("client_id", "")) or "").strip()
+                cfg["sync"]["github"]["oauth"]["broker_url"] = _normalize_broker_url(
+                    str(data.get("gh_oauth_broker_url", cfg["sync"]["github"]["oauth"].get("broker_url", "")) or "").strip()
+                )
                 if "sync_include_layers" in data:
                     raw_layers = data.get("sync_include_layers")
                     if isinstance(raw_layers, list):
@@ -7910,7 +8032,16 @@ def run_webui(
                 try:
                     protocol = str(data.get("protocol", "https") or "https").strip().lower()
                     client_id = str(data.get("client_id", "") or "").strip()
-                    self._send_json(_github_auth_start(cfg=cfg, cfg_path=cfg_path, protocol=protocol, client_id=client_id))
+                    broker_url = str(data.get("broker_url", "") or "").strip()
+                    self._send_json(
+                        _github_auth_start(
+                            cfg=cfg,
+                            cfg_path=cfg_path,
+                            protocol=protocol,
+                            client_id=client_id,
+                            broker_url=broker_url,
+                        )
+                    )
                 except Exception as exc:  # pragma: no cover
                     self._send_json({"ok": False, "error": str(exc)}, 400)
                 return
