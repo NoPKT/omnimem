@@ -800,22 +800,34 @@ HTML_PAGE = """<!doctype html>
             <div class=\"divider\"></div>
             </div>
             <div class=\"cfg-block\" data-cfg-section=\"github\">
-            <div class=\"small\"><b>GitHub Quick Setup</b></div>
-            <label><span>Repo (owner/repo)</span><input name=\"gh_full_name\" placeholder=\"yourname/omnimem-memory\" /></label>
-            <label><span>OAuth Client ID (optional)</span><input name=\"gh_oauth_client_id\" placeholder=\"Iv1.xxxxx\" /></label>
-            <label><span>OAuth Broker URL (optional)</span><input name=\"gh_oauth_broker_url\" placeholder=\"https://your-broker.example.com\" /></label>
-            <label><span>Protocol</span><select name=\"gh_protocol\"><option value=\"ssh\">ssh</option><option value=\"https\">https</option></select></label>
-            <label><span>Create If Missing</span><select name=\"gh_create_if_missing\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
-            <label><span>Create As Private</span><select name=\"gh_private_repo\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
-            <label><span>Repo Filter</span><input name=\"gh_repo_filter\" placeholder=\"keyword\" /></label>
-            <label><span>Choose Existing Repo</span><select name=\"gh_repo_picker\"><option value=\"\">(click Refresh Repo List)</option></select></label>
+            <div class=\"small\"><b data-i18n=\"ui_github_quick_setup_title\">GitHub Quick Setup</b></div>
+            <div class=\"muted-box small\" style=\"margin-top:8px\">
+              <div><b data-i18n=\"ui_github_assistant_title\">Migration & Setup Assistant</b></div>
+              <div id=\"githubGuideStatus\" class=\"small\" style=\"margin-top:6px\"></div>
+              <div id=\"githubGuideNext\" class=\"small\" style=\"margin-top:4px\"></div>
+              <div class=\"row-btn\" style=\"margin-top:8px\">
+                <button type=\"button\" id=\"btnGithubGuideRefresh\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_github_assistant_refresh\">Refresh Setup State</button>
+                <button type=\"button\" id=\"btnGithubGuideNext\" style=\"margin-top:0\" data-i18n=\"ui_github_assistant_next\">Do Next Step</button>
+              </div>
+            </div>
+            <label><span data-i18n=\"ui_github_repo_full\">Repo (owner/repo)</span><input name=\"gh_full_name\" placeholder=\"yourname/omnimem-memory\" /></label>
+            <label><span data-i18n=\"ui_github_repo_filter\">Repo Filter</span><input name=\"gh_repo_filter\" placeholder=\"keyword\" /></label>
+            <label><span data-i18n=\"ui_github_repo_picker\">Choose Existing Repo</span><select name=\"gh_repo_picker\"><option value=\"\">(click Refresh Repo List)</option></select></label>
+            <details style=\"margin-top:8px\">
+              <summary class=\"small\" data-i18n=\"ui_advanced_options\">Advanced options</summary>
+              <label><span data-i18n=\"ui_github_oauth_client_id\">OAuth Client ID (optional)</span><input name=\"gh_oauth_client_id\" placeholder=\"Iv1.xxxxx\" /></label>
+              <label><span data-i18n=\"ui_github_oauth_broker_url\">OAuth Broker URL (optional)</span><input name=\"gh_oauth_broker_url\" placeholder=\"https://your-broker.example.com\" /></label>
+              <label><span data-i18n=\"ui_github_protocol\">Protocol</span><select name=\"gh_protocol\"><option value=\"ssh\">ssh</option><option value=\"https\">https</option></select></label>
+              <label><span data-i18n=\"ui_github_create_if_missing\">Create If Missing</span><select name=\"gh_create_if_missing\"><option value=\"false\">false</option><option value=\"true\">true</option></select></label>
+              <label><span data-i18n=\"ui_github_private_repo\">Create As Private</span><select name=\"gh_private_repo\"><option value=\"true\">true</option><option value=\"false\">false</option></select></label>
+            </details>
             <div class=\"row-btn\">
-              <button type=\"button\" id=\"btnGithubAuthStart\">Sign In via GitHub</button>
-              <button type=\"button\" id=\"btnGithubAuthPoll\">Complete OAuth Login</button>
-              <button type=\"button\" id=\"btnGithubStatus\">Check GitHub Auth</button>
-              <button type=\"button\" id=\"btnGithubRepos\">Refresh Repo List</button>
-              <button type=\"button\" id=\"btnGithubUseSelected\">Use Selected Repo</button>
-              <button type=\"button\" id=\"btnGithubQuickSetup\">Apply GitHub Setup</button>
+              <button type=\"button\" id=\"btnGithubAuthStart\" data-i18n=\"ui_github_signin\">Sign In via GitHub</button>
+              <button type=\"button\" id=\"btnGithubAuthPoll\" data-i18n=\"ui_github_complete_oauth\">Complete OAuth Login</button>
+              <button type=\"button\" id=\"btnGithubStatus\" data-i18n=\"ui_github_check_auth\">Check GitHub Auth</button>
+              <button type=\"button\" id=\"btnGithubRepos\" data-i18n=\"ui_github_refresh_repos\">Refresh Repo List</button>
+              <button type=\"button\" id=\"btnGithubUseSelected\" data-i18n=\"ui_github_use_selected\">Use Selected Repo</button>
+              <button type=\"button\" id=\"btnGithubQuickSetup\" data-i18n=\"ui_github_apply_setup\">Apply GitHub Setup</button>
             </div>
             <pre id=\"githubQuickOut\" class=\"small\"></pre>
             <div class=\"divider\"></div>
@@ -1191,7 +1203,26 @@ HTML_PAGE = """<!doctype html>
         th_actions: 'Actions', btn_use: 'Use', btn_detach: 'Detach',
         init_ok: 'Config state: initialized', init_hint_ok: 'Daemon runs quasi-realtime sync in background (can be disabled).',
         init_missing: 'Config state: not initialized (save configuration first)', init_hint_missing: 'Daemon is disabled until configuration is initialized.',
-        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
+        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup'
       },
       zh: {
         title: 'OmniMem 网页控制台', subtitle_simple: '简洁模式：状态与动作 / 洞察 / 记忆', subtitle_adv: '高级模式：完整控制台', language: '语言',
@@ -1219,7 +1250,26 @@ HTML_PAGE = """<!doctype html>
         th_actions: '操作', btn_use: '使用', btn_detach: '解除',
         init_ok: '配置状态：已初始化', init_hint_ok: '后台守护进程会自动准实时同步（可关闭）。',
         init_missing: '配置状态：未初始化（请先保存配置）', init_hint_missing: '未初始化前不会启动守护进程。',
-        daemon_state: (d) => `守护进程：${d.running ? '运行中' : '已停止'}，启用=${d.enabled}，初始化=${d.initialized}`
+        daemon_state: (d) => `守护进程：${d.running ? '运行中' : '已停止'}，启用=${d.enabled}，初始化=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub 快速配置',
+        ui_github_assistant_title: '迁移与配置助手',
+        ui_github_assistant_refresh: '刷新配置状态',
+        ui_github_assistant_next: '执行下一步',
+        ui_advanced_options: '高级选项',
+        ui_github_repo_full: '仓库（owner/repo）',
+        ui_github_repo_filter: '仓库过滤',
+        ui_github_repo_picker: '选择已有仓库',
+        ui_github_oauth_client_id: 'OAuth Client ID（可选）',
+        ui_github_oauth_broker_url: 'OAuth Broker URL（可选）',
+        ui_github_protocol: '协议',
+        ui_github_create_if_missing: '不存在则创建',
+        ui_github_private_repo: '创建为私有仓库',
+        ui_github_signin: '通过 GitHub 登录',
+        ui_github_complete_oauth: '完成 OAuth 登录',
+        ui_github_check_auth: '检查 GitHub 认证',
+        ui_github_refresh_repos: '刷新仓库列表',
+        ui_github_use_selected: '使用所选仓库',
+        ui_github_apply_setup: '应用 GitHub 配置'
       },
       ja: {
         title: 'OmniMem WebUI', subtitle: 'シンプルモード：状態と操作 / 設定 / メモリ', language: '言語',
@@ -1245,7 +1295,26 @@ HTML_PAGE = """<!doctype html>
         cfg_saved: '設定を保存しました', cfg_failed: '保存に失敗しました',
         init_ok: '設定状態：初期化済み', init_hint_ok: 'デーモンがバックグラウンドで準リアルタイム同期します。',
         init_missing: '設定状態：未初期化（先に保存してください）', init_hint_missing: '初期化されるまでデーモンは無効です。',
-        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
+        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup'
       },
       de: {
         title: 'OmniMem WebUI', subtitle: 'Einfachmodus: Status & Aktionen / Konfiguration / Speicher', language: 'Sprache',
@@ -1271,7 +1340,26 @@ HTML_PAGE = """<!doctype html>
         cfg_saved: 'Konfiguration gespeichert', cfg_failed: 'Speichern fehlgeschlagen',
         init_ok: 'Konfigurationsstatus: initialisiert', init_hint_ok: 'Daemon synchronisiert quasi in Echtzeit im Hintergrund.',
         init_missing: 'Konfigurationsstatus: nicht initialisiert', init_hint_missing: 'Daemon ist deaktiviert, bis gespeichert wird.',
-        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
+        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup'
       },
       fr: {
         title: 'OmniMem WebUI', subtitle: 'Mode simple : État et actions / Configuration / Mémoire', language: 'Langue',
@@ -1297,7 +1385,26 @@ HTML_PAGE = """<!doctype html>
         cfg_saved: 'Configuration enregistrée', cfg_failed: "Échec de l'enregistrement",
         init_ok: 'État config : initialisée', init_hint_ok: 'Le daemon synchronise en quasi temps réel.',
         init_missing: 'État config : non initialisée', init_hint_missing: 'Le daemon reste désactivé avant initialisation.',
-        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
+        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup'
       },
       ru: {
         title: 'OmniMem WebUI', subtitle: 'Простой режим: статус и действия / конфигурация / память', language: 'Язык',
@@ -1323,7 +1430,26 @@ HTML_PAGE = """<!doctype html>
         cfg_saved: 'Конфигурация сохранена', cfg_failed: 'Ошибка сохранения',
         init_ok: 'Состояние конфига: инициализировано', init_hint_ok: 'Daemon выполняет квази-реальную синхронизацию.',
         init_missing: 'Состояние конфига: не инициализировано', init_hint_missing: 'Daemon отключён до инициализации.',
-        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
+        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup'
       },
       it: {
         title: 'OmniMem WebUI', subtitle: 'Modalità semplice: stato e azioni / configurazione / memoria', language: 'Lingua',
@@ -1349,7 +1475,26 @@ HTML_PAGE = """<!doctype html>
         cfg_saved: 'Configurazione salvata', cfg_failed: 'Salvataggio fallito',
         init_ok: 'Stato config: inizializzata', init_hint_ok: 'Daemon sincronizza quasi in tempo reale.',
         init_missing: 'Stato config: non inizializzata', init_hint_missing: "Daemon disabilitato fino all'inizializzazione.",
-        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
+        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup'
       },
       ko: {
         title: 'OmniMem WebUI', subtitle: '간단 모드: 상태/작업 · 설정 · 메모리', language: '언어',
@@ -1375,7 +1520,26 @@ HTML_PAGE = """<!doctype html>
         cfg_saved: '설정이 저장되었습니다', cfg_failed: '저장 실패',
         init_ok: '설정 상태: 초기화됨', init_hint_ok: '데몬이 백그라운드에서 준실시간 동기화합니다.',
         init_missing: '설정 상태: 미초기화', init_hint_missing: '초기화 전에는 데몬이 비활성화됩니다.',
-        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`
+        daemon_state: (d) => `Daemon: ${d.running ? 'running' : 'stopped'}, enabled=${d.enabled}, initialized=${d.initialized}`,
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup'
       }
     };
 
@@ -1445,6 +1609,32 @@ HTML_PAGE = """<!doctype html>
         ui_cfg_section_github_summary: 'GitHub: OAuth sign-in, repo selection, and quick setup.',
         ui_cfg_section_daemon_summary: 'Daemon & Maintenance: background sync and maintenance controls.',
         ui_cfg_section_all_summary: 'All configuration sections visible.',
+        ui_github_quick_setup_title: 'GitHub Quick Setup',
+        ui_github_assistant_title: 'Migration & Setup Assistant',
+        ui_github_assistant_refresh: 'Refresh Setup State',
+        ui_github_assistant_next: 'Do Next Step',
+        ui_github_assistant_done: 'Setup Complete',
+        ui_advanced_options: 'Advanced options',
+        ui_github_repo_full: 'Repo (owner/repo)',
+        ui_github_repo_filter: 'Repo Filter',
+        ui_github_repo_picker: 'Choose Existing Repo',
+        ui_github_oauth_client_id: 'OAuth Client ID (optional)',
+        ui_github_oauth_broker_url: 'OAuth Broker URL (optional)',
+        ui_github_protocol: 'Protocol',
+        ui_github_create_if_missing: 'Create If Missing',
+        ui_github_private_repo: 'Create As Private',
+        ui_github_signin: 'Sign In via GitHub',
+        ui_github_complete_oauth: 'Complete OAuth Login',
+        ui_github_check_auth: 'Check GitHub Auth',
+        ui_github_refresh_repos: 'Refresh Repo List',
+        ui_github_use_selected: 'Use Selected Repo',
+        ui_github_apply_setup: 'Apply GitHub Setup',
+        ui_github_setup_next_save: 'Save configuration first to initialize this install.',
+        ui_github_setup_next_oauth: 'Sign in with GitHub OAuth next.',
+        ui_github_setup_next_poll: 'Complete OAuth polling to finish authentication.',
+        ui_github_setup_next_repo: 'Load repo list and select a repository next.',
+        ui_github_setup_next_apply: 'Apply GitHub setup to write remote URL and branch.',
+        ui_github_setup_next_done: 'GitHub setup is complete.',
       },
       zh: {
         tip_auto_prefix: '说明：',
@@ -1511,6 +1701,32 @@ HTML_PAGE = """<!doctype html>
         ui_cfg_section_github_summary: 'GitHub：OAuth 登录、仓库选择与快速配置。',
         ui_cfg_section_daemon_summary: '守护与维护：后台同步和维护控制。',
         ui_cfg_section_all_summary: '显示全部配置区块。',
+        ui_github_quick_setup_title: 'GitHub 快速配置',
+        ui_github_assistant_title: '迁移与配置助手',
+        ui_github_assistant_refresh: '刷新配置状态',
+        ui_github_assistant_next: '执行下一步',
+        ui_github_assistant_done: '配置已完成',
+        ui_advanced_options: '高级选项',
+        ui_github_repo_full: '仓库（owner/repo）',
+        ui_github_repo_filter: '仓库过滤',
+        ui_github_repo_picker: '选择已有仓库',
+        ui_github_oauth_client_id: 'OAuth Client ID（可选）',
+        ui_github_oauth_broker_url: 'OAuth Broker URL（可选）',
+        ui_github_protocol: '协议',
+        ui_github_create_if_missing: '不存在则创建',
+        ui_github_private_repo: '创建为私有仓库',
+        ui_github_signin: '通过 GitHub 登录',
+        ui_github_complete_oauth: '完成 OAuth 登录',
+        ui_github_check_auth: '检查 GitHub 认证',
+        ui_github_refresh_repos: '刷新仓库列表',
+        ui_github_use_selected: '使用所选仓库',
+        ui_github_apply_setup: '应用 GitHub 配置',
+        ui_github_setup_next_save: '请先保存配置以初始化当前安装。',
+        ui_github_setup_next_oauth: '下一步先完成 GitHub OAuth 登录。',
+        ui_github_setup_next_poll: '继续完成 OAuth 轮询以完成认证。',
+        ui_github_setup_next_repo: '下一步加载仓库列表并选择目标仓库。',
+        ui_github_setup_next_apply: '下一步应用 GitHub 配置写入远端与分支。',
+        ui_github_setup_next_done: 'GitHub 配置已完成。',
       },
       ja: {
         tip_auto_prefix: 'ヒント: ',
@@ -2108,6 +2324,8 @@ HTML_PAGE = """<!doctype html>
       let insightsSection = 'overview';
       let configSection = 'core';
       let dangerResolve = null;
+      let githubSetupPlan = null;
+      let githubGuidePrompted = false;
 
     function t(key) {
       const dict = I18N[currentLang] || I18N.en;
@@ -2946,13 +3164,104 @@ HTML_PAGE = """<!doctype html>
         f.elements[k].value = (typeof v === 'boolean') ? String(v) : (v ?? '');
       }
       renderInitState(Boolean(d.initialized));
+      await loadGithubSetupPlan();
     }
 
     async function checkGithubStatus() {
       const out = document.getElementById('githubQuickOut');
       const d = await jget('/api/github/status');
       out.textContent = JSON.stringify(d, null, 2);
+      await loadGithubSetupPlan();
       return d;
+    }
+
+    function renderGithubSetupPlan(plan) {
+      const sEl = document.getElementById('githubGuideStatus');
+      const nEl = document.getElementById('githubGuideNext');
+      const bNext = document.getElementById('btnGithubGuideNext');
+      if (!sEl || !nEl || !bNext) return;
+      if (!plan || !plan.ok) {
+        sEl.innerHTML = `<span class="err">${escHtml((plan && plan.error) || 'setup plan unavailable')}</span>`;
+        nEl.textContent = '';
+        bNext.disabled = true;
+        return;
+      }
+      const st = (plan.status && typeof plan.status === 'object') ? plan.status : {};
+      sEl.innerHTML = [
+        `<span class="pill"><b>init</b><span>${st.initialized ? 'ok' : 'pending'}</span></span>`,
+        `<span class="pill"><b>auth</b><span>${st.authenticated ? 'ok' : 'pending'}</span></span>`,
+        `<span class="pill"><b>remote</b><span>${st.remote_configured ? 'ok' : 'pending'}</span></span>`,
+        `<span class="pill"><b>broker</b><span>${st.broker_configured ? 'set' : 'none'}</span></span>`
+      ].join(' ');
+      const nextMap = {
+        save_config: t('ui_github_setup_next_save'),
+        oauth_start: t('ui_github_setup_next_oauth'),
+        oauth_poll: t('ui_github_setup_next_poll'),
+        repos_load: t('ui_github_setup_next_repo'),
+        apply_setup: t('ui_github_setup_next_apply'),
+        done: t('ui_github_setup_next_done'),
+      };
+      nEl.textContent = String(nextMap[String(plan.next_action || '')] || plan.next_hint || '');
+      const done = String(plan.next_action || '') === 'done';
+      bNext.textContent = done ? t('ui_github_assistant_done') : t('ui_github_assistant_next');
+      bNext.disabled = false;
+      if (!githubGuidePrompted && plan.migration_recommended) {
+        githubGuidePrompted = true;
+        setActiveTab('configTab');
+        setConfigSection('github');
+        toast('GitHub', 'Detected previous install; setup assistant opened.', true);
+      }
+    }
+
+    async function loadGithubSetupPlan() {
+      const d = await jget('/api/github/setup-plan');
+      githubSetupPlan = d;
+      renderGithubSetupPlan(d);
+      return d;
+    }
+
+    async function runGithubSetupNext() {
+      const plan = githubSetupPlan || (await loadGithubSetupPlan());
+      if (!plan || !plan.ok) return;
+      const action = String(plan.next_action || '');
+      if (!action || action === 'done') {
+        toast('GitHub', t('ui_github_setup_next_done'), true);
+        return;
+      }
+      if (action === 'save_config') {
+        const f = document.getElementById('cfgForm');
+        if (f) f.requestSubmit();
+        await loadGithubSetupPlan();
+        return;
+      }
+      if (action === 'oauth_start') {
+        await githubAuthStart();
+        await loadGithubSetupPlan();
+        return;
+      }
+      if (action === 'oauth_poll') {
+        await githubAuthPoll();
+        await loadGithubSetupPlan();
+        return;
+      }
+      if (action === 'repos_load') {
+        const f = document.getElementById('cfgForm');
+        const full = String(f?.elements?.['gh_full_name']?.value || '').trim();
+        if (full) {
+          await githubQuickSetup();
+        } else {
+          await loadGithubRepos();
+        }
+        await loadGithubSetupPlan();
+        return;
+      }
+      if (action === 'apply_setup') {
+        useSelectedGithubRepo();
+        await githubQuickSetup();
+        await loadGithubSetupPlan();
+        return;
+      }
+      await loadGithubSetupPlan();
     }
 
     function stopGithubOAuthAutoPoll() {
@@ -3543,6 +3852,8 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('btnGithubRepos').onclick = async () => { await loadGithubRepos(); };
     document.getElementById('btnGithubUseSelected').onclick = () => { useSelectedGithubRepo(); };
     document.getElementById('btnGithubQuickSetup').onclick = async () => { await githubQuickSetup(); };
+    document.getElementById('btnGithubGuideRefresh').onclick = async () => { await loadGithubSetupPlan(); };
+    document.getElementById('btnGithubGuideNext').onclick = async () => { await runGithubSetupNext(); };
 
     async function runSync(mode) {
       const d = await jpost('/api/sync', {mode});
@@ -5994,6 +6305,100 @@ def _github_repo_list(*, cfg: dict[str, Any] | None = None, query: str = "", lim
         return {"ok": True, "installed": True, "authenticated": False, "items": [], "error": str(exc)}
 
 
+def _github_setup_plan(*, cfg: dict[str, Any], initialized: bool) -> dict[str, Any]:
+    gh = cfg.get("sync", {}).get("github", {}) if isinstance(cfg, dict) else {}
+    oauth = gh.get("oauth", {}) if isinstance(gh, dict) else {}
+    status = _github_status(cfg)
+    oauth_status = status.get("oauth", {}) if isinstance(status.get("oauth"), dict) else {}
+    has_remote = bool(str(gh.get("remote_url", "") or "").strip()) if isinstance(gh, dict) else False
+    has_client_id = bool(str(oauth.get("client_id", "") or "").strip()) if isinstance(oauth, dict) else False
+    has_broker = bool(str(oauth.get("broker_url", "") or "").strip()) if isinstance(oauth, dict) else False
+    pending = bool(oauth_status.get("pending", False))
+    authenticated = bool(status.get("authenticated", False))
+    full_name_hint = str(gh.get("remote_url", "") or "").strip()
+    migration_recommended = bool(initialized and has_remote and not authenticated and not has_client_id and not has_broker)
+
+    if not initialized:
+        return {
+            "ok": True,
+            "next_action": "save_config",
+            "next_hint": "Save configuration first to initialize this install.",
+            "migration_recommended": False,
+            "status": {
+                "initialized": False,
+                "authenticated": authenticated,
+                "remote_configured": has_remote,
+                "broker_configured": has_broker,
+                "client_id_configured": has_client_id,
+                "oauth_pending": pending,
+                "remote_url": full_name_hint,
+            },
+        }
+    if pending:
+        return {
+            "ok": True,
+            "next_action": "oauth_poll",
+            "next_hint": "Complete OAuth polling to finish authentication.",
+            "migration_recommended": migration_recommended,
+            "status": {
+                "initialized": True,
+                "authenticated": authenticated,
+                "remote_configured": has_remote,
+                "broker_configured": has_broker,
+                "client_id_configured": has_client_id,
+                "oauth_pending": True,
+                "remote_url": full_name_hint,
+            },
+        }
+    if not authenticated:
+        return {
+            "ok": True,
+            "next_action": "oauth_start",
+            "next_hint": "Sign in with GitHub OAuth next.",
+            "migration_recommended": migration_recommended,
+            "status": {
+                "initialized": True,
+                "authenticated": False,
+                "remote_configured": has_remote,
+                "broker_configured": has_broker,
+                "client_id_configured": has_client_id,
+                "oauth_pending": False,
+                "remote_url": full_name_hint,
+            },
+        }
+    if not has_remote:
+        return {
+            "ok": True,
+            "next_action": "repos_load",
+            "next_hint": "Load repo list and select a repository next.",
+            "migration_recommended": False,
+            "status": {
+                "initialized": True,
+                "authenticated": True,
+                "remote_configured": False,
+                "broker_configured": has_broker,
+                "client_id_configured": has_client_id,
+                "oauth_pending": False,
+                "remote_url": "",
+            },
+        }
+    return {
+        "ok": True,
+        "next_action": "done",
+        "next_hint": "GitHub setup is complete.",
+        "migration_recommended": False,
+        "status": {
+            "initialized": True,
+            "authenticated": True,
+            "remote_configured": True,
+            "broker_configured": has_broker,
+            "client_id_configured": has_client_id,
+            "oauth_pending": False,
+            "remote_url": full_name_hint,
+        },
+    }
+
+
 def _github_oauth_start(
     *,
     cfg: dict[str, Any],
@@ -7762,6 +8167,10 @@ def run_webui(
 
             if parsed.path == "/api/github/status":
                 self._send_json(_github_status(cfg))
+                return
+
+            if parsed.path == "/api/github/setup-plan":
+                self._send_json(_github_setup_plan(cfg=cfg, initialized=bool(cfg_path.exists())))
                 return
 
             if parsed.path == "/api/github/repos":
