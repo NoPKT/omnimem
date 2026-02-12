@@ -1,64 +1,77 @@
-# 可选 GitHub OAuth Broker（中文）
+# 可选 GitHub OAuth Broker
 
-> English: [oauth-broker.md](oauth-broker.md)
+English: [oauth-broker.md](oauth-broker.md)
 
-仅用于简化 GitHub 登录流程，不参与记忆数据同步链路。
+该能力仅用于简化 GitHub OAuth 登录体验，不在记忆同步数据链路中。
 
-## 为什么需要
+## 最低步骤（推荐）
 
-- 无 broker：每台机器都要本地 `gh` 登录或手动准备 OAuth client id
-- 有 broker：WebUI 可经统一端点发起/轮询设备流登录
-- 同步仍在本地执行（`github-pull` / `github-push`）
+1. 先部署 broker（平台一键入口或 CLI）。
+2. 拿到 broker URL（例如：`https://xxx.workers.dev`）。
+3. 在 WebUI `Configuration` 中：
+   - 填 `OAuth Broker URL`
+   - 点击 `Sign In via GitHub`
 
-## 快速开始（自动化）
+记忆同步仍是用户机器上的本地 Git 操作。
+
+## 平台一键部署入口
+
+- Cloudflare Worker：
+  - `https://deploy.workers.cloudflare.com/?url=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/cloudflare-worker`
+- Vercel：
+  - `https://vercel.com/new/clone?repository-url=https://github.com/NoPKT/omnimem&root-directory=examples%2Foauth-broker%2Fvercel&project-name=omnimem-oauth-broker`
+- Railway：
+  - `https://railway.app/new/template?template=https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/railway`
+- Fly.io 模板参考：
+  - `https://github.com/NoPKT/omnimem/tree/main/examples/oauth-broker/fly`
+
+## CLI 兜底（可复现）
 
 ```bash
-# 初始化模板
-omnimem oauth-broker init --provider cloudflare --dir ./oauth-broker-cloudflare --client-id Iv1.your_client_id
+# 环境自检
+omnimem oauth-broker doctor
 
-# 预览部署命令
-omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare
+# 一条命令自动流水线（doctor + init + deploy 预览）
+omnimem oauth-broker auto
 
 # 执行部署
-omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare --apply
-```
-
-向导模式：
-
-```bash
-omnimem oauth-broker wizard
-```
-
-自检：
-
-```bash
-omnimem oauth-broker doctor
-```
-
-自动流水线：
-
-```bash
-omnimem oauth-broker auto
 omnimem oauth-broker auto --apply
+```
+
+手动指定 provider 示例：
+
+```bash
+omnimem oauth-broker init --provider cloudflare --dir ./oauth-broker-cloudflare --client-id Iv1.your_client_id
+omnimem oauth-broker deploy --provider cloudflare --dir ./oauth-broker-cloudflare --apply
 ```
 
 ## 启动自动引导联动
 
-`omnimem start` / `omnimem webui` 在缺少 sync/auth 配置时会触发引导。
+当检测到 sync/auth 配置缺失时，`omnimem start` 与 `omnimem webui` 可触发启动引导并执行 OAuth broker 配置流程。
 
-- 若已满足条件（provider 已登录 + client id 可用），可无提示自动执行
-- 缺 client id 时可在启动流程内一次性补齐
-- provider 未登录时可直接执行登录命令再继续
-- 若部署输出中识别到 URL，可自动写入 `sync.github.oauth.broker_url`
-
-可关闭引导：
+如需关闭：
 
 - `--no-startup-guide`
 - `OMNIMEM_STARTUP_GUIDE=0`
 
-## 安全边界
+## 安全边界（重要）
 
-- broker 只代理 OAuth 设备流
-- broker 不读写 OmniMem 记忆数据
-- broker 不长期保存 token
-- token 仍由 OmniMem 本地 runtime 持久化
+- broker 仅代理 GitHub OAuth 设备流（`start/poll`）。
+- broker 不应读写 OmniMem 记忆数据。
+- broker 不应长期持久化 access token。
+- 本地 token 文件仍在 `<OMNIMEM_HOME>/runtime/github_oauth_token.json`。
+
+## 最小 API 合约
+
+- `POST /v1/github/device/start`
+  - 请求：`{ "scope": "repo", "client_id": "optional" }`
+  - 返回：`{ "ok": true, "device_code": "...", "user_code": "...", "verification_uri": "...", "interval": 5, "expires_in": 900 }`
+- `POST /v1/github/device/poll`
+  - 请求：`{ "device_code": "...", "client_id": "optional" }`
+  - 等待中：`{ "ok": true, "pending": true, "retry_after": 5 }`
+  - 成功：`{ "ok": true, "access_token": "...", "token_type": "bearer", "scope": "repo" }`
+
+## 参考
+
+- 模板目录：`examples/oauth-broker/`
+- Cloudflare worker 示例：`examples/oauth-broker/cloudflare-worker/cloudflare-worker.js`
