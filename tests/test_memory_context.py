@@ -102,6 +102,62 @@ class MemoryContextTest(unittest.TestCase):
             self.assertGreaterEqual(int(out2.get("delta_seen_count", 0)), int(out1.get("selected_count", 0)))
             self.assertGreaterEqual(int(out2.get("selected_count", 0)), int(out1.get("selected_count", 0)))
 
+    def test_stable_prefix_default_and_runtime_stamp_toggle(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="om-mctx.stable.") as d:
+            root = Path(d)
+            brief = {"checkpoints": []}
+            candidates = [
+                {
+                    "id": "m1",
+                    "layer": "short",
+                    "kind": "note",
+                    "summary": "context stable prefix check",
+                    "updated_at": "2026-02-12T00:00:00+00:00",
+                }
+            ]
+            a = build_budgeted_memory_context(
+                paths_root=root,
+                state_key="s1",
+                project_id="OM",
+                workspace_name="repo",
+                user_prompt="check prefix",
+                brief=brief,
+                candidates=candidates,
+                budget_tokens=220,
+                include_protocol=False,
+                include_runtime_timestamp=False,
+            )
+            b = build_budgeted_memory_context(
+                paths_root=root,
+                state_key="s2",
+                project_id="OM",
+                workspace_name="repo",
+                user_prompt="check prefix",
+                brief=brief,
+                candidates=candidates,
+                budget_tokens=220,
+                include_protocol=False,
+                include_runtime_timestamp=False,
+            )
+            self.assertEqual(str(a.get("text", "")).splitlines()[0], "OmniMem: OM (repo)")
+            self.assertEqual(str(a.get("text", "")), str(b.get("text", "")))
+            self.assertTrue(bool(a.get("stable_prefix")))
+
+            c = build_budgeted_memory_context(
+                paths_root=root,
+                state_key="s3",
+                project_id="OM",
+                workspace_name="repo",
+                user_prompt="check prefix",
+                brief=brief,
+                candidates=candidates,
+                budget_tokens=220,
+                include_protocol=False,
+                include_runtime_timestamp=True,
+            )
+            self.assertTrue(str(c.get("text", "")).splitlines()[0].startswith("OmniMem: OM (repo) "))
+            self.assertFalse(bool(c.get("stable_prefix")))
+
 
 if __name__ == "__main__":
     unittest.main()

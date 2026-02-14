@@ -78,6 +78,8 @@ omnimem start
 ```bash
 omnimem codex
 omnimem claude
+omnimem codex --context-profile low_quota --quota-mode critical --show-context-plan
+omnimem context-plan --prompt "summarize architecture and risks" --context-profile balanced --quota-mode auto
 ```
 
 Troubleshooting:

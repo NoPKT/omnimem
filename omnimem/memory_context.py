@@ -100,6 +100,7 @@ def build_budgeted_memory_context(
     core_budget_ratio: float = 0.68,
     max_checkpoints: int = 3,
     max_memories: int = 8,
+    include_runtime_timestamp: bool = False,
 ) -> dict[str, Any]:
     budget = max(120, int(budget_tokens))
     core_budget = max(60, min(budget, int(budget * max(0.35, min(0.9, float(core_budget_ratio))))))
@@ -109,8 +110,11 @@ def build_budgeted_memory_context(
     carry_ids = [str(x).strip() for x in (st.get("carry") or []) if str(x).strip()]
 
     lines: list[str] = []
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    lines.append(f"OmniMem: {project_id} ({workspace_name}) {now}")
+    if include_runtime_timestamp:
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        lines.append(f"OmniMem: {project_id} ({workspace_name}) {now}")
+    else:
+        lines.append(f"OmniMem: {project_id} ({workspace_name})")
     lines.append("")
     if include_protocol:
         lines.extend(
@@ -256,4 +260,5 @@ def build_budgeted_memory_context(
         "delta_seen_count": len(delta_seen),
         "carry_queued_count": len(not_selected),
         "core_budget_tokens": core_budget,
+        "stable_prefix": not bool(include_runtime_timestamp),
     }

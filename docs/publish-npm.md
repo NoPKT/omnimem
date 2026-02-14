@@ -36,6 +36,18 @@ NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 2. Login: `npm login`
 3. Publish: `npm publish --access public`
 
+## 2.5) Watch GitHub CI After Push
+
+After you push commit/tag, watch Actions until completion:
+
+```bash
+npm run ci:watch
+# optional filters
+bash scripts/ci_watch.sh --workflow ci.yml --branch main --max-wait-min 45
+```
+
+If CI fails, fix and push again before publish.
+
 ## 3) Post-publish Verify
 
 ```bash

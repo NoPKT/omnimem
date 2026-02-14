@@ -119,10 +119,29 @@ class WebUIDiagnosticsTest(unittest.TestCase):
     def test_parse_memories_request_defaults(self) -> None:
         req = _parse_memories_request({})
         self.assertEqual(int(req.get("limit", 0)), 20)
+        self.assertEqual(int(req.get("offset", -1)), 0)
         self.assertEqual(str(req.get("mode") or ""), "basic")
         self.assertEqual(str(req.get("route") or ""), "general")
+        self.assertEqual(str(req.get("sort_mode") or ""), "server")
         self.assertTrue(bool(req.get("profile_aware")))
         self.assertTrue(bool(req.get("include_core_blocks")))
+        self.assertTrue(bool(req.get("include_preview")))
+
+    def test_parse_memories_request_include_preview_toggle(self) -> None:
+        req = _parse_memories_request({"include_preview": ["0"]})
+        self.assertFalse(bool(req.get("include_preview")))
+
+    def test_parse_memories_request_sort_mode_guard(self) -> None:
+        req = _parse_memories_request({"sort_mode": ["updated_desc"]})
+        self.assertEqual(str(req.get("sort_mode") or ""), "updated_desc")
+        req2 = _parse_memories_request({"sort_mode": ["bad"]})
+        self.assertEqual(str(req2.get("sort_mode") or ""), "server")
+
+    def test_parse_memories_request_offset_bounds(self) -> None:
+        req = _parse_memories_request({"offset": ["-5"]})
+        self.assertEqual(int(req.get("offset", -1)), 0)
+        req2 = _parse_memories_request({"offset": ["99999"]})
+        self.assertEqual(int(req2.get("offset", -1)), 10000)
 
     def test_build_smart_memories_cache_key_normalizes_ranking_mode(self) -> None:
         req = _parse_memories_request(
@@ -138,6 +157,20 @@ class WebUIDiagnosticsTest(unittest.TestCase):
         key = _build_smart_memories_cache_key(req)
         self.assertEqual(key[5], "hybrid")
         self.assertEqual(key[8], 8)
+
+    def test_build_smart_memories_cache_key_caps_limit_at_200(self) -> None:
+        req = _parse_memories_request(
+            {
+                "mode": ["smart"],
+                "query": ["alpha"],
+                "project_id": ["OM"],
+                "session_id": ["s1"],
+                "ranking_mode": ["hybrid"],
+                "limit": ["9999"],
+            }
+        )
+        key = _build_smart_memories_cache_key(req)
+        self.assertEqual(key[8], 200)
 
     def test_process_memories_items_filters_route_and_dedup(self) -> None:
         items = [

@@ -36,6 +36,18 @@ NPM_CONFIG_CACHE=./.npm-cache npm pack --dry-run
 2. 登录：`npm login`
 3. 发布：`npm publish --access public`
 
+## 2.5) Push 后观察 GitHub CI
+
+推送 commit/tag 后，持续观察 Actions 直到完成：
+
+```bash
+npm run ci:watch
+# 可选筛选
+bash scripts/ci_watch.sh --workflow ci.yml --branch main --max-wait-min 45
+```
+
+若 CI 失败，先修复并重新推送，再继续发布。
+
 ## 3) 发布后验证
 
 ```bash

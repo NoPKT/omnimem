@@ -405,6 +405,20 @@ HTML_PAGE = """<!doctype html>
 	    .mem-card.selected { border-color: rgba(14,165,233,.55); box-shadow: 0 0 0 4px rgba(14,165,233,.14), 0 18px 36px rgba(11,18,32,.08); }
 	    .mem-card-title { font-size: 13px; color: var(--ink); font-weight: 650; letter-spacing: .1px; }
 	    .mem-card-sub { margin-top: 6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+      .mem-preview {
+        margin-top: 6px;
+        padding: 6px 8px;
+        border: 1px dashed var(--line);
+        border-radius: var(--r12);
+        background: rgba(255,255,255,.58);
+        color: #344155;
+        line-height: 1.35;
+        display: -webkit-box;
+        -webkit-line-clamp: 4;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-word;
+      }
 	    .drop-hot { outline: 2px dashed rgba(14,165,233,.55); outline-offset: 3px; }
 
 	    @media (max-width: 1024px) {
@@ -553,6 +567,37 @@ HTML_PAGE = """<!doctype html>
             <button id=\"btnGuideRun\" class=\"secondary\">Run Guided Check</button>
           </div>
           <pre id=\"guideOut\" class=\"small\">1) Run Health Check\n2) Open Insights and preview Auto Maintenance\n3) Apply only after checking recommendations</pre>
+        </div>
+        <div class=\"card\">
+          <h3 data-i18n="ui_sync_setup_title">Memory Sync & OAuth</h3>
+          <div class=\"small card-lead\" data-i18n="ui_sync_setup_lead">Current memory repository/OAuth setup state. Reconfigure directly from here in simple mode.</div>
+          <div id=\"statusSyncState\" style=\"margin-top:6px\"></div>
+          <div id=\"statusSyncNext\" class=\"small\" style=\"margin-top:6px\"></div>
+          <div id=\"statusSyncExplain\" class=\"small\" style=\"margin-top:4px\"></div>
+          <div class=\"row-btn\" style=\"margin-top:8px\">
+            <button id=\"btnStatusSyncRefresh\" class=\"secondary\" style=\"margin-top:0\" data-i18n="ui_sync_setup_refresh">Refresh Setup State</button>
+            <button id=\"btnStatusSyncNext\" style=\"margin-top:0\" data-i18n="ui_sync_setup_next">Do Next Step</button>
+            <button id=\"btnStatusSyncOpenConfig\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_open_oauth_repo_setup\">Open OAuth/Repo Setup</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3 data-i18n="ui_ctx_runtime_title">Context Runtime</h3>
+          <div class="small card-lead" data-i18n="ui_ctx_runtime_lead">Recent agent runs: context utilization, transient failures, and output-token footprint.</div>
+          <div class="row-btn" style="margin-top:8px">
+            <label style="margin-top:0"><span data-i18n="ui_ctx_runtime_tool_label">Tool</span>
+              <select id="ctxRuntimeTool" class="lang" style="max-width:180px">
+                <option value="">(all)</option>
+                <option value="codex">codex</option>
+                <option value="claude">claude</option>
+              </select>
+            </label>
+          </div>
+          <div id="ctxRuntimeStats" class="small mono"></div>
+          <div id="ctxRuntimeHint" class="small" style="margin-top:6px"></div>
+          <div id="ctxRuntimeReco" class="small" style="margin-top:6px"></div>
+          <div class="row-btn" style="margin-top:8px">
+            <button id="btnCtxRuntimeRefresh" class="secondary" style="margin-top:0" data-i18n="ui_ctx_runtime_refresh">Refresh Runtime Stats</button>
+          </div>
         </div>
       </div>
     </div>
@@ -954,12 +999,18 @@ HTML_PAGE = """<!doctype html>
             <div class=\"small\"><b data-i18n=\"ui_github_quick_setup_title\">GitHub Quick Setup</b></div>
             <div class=\"muted-box small\" style=\"margin-top:8px\">
               <div><b data-i18n=\"ui_github_assistant_title\">Migration & Setup Assistant</b></div>
+              <div style=\"margin-top:6px\" data-i18n=\"ui_github_setup_steps\">1) Save configuration once 2) Sign in GitHub 3) Refresh repo list 4) Apply setup.</div>
               <div id=\"githubGuideStatus\" class=\"small\" style=\"margin-top:6px\"></div>
+              <div id=\"githubGuideLegend\" class=\"small\" style=\"margin-top:4px\" data-i18n=\"ui_github_setup_legend\">init=configuration saved | auth=GitHub authenticated | remote=repo URL configured | broker=optional OAuth relay</div>
               <div id=\"githubGuideNext\" class=\"small\" style=\"margin-top:4px\"></div>
               <div class=\"row-btn\" style=\"margin-top:8px\">
                 <button type=\"button\" id=\"btnGithubGuideRefresh\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_github_assistant_refresh\">Refresh Setup State</button>
                 <button type=\"button\" id=\"btnGithubGuideNext\" style=\"margin-top:0\" data-i18n=\"ui_github_assistant_next\">Do Next Step</button>
               </div>
+            </div>
+            <div class=\"row-btn\" style=\"margin-top:8px\">
+              <button type=\"button\" id=\"btnGithubReconfigure\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_github_reconfigure\">Reconfigure OAuth + Repo</button>
+              <button type=\"button\" id=\"btnGithubClearRepo\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_github_clear_repo\">Clear Repo Selection</button>
             </div>
             <label><span data-i18n=\"ui_github_repo_full\">Repo (owner/repo)</span><input name=\"gh_full_name\" placeholder=\"yourname/omnimem-memory\" /></label>
             <label><span data-i18n=\"ui_github_repo_filter\">Repo Filter</span><input name=\"gh_repo_filter\" placeholder=\"keyword\" /></label>
@@ -1085,6 +1136,27 @@ HTML_PAGE = """<!doctype html>
         <div class=\"card wide\">
           <h3 data-i18n=\"mem_recent\">Recent Memories</h3>
           <div class=\"small card-lead\" data-i18n=\"ui_memory_lead\">Search and tune retrieval first, then open records to edit or promote/demote layers.</div>
+          <div class=\"muted-box small\" style=\"margin-top:8px\">
+            <div><b data-i18n=\"ui_mem_read_title\">How to read this page</b></div>
+            <div style=\"margin-top:6px\" data-i18n=\"ui_mem_read_hint\">Filters decide which memories are fetched. Retrieve options decide ranking behavior. Click any row to open full content in drawer and in Memory Content panel.</div>
+          </div>
+          <div class=\"muted-box small\" style=\"margin-top:8px\">
+            <div><b data-i18n=\"ui_mem_sync_status_title\">Memory Sync Setup</b></div>
+            <div id=\"memSyncStatus\" style=\"margin-top:6px\"></div>
+            <div id=\"memSyncHint\" style=\"margin-top:4px\"></div>
+            <div id=\"memSyncExplain\" class=\"small\" style=\"margin-top:4px\"></div>
+            <div id=\"memSyncDiag\" style=\"margin-top:4px\"></div>
+            <div id=\"memSyncRemote\" style=\"margin-top:4px\"></div>
+            <div class=\"row-btn\" style=\"margin-top:8px\">
+              <button id=\"btnMemSyncRefresh\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_sync_refresh\">Refresh Sync State</button>
+              <button id=\"btnMemSyncNext\" style=\"margin-top:0\" data-i18n=\"ui_mem_sync_next\">Do Next Step</button>
+              <button id=\"btnMemSyncOpenConfig\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_open_oauth_repo_setup\">Open OAuth/Repo Setup</button>
+            </div>
+          </div>
+          <details style=\"margin-top:8px\">
+            <summary class=\"small\" data-i18n=\"ui_mem_ops_guide_title\">What actions do</summary>
+            <div class=\"small\" style=\"margin-top:6px\" data-i18n=\"ui_mem_ops_guide_body\">Reload refreshes current query. Load More appends next page. Copy Search Link shares current UI filters. Copy API URL shares backend request URL. Export JSON/CSV exports currently loaded rows only.</div>
+          </details>
 	          <div id=\"layerStats\" class=\"small\" style=\"margin:6px 0\"></div>
 	          <label><span data-i18n=\"mem_project_filter\">Project ID Filter</span><input id=\"memProjectId\" placeholder=\"(empty = all projects)\" /></label>
 	          <label>Session ID Filter <input id=\"memSessionId\" placeholder=\"(empty = all sessions)\" /></label>
@@ -1096,78 +1168,92 @@ HTML_PAGE = """<!doctype html>
               <button id=\"btnPresetDeep\" class=\"secondary\" style=\"margin-top:0\">Preset: Deep Research</button>
               <button id=\"btnPresetPrecise\" class=\"secondary\" style=\"margin-top:0\">Preset: Precision FTS</button>
             </div>
-            <div class=\"muted-box\" style=\"margin-top:8px\">
-              <div class=\"small\"><b>Query Builder</b></div>
-              <div class=\"row-btn\" style=\"margin-top:8px\">
-                <label style=\"margin-top:0\">kind
-                  <select id=\"memQKind\" class=\"lang\" style=\"max-width:180px;\">
-                    <option value=\"\">(any)</option>
-                    <option value=\"note\">note</option>
-                    <option value=\"decision\">decision</option>
-                    <option value=\"task\">task</option>
-                    <option value=\"checkpoint\">checkpoint</option>
-                    <option value=\"summary\">summary</option>
-                    <option value=\"evidence\">evidence</option>
-                  </select>
-                </label>
-                <label style=\"margin-top:0\">tag
-                  <input id=\"memQTag\" placeholder=\"e.g. auto:distill\" style=\"max-width:220px\" />
-                </label>
-                <label style=\"margin-top:0\">since(days)
-                  <input id=\"memQSinceDays\" type=\"number\" min=\"0\" max=\"365\" value=\"0\" style=\"max-width:110px\" />
-                </label>
-                <label style=\"margin-top:0\">dedup
-                  <select id=\"memDedupMode\" class=\"lang\" style=\"max-width:150px;\">
-                    <option value=\"off\" selected>off</option>
-                    <option value=\"summary_kind\">summary+kind</option>
-                  </select>
-                </label>
-                <label style=\"margin-top:0\"><input id=\"memShowReason\" type=\"checkbox\" checked /> show reason</label>
-                <label style=\"margin-top:0\"><input id=\"memShowExplain\" type=\"checkbox\" /> detail</label>
-                <button id=\"btnMemBuildQuery\" class=\"secondary\" style=\"margin-top:0\">Build Query</button>
-              </div>
+            <div class=\"row-btn\" style=\"margin-top:6px\">
+              <button id=\"btnMemScopeRecent7\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_scope_recent7\">Last 7 Days</button>
+              <button id=\"btnMemScopeDecision\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_scope_decision\">Decision Only</button>
+              <button id=\"btnMemScopeNote\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_scope_note\">Note Only</button>
+              <button id=\"btnMemScopeClear\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_scope_clear\">Clear Scope</button>
             </div>
-	          <div class=\"row-btn\">
-	            <label style=\"margin-top:0\">Retrieve Mode
-	              <select id=\"memRetrieveMode\" class=\"lang\" style=\"max-width:180px;\">
-	                <option value=\"basic\" selected>basic</option>
-	                <option value=\"smart\">smart (graph)</option>
-	              </select>
-	            </label>
-	            <label style=\"margin-top:0\">Depth
-	              <input id=\"memRetrieveDepth\" type=\"number\" min=\"1\" max=\"4\" value=\"2\" style=\"max-width:90px\" />
-	            </label>
-	            <label style=\"margin-top:0\">Per Hop
-	              <input id=\"memRetrievePerHop\" type=\"number\" min=\"1\" max=\"30\" value=\"6\" style=\"max-width:90px\" />
-	            </label>
-	            <label style=\"margin-top:0\">Ranking
-	              <select id=\"memRankingMode\" class=\"lang\" style=\"max-width:160px;\">
-	                <option value=\"hybrid\" selected>hybrid</option>
-	                <option value=\"ppr\">ppr</option>
-	                <option value=\"path\">path</option>
-	              </select>
-	            </label>
-              <label style=\"margin-top:0\">Diversity
-                <select id=\"memDiversify\" class=\"lang\" style=\"max-width:160px;\">
-                  <option value=\"true\" selected>on (MMR)</option>
-                  <option value=\"false\">off</option>
-                </select>
-              </label>
-              <label style=\"margin-top:0\">MMR λ
-                <input id=\"memMmrLambda\" type=\"number\" min=\"0.05\" max=\"0.95\" step=\"0.01\" value=\"0.72\" style=\"max-width:100px\" />
-              </label>
-              <label style=\"margin-top:0\">Route
-                <select id=\"memRouteMode\" class=\"lang\" style=\"max-width:170px;\">
-                  <option value=\"auto\" selected>auto</option>
-                  <option value=\"general\">general</option>
-                  <option value=\"episodic\">episodic</option>
-                  <option value=\"semantic\">semantic</option>
-                  <option value=\"procedural\">procedural</option>
-                </select>
-              </label>
-	            <button id=\"btnMemAutoTune\" class=\"secondary\" style=\"margin-top:0\">Auto Tune</button>
-	            <span id=\"memRetrieveHint\" class=\"small\" style=\"align-self:center\"></span>
-	          </div>
+            <details id=\"memAdvancedBox\" style=\"margin-top:8px\">
+              <summary class=\"small\" data-i18n=\"ui_mem_advanced_controls\">Advanced retrieval controls</summary>
+              <div class=\"muted-box\" style=\"margin-top:8px\">
+                <div class=\"small\"><b data-i18n=\"ui_mem_query_builder\">Query Builder</b></div>
+                <div class=\"row-btn\" style=\"margin-top:8px\">
+                  <label style=\"margin-top:0\">kind
+                    <select id=\"memQKind\" class=\"lang\" style=\"max-width:180px;\">
+                      <option value=\"\">(any)</option>
+                      <option value=\"note\">note</option>
+                      <option value=\"decision\">decision</option>
+                      <option value=\"task\">task</option>
+                      <option value=\"checkpoint\">checkpoint</option>
+                      <option value=\"summary\">summary</option>
+                      <option value=\"evidence\">evidence</option>
+                    </select>
+                  </label>
+                  <label style=\"margin-top:0\">tag
+                    <input id=\"memQTag\" placeholder=\"e.g. auto:distill\" style=\"max-width:220px\" />
+                  </label>
+                  <label style=\"margin-top:0\">since(days)
+                    <input id=\"memQSinceDays\" type=\"number\" min=\"0\" max=\"365\" value=\"0\" style=\"max-width:110px\" />
+                  </label>
+                  <label style=\"margin-top:0\">dedup
+                    <select id=\"memDedupMode\" class=\"lang\" style=\"max-width:150px;\">
+                      <option value=\"off\" selected>off</option>
+                      <option value=\"summary_kind\">summary+kind</option>
+                    </select>
+                  </label>
+                  <label style=\"margin-top:0\"><input id=\"memShowReason\" type=\"checkbox\" checked /> show reason</label>
+                  <label style=\"margin-top:0\"><input id=\"memShowExplain\" type=\"checkbox\" /> detail</label>
+                  <button id=\"btnMemBuildQuery\" class=\"secondary\" style=\"margin-top:0\">Build Query</button>
+                </div>
+              </div>
+              <div class=\"row-btn\" style=\"margin-top:8px\">
+                <label style=\"margin-top:0\">Retrieve Mode
+                  <select id=\"memRetrieveMode\" class=\"lang\" style=\"max-width:180px;\">
+                    <option value=\"basic\" selected>basic</option>
+                    <option value=\"smart\">smart (graph)</option>
+                  </select>
+                </label>
+                <label style=\"margin-top:0\">Depth
+                  <input id=\"memRetrieveDepth\" type=\"number\" min=\"1\" max=\"4\" value=\"2\" style=\"max-width:90px\" />
+                </label>
+                <label style=\"margin-top:0\">Per Hop
+                  <input id=\"memRetrievePerHop\" type=\"number\" min=\"1\" max=\"30\" value=\"6\" style=\"max-width:90px\" />
+                </label>
+                <label style=\"margin-top:0\">Ranking
+                  <select id=\"memRankingMode\" class=\"lang\" style=\"max-width:160px;\">
+                    <option value=\"hybrid\" selected>hybrid</option>
+                    <option value=\"ppr\">ppr</option>
+                    <option value=\"path\">path</option>
+                  </select>
+                </label>
+                <label style=\"margin-top:0\">Diversity
+                  <select id=\"memDiversify\" class=\"lang\" style=\"max-width:160px;\">
+                    <option value=\"true\" selected>on (MMR)</option>
+                    <option value=\"false\">off</option>
+                  </select>
+                </label>
+                <label style=\"margin-top:0\">MMR λ
+                  <input id=\"memMmrLambda\" type=\"number\" min=\"0.05\" max=\"0.95\" step=\"0.01\" value=\"0.72\" style=\"max-width:100px\" />
+                </label>
+                <label style=\"margin-top:0\">Route
+                  <select id=\"memRouteMode\" class=\"lang\" style=\"max-width:170px;\">
+                    <option value=\"auto\" selected>auto</option>
+                    <option value=\"general\">general</option>
+                    <option value=\"episodic\">episodic</option>
+                    <option value=\"semantic\">semantic</option>
+                    <option value=\"procedural\">procedural</option>
+                  </select>
+                </label>
+                <button id=\"btnMemAutoTune\" class=\"secondary\" style=\"margin-top:0\">Auto Tune</button>
+                <span id=\"memRetrieveHint\" class=\"small\" style=\"align-self:center\"></span>
+              </div>
+              <div id=\"memRetrieveLegend\" class=\"small\" style=\"margin-top:6px\" data-i18n=\"ui_mem_retrieve_legend\">basic=FTS/LIKE matching | smart=graph thread retrieval; depth/per-hop increase context breadth, ranking changes ordering strategy.</div>
+              <details style=\"margin-top:8px\">
+                <summary class=\"small\" data-i18n=\"ui_mem_control_guide_title\">What each control does</summary>
+                <div class=\"small\" style=\"margin-top:6px\" data-i18n=\"ui_mem_control_guide_body\">Query/kind/tag/since narrow candidate set. Layer limits target memory layer. Retrieve mode/depth/per-hop/ranking/diversity control smart retrieval breadth and ordering. Dedup removes near-duplicate rows. Sort only changes display order after retrieval. Inline preview toggles body excerpts in table rows.</div>
+              </details>
+            </details>
 	          <label>Layer Filter
 	            <select id=\"memLayer\" class=\"lang\" style=\"width:100%; max-width:260px;\">
 	              <option value=\"\">(all)</option>
@@ -1177,11 +1263,45 @@ HTML_PAGE = """<!doctype html>
 	              <option value=\"archive\">archive</option>
 	            </select>
 	          </label>
+            <div class=\"row-btn\">
+              <label style=\"margin-top:0\"><span data-i18n=\"ui_mem_result_limit\">Result Limit</span>
+                <select id=\"memLimit\" class=\"lang\" style=\"max-width:120px;\">
+                  <option value=\"20\">20</option>
+                  <option value=\"50\">50</option>
+                  <option value=\"100\" selected>100</option>
+                  <option value=\"200\">200</option>
+                </select>
+              </label>
+              <label style=\"margin-top:0\"><span data-i18n=\"ui_mem_sort_label\">Sort</span>
+                <select id=\"memSort\" class=\"lang\" style=\"max-width:180px;\">
+                  <option value=\"server\" data-i18n=\"ui_mem_sort_server\">server default</option>
+                  <option value=\"updated_desc\" data-i18n=\"ui_mem_sort_updated_desc\">updated newest</option>
+                  <option value=\"updated_asc\" data-i18n=\"ui_mem_sort_updated_asc\">updated oldest</option>
+                  <option value=\"score_desc\" data-i18n=\"ui_mem_sort_score_desc\">retrieval score</option>
+                </select>
+              </label>
+              <label style=\"margin-top:0\"><input id=\"memInlinePreview\" type=\"checkbox\" checked /> <span data-i18n=\"ui_mem_inline_preview\">inline body preview</span></label>
+              <label style=\"margin-top:0\"><input id=\"memShowFullId\" type=\"checkbox\" /> show full ID</label>
+              <button id=\"btnOpenGithubConfig\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_open_oauth_repo_setup\">Open OAuth/Repo Setup</button>
+            </div>
+            <div id=\"memStats\" class=\"small\" style=\"margin-top:6px\"></div>
+            <div id=\"memActiveFilters\" class=\"small\" style=\"margin-top:4px\"></div>
+            <div id=\"memQuerySummary\" class=\"small\" style=\"margin-top:4px\"></div>
 		          <div class=\"row-btn\">
 		            <button id=\"btnMemReload\" data-i18n=\"btn_mem_reload\">Reload</button>
+                <button id=\"btnMemResetFilters\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_reset_filters\">Reset Filters</button>
+                <button id=\"btnMemLoadMore\" class=\"secondary\" style=\"margin-top:0; display:none\" data-i18n=\"ui_mem_load_more\">Load More</button>
+                <button id=\"btnMemLoadAll\" class=\"secondary\" style=\"margin-top:0\">Load All (Current Query)</button>
+                <button id=\"btnMemCopyLink\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_copy_link\">Copy Search Link</button>
+                <button id=\"btnMemCopyIds\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_copy_ids\">Copy IDs</button>
+                <button id=\"btnMemCopySummaries\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_copy_summaries\">Copy Summaries</button>
+                <button id=\"btnMemCopyApiUrl\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_copy_api_url\">Copy API URL</button>
+                <button id=\"btnMemExportJson\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_export_json\">Export JSON</button>
+                <button id=\"btnMemExportCsv\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_export_csv\">Export CSV</button>
 		            <button id=\"btnMemOpenBoard\" class=\"secondary\" style=\"margin-top:0\">Layer Board</button>
 		          </div>
 	          <div class=\"small\" data-i18n=\"mem_hint\">Click an ID to open full content</div>
+          <div class=\"small\" style=\"margin-top:4px\">Score=retrieval relevance. Reason=why it matched. Detail=ranking/self-check details.</div>
           <div class=\"table-wrap\">
             <table>
               <thead>
@@ -1190,6 +1310,7 @@ HTML_PAGE = """<!doctype html>
                   <th data-i18n=\"th_project\">Project</th>
                   <th data-i18n=\"th_layer\">Layer</th>
                   <th data-i18n=\"th_kind\">Kind</th>
+                  <th data-i18n=\"ui_mem_col_score\">Score</th>
                   <th data-i18n=\"th_summary\">Summary</th>
                   <th data-i18n=\"th_updated\">Updated At</th>
                 </tr>
@@ -1200,6 +1321,11 @@ HTML_PAGE = """<!doctype html>
         </div>
         <div class=\"card wide\">
           <h3 data-i18n=\"mem_content\">Memory Content</h3>
+          <div class=\"row-btn\" style=\"margin-top:6px\">
+            <button id=\"btnMemCopyBody\" class=\"secondary\" style=\"margin-top:0\" data-i18n=\"ui_mem_copy_body\">Copy Body</button>
+          </div>
+          <div class=\"small\" style=\"margin-top:6px\" data-i18n=\"ui_mem_content_hint\">Selected memory full body appears here. Click a row in the table to load details.</div>
+          <div id=\"memContentMeta\" class=\"small mono\" style=\"margin-bottom:8px\"></div>
           <pre id=\"memView\" style=\"white-space:pre-wrap\"></pre>
         </div>
       </div>
@@ -1729,12 +1855,102 @@ HTML_PAGE = """<!doctype html>
         ui_btn_health_check: 'Run Health Check',
         ui_getting_started_title: 'Getting Started',
         ui_getting_started_hint: 'Guided safe workflow: health check -> maintenance preview -> apply with approval.',
+        ui_ctx_runtime_title: 'Context Runtime',
+        ui_ctx_runtime_lead: 'Recent agent runs: context utilization, transient failures, and output-token footprint.',
+        ui_ctx_runtime_tool_label: 'Tool',
+        ui_ctx_runtime_refresh: 'Refresh Runtime Stats',
+        ui_ctx_runtime_unavailable: 'context runtime unavailable',
+        ui_ctx_runtime_stats: 'runs={runs} avg_util={avg_util} p95_util={p95_util} transient={transient} attempts={attempts} avg_output_tokens={avg_output_tokens} p95_output_tokens={p95_output_tokens} risk={risk}',
+        ui_ctx_runtime_no_rows: 'No recent runtime rows yet. Run agent/oneshot first to collect stats.',
+        ui_ctx_runtime_hint_critical: 'Critical pressure: context quota should be tightened immediately.',
+        ui_ctx_runtime_hint_high: 'High pressure trend: reduce budget/retrieve width before burst workloads.',
+        ui_ctx_runtime_hint_low: 'Low utilization trend: you can increase context profile for broader recall.',
+        ui_ctx_runtime_hint_balanced: 'Utilization is balanced.',
+        ui_ctx_runtime_recommended: 'recommended: quota_mode={rq}, context_profile={rp}',
         ui_hero_note: 'Human-centered console for memory sync, quality checks, and project workflow management.',
         ui_status_lead: 'Current setup health and sync readiness for this workspace.',
         ui_actions_lead: 'Run checks first, then perform sync and daemon actions.',
         ui_config_lead: 'Set storage and integration defaults. Save once after edits to apply immediately.',
         ui_project_lead: 'Attach local repositories so OmniMem can enforce project-level memory protocol automatically.',
         ui_memory_lead: 'Search and tune retrieval first, then open records to edit or promote/demote layers.',
+        ui_mem_read_title: 'How to read this page',
+        ui_mem_read_hint: 'Filters decide which memories are fetched. Retrieve options decide ranking behavior. Click any row to open full content in drawer and in Memory Content panel.',
+        ui_mem_sync_status_title: 'Memory Sync Setup',
+        ui_mem_sync_refresh: 'Refresh Sync State',
+        ui_mem_sync_next: 'Do Next Step',
+        ui_mem_sync_remote: 'target remote: {remote} (branch={branch})',
+        ui_mem_sync_remote_none: 'target remote: (not configured)',
+        ui_mem_sync_diag: 'oauth_pending={pending}; client_id={client}; broker={broker}',
+        ui_sync_setup_title: 'Memory Sync & OAuth',
+        ui_sync_setup_lead: 'Current memory repository/OAuth setup state. Reconfigure directly from here in simple mode.',
+        ui_sync_setup_refresh: 'Refresh Setup State',
+        ui_sync_setup_next: 'Do Next Step',
+        ui_sync_state_ok: 'ok',
+        ui_sync_state_pending: 'pending',
+        ui_sync_state_set: 'set',
+        ui_sync_state_none: 'none',
+        ui_sync_state_yes: 'yes',
+        ui_sync_state_no: 'no',
+        ui_mem_sync_explain: 'Checklist: init={init}, auth={auth}, remote={remote}, broker={broker}.',
+        ui_mem_ops_guide_title: 'What actions do',
+        ui_mem_ops_guide_body: 'Reload refreshes current query. Load More appends next page. Copy Search Link shares current UI filters. Copy API URL shares backend request URL. Export JSON/CSV exports currently loaded rows only.',
+        ui_mem_copy_body: 'Copy Body',
+        ui_mem_copy_body_ok: 'Memory body copied.',
+        ui_mem_copy_body_empty: 'No memory body available to copy.',
+        ui_mem_copy_body_fail: 'Failed to copy memory body.',
+        ui_mem_content_hint: 'Selected memory full body appears here. Click a row in the table to load details.',
+        ui_mem_advanced_controls: 'Advanced retrieval controls',
+        ui_mem_query_builder: 'Query Builder',
+        ui_mem_result_limit: 'Result Limit',
+        ui_mem_sort_label: 'Sort',
+        ui_mem_sort_server: 'server default',
+        ui_mem_sort_updated_desc: 'updated newest',
+        ui_mem_sort_updated_asc: 'updated oldest',
+        ui_mem_sort_score_desc: 'retrieval score',
+        ui_mem_col_score: 'Score',
+        ui_mem_inline_preview: 'inline body preview',
+        ui_mem_scope_recent7: 'Last 7 Days',
+        ui_mem_scope_decision: 'Decision Only',
+        ui_mem_scope_note: 'Note Only',
+        ui_mem_scope_clear: 'Clear Scope',
+        ui_mem_reset_filters: 'Reset Filters',
+        ui_mem_load_more: 'Load More',
+        ui_mem_copy_link: 'Copy Search Link',
+        ui_mem_copy_ids: 'Copy IDs',
+        ui_mem_copy_summaries: 'Copy Summaries',
+        ui_mem_copy_api_url: 'Copy API URL',
+        ui_mem_copy_link_ok: 'Search link copied.',
+        ui_mem_copy_link_fail: 'Failed to copy search link.',
+        ui_mem_copy_api_url_ok: 'Memory API URL copied.',
+        ui_mem_copy_api_url_fail: 'Failed to copy memory API URL.',
+        ui_mem_link_applied: 'Search link applied.',
+        ui_mem_copy_ids_ok: 'Copied {n} memory IDs.',
+        ui_mem_copy_ids_empty: 'No memory IDs to copy.',
+        ui_mem_copy_summaries_ok: 'Copied {n} summaries.',
+        ui_mem_copy_summaries_empty: 'No memory summaries to copy.',
+        ui_mem_export_json: 'Export JSON',
+        ui_mem_export_json_ok: 'Exported current memory results as JSON.',
+        ui_mem_export_json_empty: 'No memory results to export.',
+        ui_mem_export_csv: 'Export CSV',
+        ui_mem_export_csv_ok: 'Exported current memory results as CSV.',
+        ui_mem_export_csv_empty: 'No memory results to export.',
+        ui_mem_load_more_with_remaining: 'Load More ({n} left)',
+        ui_mem_loading: 'Loading...',
+        ui_mem_filters_reset_done: 'Filters reset to defaults.',
+        ui_mem_active_filters: 'active filters: {filters}',
+        ui_mem_active_filters_none: 'active filters: (none)',
+        ui_mem_query_summary: 'query intent: {text}',
+        ui_mem_body_empty: 'No memory selected. Click a row to load full content.',
+        ui_mem_stats_truncated: 'increase Result Limit or narrow filters to inspect more records.',
+        ui_mem_empty_title: 'No memory records matched current filters.',
+        ui_mem_empty_hint: 'Try resetting filters, switching to smart retrieval, or increasing Result Limit.',
+        ui_mem_empty_reset: 'Reset Filters',
+        ui_mem_empty_smart: 'Use Smart Retrieval',
+        ui_mem_empty_limit: 'Set Limit 200',
+        ui_mem_retrieve_legend: 'basic=FTS/LIKE matching | smart=graph thread retrieval; depth/per-hop increase context breadth, ranking changes ordering strategy.',
+        ui_mem_control_guide_title: 'What each control does',
+        ui_mem_control_guide_body: 'Query/kind/tag/since narrow candidate set. Layer limits target memory layer. Retrieve mode/depth/per-hop/ranking/diversity control smart retrieval breadth and ordering. Dedup removes near-duplicate rows. Sort only changes display order after retrieval. Inline preview toggles body excerpts in table rows.',
+        ui_open_oauth_repo_setup: 'Open OAuth/Repo Setup',
         ui_btn_guided_check: 'Run Guided Check',
         ui_guide_default: '1) Run Health Check\\n2) Open Insights and preview Auto Maintenance\\n3) Apply only after checking recommendations',
         ui_session_filter: 'Session ID Filter',
@@ -1876,6 +2092,10 @@ HTML_PAGE = """<!doctype html>
         ui_github_assistant_refresh: 'Refresh Setup State',
         ui_github_assistant_next: 'Do Next Step',
         ui_github_assistant_done: 'Setup Complete',
+        ui_github_setup_steps: '1) Save configuration once 2) Sign in GitHub 3) Refresh repo list 4) Apply setup.',
+        ui_github_setup_legend: 'init=configuration saved | auth=GitHub authenticated | remote=repo URL configured | broker=optional OAuth relay',
+        ui_github_reconfigure: 'Reconfigure OAuth + Repo',
+        ui_github_clear_repo: 'Clear Repo Selection',
         ui_advanced_options: 'Advanced options',
         ui_github_repo_full: 'Repo (owner/repo)',
         ui_github_repo_filter: 'Repo Filter',
@@ -1897,6 +2117,10 @@ HTML_PAGE = """<!doctype html>
         ui_github_setup_next_repo: 'Load repo list and select a repository next.',
         ui_github_setup_next_apply: 'Apply GitHub setup to write remote URL and branch.',
         ui_github_setup_next_done: 'GitHub setup is complete.',
+        ui_github_reconfigure_opened: 'OAuth/Repo reconfiguration opened. Follow the assistant steps.',
+        ui_github_repo_cleared: 'Repo selection cleared.',
+        ui_github_repo_cleared_hint: 'repo selection cleared; save/apply setup after selecting a new repo',
+        ui_mem_loaded_stats: 'showing {shown}/{total} items (limit={limit}, dedup {before} -> {after}, route={route}, sort={sort})',
         tip_btn_toggle_advanced: 'Switch between simple mode (daily operations) and advanced console.',
         tip_tab_status: 'Daily operations panel: sync, daemon and quick health actions.',
         tip_tab_insights: 'Review memory distribution, quality and governance recommendations.',
@@ -1948,12 +2172,102 @@ HTML_PAGE = """<!doctype html>
         ui_btn_health_check: '运行健康检查',
         ui_getting_started_title: '快速开始',
         ui_getting_started_hint: '安全引导流程：健康检查 -> 维护预览 -> 确认后应用。',
+        ui_ctx_runtime_title: '上下文运行态',
+        ui_ctx_runtime_lead: '最近 Agent 运行的上下文利用率、瞬时失败与输出 token 体量。',
+        ui_ctx_runtime_tool_label: '工具',
+        ui_ctx_runtime_refresh: '刷新运行态统计',
+        ui_ctx_runtime_unavailable: '上下文运行态不可用',
+        ui_ctx_runtime_stats: 'runs={runs} avg_util={avg_util} p95_util={p95_util} transient={transient} attempts={attempts} avg_output_tokens={avg_output_tokens} p95_output_tokens={p95_output_tokens} risk={risk}',
+        ui_ctx_runtime_no_rows: '暂无近期运行统计。请先执行一次 agent/oneshot。',
+        ui_ctx_runtime_hint_critical: '压力级别严重：建议立即收紧上下文配额。',
+        ui_ctx_runtime_hint_high: '压力级别偏高：建议降低预算/检索宽度再运行高负载任务。',
+        ui_ctx_runtime_hint_low: '利用率偏低：可提升 context profile 以扩大召回。',
+        ui_ctx_runtime_hint_balanced: '利用率处于平衡区间。',
+        ui_ctx_runtime_recommended: '建议配置：quota_mode={rq}, context_profile={rp}',
         ui_hero_note: '面向人类使用的控制台：用于记忆同步、质量检查和项目工作流管理。',
         ui_status_lead: '展示当前工作区的配置健康状态与同步就绪情况。',
         ui_actions_lead: '建议先执行检查，再进行同步与守护进程操作。',
         ui_config_lead: '设置存储与集成默认项。修改后保存即可立即生效。',
         ui_project_lead: '挂载本地仓库后，OmniMem 可自动执行项目级记忆协议规则。',
         ui_memory_lead: '先检索并调优召回，再打开记录进行编辑或层级升降。',
+        ui_mem_read_title: '如何阅读此页面',
+        ui_mem_read_hint: '过滤条件决定抓取哪些记忆，检索参数决定排序方式。点击任意行可在抽屉和右侧正文区查看完整内容。',
+        ui_mem_sync_status_title: '记忆同步配置状态',
+        ui_mem_sync_refresh: '刷新同步状态',
+        ui_mem_sync_next: '执行下一步',
+        ui_mem_sync_remote: '目标远端：{remote}（分支={branch}）',
+        ui_mem_sync_remote_none: '目标远端：（未配置）',
+        ui_mem_sync_diag: 'oauth_pending={pending}；client_id={client}；broker={broker}',
+        ui_sync_setup_title: '记忆同步与 OAuth',
+        ui_sync_setup_lead: '显示当前记忆仓库/OAuth 配置状态。可直接在这里重配。',
+        ui_sync_setup_refresh: '刷新配置状态',
+        ui_sync_setup_next: '执行下一步',
+        ui_sync_state_ok: '正常',
+        ui_sync_state_pending: '待完成',
+        ui_sync_state_set: '已设置',
+        ui_sync_state_none: '未设置',
+        ui_sync_state_yes: '是',
+        ui_sync_state_no: '否',
+        ui_mem_sync_explain: '检查清单：init={init}，auth={auth}，remote={remote}，broker={broker}。',
+        ui_mem_ops_guide_title: '操作含义说明',
+        ui_mem_ops_guide_body: 'Reload 刷新当前查询；Load More 追加下一页；Copy Search Link 共享当前 UI 筛选；Copy API URL 共享后端请求地址；Export JSON/CSV 仅导出当前已加载行。',
+        ui_mem_copy_body: '复制正文',
+        ui_mem_copy_body_ok: '已复制记忆正文。',
+        ui_mem_copy_body_empty: '当前没有可复制的记忆正文。',
+        ui_mem_copy_body_fail: '复制记忆正文失败。',
+        ui_mem_content_hint: '这里显示已选记忆的完整正文。点击表格行即可加载详情。',
+        ui_mem_advanced_controls: '高级检索控制',
+        ui_mem_query_builder: '查询构建器',
+        ui_mem_result_limit: '结果条数',
+        ui_mem_sort_label: '排序',
+        ui_mem_sort_server: '服务端默认',
+        ui_mem_sort_updated_desc: '按更新时间（新到旧）',
+        ui_mem_sort_updated_asc: '按更新时间（旧到新）',
+        ui_mem_sort_score_desc: '按检索分数',
+        ui_mem_col_score: '分数',
+        ui_mem_inline_preview: '行内正文预览',
+        ui_mem_scope_recent7: '最近 7 天',
+        ui_mem_scope_decision: '仅决策',
+        ui_mem_scope_note: '仅笔记',
+        ui_mem_scope_clear: '清空限定',
+        ui_mem_reset_filters: '重置筛选',
+        ui_mem_load_more: '加载更多',
+        ui_mem_copy_link: '复制检索链接',
+        ui_mem_copy_ids: '复制 ID 列表',
+        ui_mem_copy_summaries: '复制摘要列表',
+        ui_mem_copy_api_url: '复制 API 地址',
+        ui_mem_copy_link_ok: '已复制检索链接。',
+        ui_mem_copy_link_fail: '复制检索链接失败。',
+        ui_mem_copy_api_url_ok: '已复制记忆 API 地址。',
+        ui_mem_copy_api_url_fail: '复制记忆 API 地址失败。',
+        ui_mem_link_applied: '已应用检索链接。',
+        ui_mem_copy_ids_ok: '已复制 {n} 条记忆 ID。',
+        ui_mem_copy_ids_empty: '当前没有可复制的记忆 ID。',
+        ui_mem_copy_summaries_ok: '已复制 {n} 条摘要。',
+        ui_mem_copy_summaries_empty: '当前没有可复制的摘要。',
+        ui_mem_export_json: '导出 JSON',
+        ui_mem_export_json_ok: '已导出当前记忆结果 JSON。',
+        ui_mem_export_json_empty: '当前没有可导出的记忆结果。',
+        ui_mem_export_csv: '导出 CSV',
+        ui_mem_export_csv_ok: '已导出当前记忆结果 CSV。',
+        ui_mem_export_csv_empty: '当前没有可导出的记忆结果。',
+        ui_mem_load_more_with_remaining: '加载更多（剩余 {n} 条）',
+        ui_mem_loading: '加载中...',
+        ui_mem_filters_reset_done: '已重置为默认筛选。',
+        ui_mem_active_filters: '当前筛选：{filters}',
+        ui_mem_active_filters_none: '当前筛选：（无）',
+        ui_mem_query_summary: '检索意图：{text}',
+        ui_mem_body_empty: '当前未选择记忆。点击表格行即可加载完整正文。',
+        ui_mem_stats_truncated: '可提高结果条数上限，或收窄筛选条件查看更多记录。',
+        ui_mem_empty_title: '当前筛选下没有匹配到记忆记录。',
+        ui_mem_empty_hint: '可尝试重置筛选、切换 smart 检索，或提高结果条数上限。',
+        ui_mem_empty_reset: '重置筛选',
+        ui_mem_empty_smart: '切到 Smart 检索',
+        ui_mem_empty_limit: '上限设为 200',
+        ui_mem_retrieve_legend: 'basic=FTS/LIKE 匹配 | smart=图线程检索；depth/per-hop 控制上下文广度，ranking 控制排序策略。',
+        ui_mem_control_guide_title: '控件用途说明',
+        ui_mem_control_guide_body: 'Query/kind/tag/since 用于缩小候选集合；Layer 用于限制目标层级。Retrieve mode/depth/per-hop/ranking/diversity 控制 smart 检索的广度与排序。Dedup 用于去重近似重复结果。Sort 只改变展示顺序，不改变召回集合。Inline preview 控制表格内正文摘录显示。',
+        ui_open_oauth_repo_setup: '打开 OAuth/仓库配置',
         ui_btn_guided_check: '运行引导检查',
         ui_guide_default: '1) 运行健康检查\\n2) 打开洞察并预览自动维护\\n3) 检查建议后再应用',
         ui_session_filter: '会话 ID 过滤',
@@ -2095,6 +2409,10 @@ HTML_PAGE = """<!doctype html>
         ui_github_assistant_refresh: '刷新配置状态',
         ui_github_assistant_next: '执行下一步',
         ui_github_assistant_done: '配置已完成',
+        ui_github_setup_steps: '1) 先保存一次配置 2) GitHub 登录 3) 刷新仓库列表 4) 应用配置。',
+        ui_github_setup_legend: 'init=已保存配置 | auth=已完成 GitHub 认证 | remote=已配置仓库 URL | broker=可选 OAuth 中继',
+        ui_github_reconfigure: '重配 OAuth + 仓库',
+        ui_github_clear_repo: '清除仓库选择',
         ui_advanced_options: '高级选项',
         ui_github_repo_full: '仓库（owner/repo）',
         ui_github_repo_filter: '仓库过滤',
@@ -2116,6 +2434,10 @@ HTML_PAGE = """<!doctype html>
         ui_github_setup_next_repo: '下一步加载仓库列表并选择目标仓库。',
         ui_github_setup_next_apply: '下一步应用 GitHub 配置写入远端与分支。',
         ui_github_setup_next_done: 'GitHub 配置已完成。',
+        ui_github_reconfigure_opened: '已打开 OAuth/仓库重配置，请按助手步骤完成。',
+        ui_github_repo_cleared: '已清除仓库选择。',
+        ui_github_repo_cleared_hint: '已清除仓库选择；请选择新仓库后再保存/应用配置。',
+        ui_mem_loaded_stats: '当前显示 {shown}/{total} 条（上限={limit}，去重 {before} -> {after}，路由={route}，排序={sort}）',
         tip_btn_toggle_advanced: '在简洁模式（日常操作）与高级控制台之间切换。',
         tip_tab_status: '日常操作面板：同步、守护进程和快速健康检查。',
         tip_tab_insights: '查看记忆分布、质量与治理建议。',
@@ -2525,6 +2847,12 @@ HTML_PAGE = """<!doctype html>
     function safeSetAdvanced(v) {
       try { localStorage.setItem('omnimem.advanced', v ? '1' : '0'); } catch (_) {}
     }
+    function safeGetActiveTab() {
+      try { return localStorage.getItem('omnimem.active_tab') || 'statusTab'; } catch (_) { return 'statusTab'; }
+    }
+    function safeSetActiveTab(tabId) {
+      try { localStorage.setItem('omnimem.active_tab', tabId || 'statusTab'); } catch (_) {}
+    }
     function safeGetOpsExpert() {
       try { return (localStorage.getItem('omnimem.ops_expert') || '0') === '1'; } catch (_) { return false; }
     }
@@ -2593,6 +2921,19 @@ HTML_PAGE = """<!doctype html>
           localStorage.setItem('omnimem.mem_mmr_lambda', String(p.mmr_lambda || 0.72));
 	      } catch (_) {}
 	    }
+      function safeGetMemoryUiState() {
+        try {
+          const raw = localStorage.getItem('omnimem.mem_ui_state') || '';
+          if (!raw) return {};
+          const obj = JSON.parse(raw);
+          return (obj && typeof obj === 'object') ? obj : {};
+        } catch (_) {
+          return {};
+        }
+      }
+      function safeSetMemoryUiState(s) {
+        try { localStorage.setItem('omnimem.mem_ui_state', JSON.stringify(s || {})); } catch (_) {}
+      }
       function safeLoadRouteTemplates() {
         try {
           const raw = localStorage.getItem('omnimem.route_templates') || '[]';
@@ -2682,11 +3023,16 @@ HTML_PAGE = """<!doctype html>
 		      return new TextDecoder().decode(bytes);
 		    }
 		
-		    function clearWsHash() {
-		      try {
-		        if ((location.hash || '').startsWith('#ws=')) history.replaceState(null, '', location.pathname);
-		      } catch (_) {}
-		    }
+	    function clearWsHash() {
+	      try {
+	        if ((location.hash || '').startsWith('#ws=')) history.replaceState(null, '', location.pathname);
+	      } catch (_) {}
+	    }
+      function clearMemHash() {
+        try {
+          if ((location.hash || '').startsWith('#mem=')) history.replaceState(null, '', location.pathname);
+        } catch (_) {}
+      }
 		
 		    function showWsModal(show) {
 		      const o = document.getElementById('modalOverlay');
@@ -2754,8 +3100,20 @@ HTML_PAGE = """<!doctype html>
       let dangerResolve = null;
       let githubSetupPlan = null;
       let githubGuidePrompted = false;
+      let cfgSnapshot = null;
       let maintenanceSummaryCache = null;
       let opsPreviewCache = null;
+      let selectedMemoryId = null;
+      let memNextOffset = 0;
+      let memHasMore = false;
+      let memLoadedCount = 0;
+      let memTotalAvailable = 0;
+      let memRemainingCount = 0;
+      let memLoading = false;
+      let memLoadAllRunning = false;
+      let memLastItems = [];
+      let memCurrentOffset = 0;
+      let memBootOffset = null;
       let maintGate = {
         decay: { ready: false, sig: '', impact: 0, preview_at: '' },
         consolidate: { ready: false, sig: '', impact: 0, preview_at: '' },
@@ -3253,6 +3611,8 @@ HTML_PAGE = """<!doctype html>
         btnGithubRepos: 'tip_btn_github_refresh_repos',
         btnGithubUseSelected: 'tip_btn_github_use_selected',
         btnGithubQuickSetup: 'tip_btn_github_apply_setup',
+        btnGithubReconfigure: 'tip_btn_github_apply_setup',
+        btnOpenGithubConfig: 'tip_tab_config',
       };
       const tipKeyByI18n = {
         tab_status: 'tip_tab_status',
@@ -3619,13 +3979,69 @@ HTML_PAGE = """<!doctype html>
 	      await openMemory(m.id);
 	    }
 
-	    async function openMemory(id) {
+      function setMemoryContentMeta(m) {
+        const el = document.getElementById('memContentMeta');
+        if (!el) return;
+        if (!m) {
+          el.textContent = '';
+          return;
+        }
+        const scope = m.scope || {};
+        const src = m.source || {};
+        const tags = Array.isArray(m.tags) ? m.tags.filter(Boolean).join(',') : '';
+        const bodyLen = document.getElementById('memView')?.textContent?.length || 0;
+        const parts = [
+          `id=${String(m.id || '').slice(0, 12)}…`,
+          `layer=${String(m.layer || '')}`,
+          `kind=${String(m.kind || '')}`,
+          `project=${String(scope.project_id || '')}`,
+          `session=${String(src.session_id || '')}`,
+          `tool=${String(src.tool || '')}`,
+          tags ? `tags=${tags}` : '',
+          `path=${String(m.body_md_path || '')}`,
+          `body_len=${String(bodyLen)}`,
+          `updated=${String(m.updated_at || '')}`,
+        ].filter(Boolean);
+        el.textContent = parts.join(' | ');
+      }
+
+      async function copyMemoryBody() {
+        const txt = String(document.getElementById('memView')?.textContent || '').trim();
+        if (!txt) {
+          toast('Memory', t('ui_mem_copy_body_empty'), false);
+          return;
+        }
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(txt);
+            toast('Memory', t('ui_mem_copy_body_ok'), true);
+            return;
+          }
+        } catch (_) {}
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = txt;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+          toast('Memory', t('ui_mem_copy_body_ok'), true);
+        } catch (_) {
+          toast('Memory', t('ui_mem_copy_body_fail'), false);
+        }
+      }
+
+	    async function openMemory(id, opts = {}) {
+        const showPanel = opts.showDrawer !== false;
 	      const d = await jget('/api/memory?id=' + encodeURIComponent(id));
 	      if (!d.ok || !d.memory) {
 	        toast('Memory', d.error || 'not found', false);
 	        return;
 	      }
 	      const m = d.memory;
+        selectedMemoryId = String(m.id || '');
 	      drawerMem = m;
 	      const sig = m.signals || {};
 	      document.getElementById('dTitle').textContent = m.summary || 'Memory';
@@ -3665,6 +4081,11 @@ HTML_PAGE = """<!doctype html>
       if (mh) mh.innerHTML = '<span class="small">loading...</span>';
 
 	      document.getElementById('dBodyView').textContent = d.body || '';
+        const memView = document.getElementById('memView');
+        if (memView) {
+          memView.textContent = d.body || '';
+        }
+        setMemoryContentMeta(m);
 	      const edS = document.getElementById('dEditSummary');
 	      const edT = document.getElementById('dEditTags');
 	      const edB = document.getElementById('dEditBody');
@@ -3693,7 +4114,7 @@ HTML_PAGE = """<!doctype html>
 	      await loadGovernanceExplain(m.id);
       await loadMoveHistory(m.id);
 
-	      showDrawer(true);
+        if (showPanel) showDrawer(true);
 	    }
 
     async function loadMoveHistory(memoryId) {
@@ -3987,6 +4408,7 @@ HTML_PAGE = """<!doctype html>
 
     async function loadCfg() {
       const d = await jget('/api/config');
+      cfgSnapshot = d;
       const f = document.getElementById('cfgForm');
       for (const k of [
         'config_path','home','markdown','jsonl','sqlite','remote_name','remote_url','branch',
@@ -4024,20 +4446,65 @@ HTML_PAGE = """<!doctype html>
       const sEl = document.getElementById('githubGuideStatus');
       const nEl = document.getElementById('githubGuideNext');
       const bNext = document.getElementById('btnGithubGuideNext');
+      const memStatusEl = document.getElementById('memSyncStatus');
+      const memHintEl = document.getElementById('memSyncHint');
+      const memExplainEl = document.getElementById('memSyncExplain');
+      const memDiagEl = document.getElementById('memSyncDiag');
+      const memRemoteEl = document.getElementById('memSyncRemote');
+      const memNextBtn = document.getElementById('btnMemSyncNext');
+      const statusSyncEl = document.getElementById('statusSyncState');
+      const statusNextEl = document.getElementById('statusSyncNext');
+      const statusExplainEl = document.getElementById('statusSyncExplain');
+      const statusNextBtn = document.getElementById('btnStatusSyncNext');
+      function renderMemorySyncMirror(html, hint, done, explainText) {
+        if (memStatusEl) memStatusEl.innerHTML = html;
+        if (memHintEl) memHintEl.textContent = String(hint || '');
+        if (memExplainEl) memExplainEl.textContent = String(explainText || '');
+        if (statusSyncEl) statusSyncEl.innerHTML = html;
+        if (statusNextEl) statusNextEl.textContent = String(hint || '');
+        if (statusExplainEl) statusExplainEl.textContent = String(explainText || '');
+        if (memRemoteEl) {
+          const r = String(cfgSnapshot?.remote_url || '').trim();
+          const b = String(cfgSnapshot?.branch || '').trim() || 'main';
+          memRemoteEl.textContent = r
+            ? tf('ui_mem_sync_remote', { remote: r, branch: b })
+            : t('ui_mem_sync_remote_none');
+        }
+        if (memNextBtn) {
+          memNextBtn.textContent = done ? t('ui_github_assistant_done') : t('ui_mem_sync_next');
+          memNextBtn.disabled = false;
+        }
+        if (statusNextBtn) {
+          statusNextBtn.textContent = done ? t('ui_github_assistant_done') : t('ui_mem_sync_next');
+          statusNextBtn.disabled = false;
+        }
+      }
       if (!sEl || !nEl || !bNext) return;
       if (!plan || !plan.ok) {
-        sEl.innerHTML = `<span class="err">${escHtml((plan && plan.error) || 'setup plan unavailable')}</span>`;
+        const errHtml = `<span class="err">${escHtml((plan && plan.error) || 'setup plan unavailable')}</span>`;
+        sEl.innerHTML = errHtml;
         nEl.textContent = '';
         bNext.disabled = true;
+        renderMemorySyncMirror(errHtml, '', false, '');
         return;
       }
       const st = (plan.status && typeof plan.status === 'object') ? plan.status : {};
-      sEl.innerHTML = [
-        `<span class="pill"><b>init</b><span>${st.initialized ? 'ok' : 'pending'}</span></span>`,
-        `<span class="pill"><b>auth</b><span>${st.authenticated ? 'ok' : 'pending'}</span></span>`,
-        `<span class="pill"><b>remote</b><span>${st.remote_configured ? 'ok' : 'pending'}</span></span>`,
-        `<span class="pill"><b>broker</b><span>${st.broker_configured ? 'set' : 'none'}</span></span>`
+      const labelOk = t('ui_sync_state_ok');
+      const labelPending = t('ui_sync_state_pending');
+      const labelSet = t('ui_sync_state_set');
+      const labelNone = t('ui_sync_state_none');
+      const statusInit = st.initialized ? labelOk : labelPending;
+      const statusAuth = st.authenticated ? labelOk : labelPending;
+      const statusRemote = st.remote_configured ? labelOk : labelPending;
+      const statusBroker = st.broker_configured ? labelSet : labelNone;
+      const syncExplain = tf('ui_mem_sync_explain', { init: statusInit, auth: statusAuth, remote: statusRemote, broker: statusBroker });
+      const statusHtml = [
+        `<span class="pill"><b>init</b><span>${statusInit}</span></span>`,
+        `<span class="pill"><b>auth</b><span>${statusAuth}</span></span>`,
+        `<span class="pill"><b>remote</b><span>${statusRemote}</span></span>`,
+        `<span class="pill"><b>broker</b><span>${statusBroker}</span></span>`
       ].join(' ');
+      sEl.innerHTML = statusHtml;
       const nextMap = {
         save_config: t('ui_github_setup_next_save'),
         oauth_start: t('ui_github_setup_next_oauth'),
@@ -4046,10 +4513,18 @@ HTML_PAGE = """<!doctype html>
         apply_setup: t('ui_github_setup_next_apply'),
         done: t('ui_github_setup_next_done'),
       };
+      if (memDiagEl) {
+        memDiagEl.textContent = tf('ui_mem_sync_diag', {
+          pending: st.oauth_pending ? t('ui_sync_state_yes') : t('ui_sync_state_no'),
+          client: st.client_id_configured ? labelSet : labelNone,
+          broker: st.broker_configured ? labelSet : labelNone,
+        });
+      }
       nEl.textContent = String(nextMap[String(plan.next_action || '')] || plan.next_hint || '');
       const done = String(plan.next_action || '') === 'done';
       bNext.textContent = done ? t('ui_github_assistant_done') : t('ui_github_assistant_next');
       bNext.disabled = false;
+      renderMemorySyncMirror(statusHtml, nEl.textContent, done, syncExplain);
       if (!githubGuidePrompted && plan.migration_recommended) {
         githubGuidePrompted = true;
         setActiveTab('configTab');
@@ -4107,6 +4582,32 @@ HTML_PAGE = """<!doctype html>
         return;
       }
       await loadGithubSetupPlan();
+    }
+
+    async function openGithubReconfigure(resetRepoFields) {
+      advancedOn = true;
+      renderMode();
+      setActiveTab('configTab');
+      setConfigSection('github');
+      const f = document.getElementById('cfgForm');
+      if (resetRepoFields && f && f.elements) {
+        if (f.elements['gh_full_name']) f.elements['gh_full_name'].value = '';
+        if (f.elements['gh_repo_filter']) f.elements['gh_repo_filter'].value = '';
+        if (f.elements['gh_repo_picker']) f.elements['gh_repo_picker'].value = '';
+      }
+      await loadGithubSetupPlan();
+      toast('GitHub', t('ui_github_reconfigure_opened'), true);
+    }
+
+    function clearGithubRepoSelection() {
+      const f = document.getElementById('cfgForm');
+      if (!f || !f.elements) return;
+      if (f.elements['gh_full_name']) f.elements['gh_full_name'].value = '';
+      if (f.elements['gh_repo_filter']) f.elements['gh_repo_filter'].value = '';
+      if (f.elements['gh_repo_picker']) f.elements['gh_repo_picker'].value = '';
+      const out = document.getElementById('githubQuickOut');
+      if (out) out.textContent = t('ui_github_repo_cleared_hint');
+      toast('GitHub', t('ui_github_repo_cleared'), true);
     }
 
     function stopGithubOAuthAutoPoll() {
@@ -4342,7 +4843,7 @@ HTML_PAGE = """<!doctype html>
         };
       }
 
-      function applyRetrievePreset(name) {
+    function applyRetrievePreset(name) {
         const modeEl = document.getElementById('memRetrieveMode');
         const depthEl = document.getElementById('memRetrieveDepth');
         const hopEl = document.getElementById('memRetrievePerHop');
@@ -4363,8 +4864,467 @@ HTML_PAGE = """<!doctype html>
         if (routeEl) routeEl.value = cfg.route;
         safeSetRetrievePrefs(cfg);
         const hint = document.getElementById('memRetrieveHint');
-        if (hint) hint.textContent = `preset=${name} mode=${cfg.mode} depth=${cfg.depth} per_hop=${cfg.per_hop} ranking=${cfg.ranking}`;
+      if (hint) hint.textContent = `preset=${name} mode=${cfg.mode} depth=${cfg.depth} per_hop=${cfg.per_hop} ranking=${cfg.ranking}`;
+    }
+
+    function resetMemoryFilters() {
+      const setV = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
+      const setC = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+      setV('memProjectId', '');
+      setV('memSessionId', '');
+      setV('memQuery', '');
+      setV('memLayer', '');
+      setV('memQKind', '');
+      setV('memQTag', '');
+      setV('memQSinceDays', 0);
+      setV('memDedupMode', 'off');
+      setC('memShowReason', true);
+      setC('memShowExplain', false);
+      setV('memRetrieveMode', 'basic');
+      setV('memRetrieveDepth', 2);
+      setV('memRetrievePerHop', 6);
+      setV('memRankingMode', 'hybrid');
+      setV('memDiversify', 'true');
+      setV('memMmrLambda', 0.72);
+      setV('memRouteMode', 'auto');
+      setV('memLimit', 100);
+      setV('memSort', 'server');
+      setC('memInlinePreview', true);
+      const adv = document.getElementById('memAdvancedBox');
+      if (adv && typeof adv.open === 'boolean') adv.open = false;
+      safeSetRetrievePrefs({ mode: 'basic', depth: 2, per_hop: 6, ranking: 'hybrid', route: 'auto', diversify: true, mmr_lambda: 0.72 });
+      toast('Memory', t('ui_mem_filters_reset_done'), true);
+    }
+
+    function applyMemoryScope(scope) {
+      const setV = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
+      if (scope === 'recent7') {
+        setV('memQSinceDays', 7);
+      } else if (scope === 'decision') {
+        setV('memQKind', 'decision');
+      } else if (scope === 'note') {
+        setV('memQKind', 'note');
+      } else if (scope === 'clear') {
+        setV('memQKind', '');
+        setV('memQTag', '');
+        setV('memQSinceDays', 0);
       }
+    }
+
+    function applyMemoryUiState() {
+      const st = safeGetMemoryUiState();
+      const setV = (id, key) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (Object.prototype.hasOwnProperty.call(st, key)) el.value = String(st[key] ?? '');
+      };
+      const setC = (id, key) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (Object.prototype.hasOwnProperty.call(st, key)) el.checked = !!st[key];
+      };
+      setV('memProjectId', 'project_id');
+      setV('memSessionId', 'session_id');
+      setV('memQuery', 'query');
+      setV('memLayer', 'layer');
+      setV('memQKind', 'kind');
+      setV('memQTag', 'tag');
+      setV('memQSinceDays', 'since_days');
+      setV('memDedupMode', 'dedup_mode');
+      setC('memShowReason', 'show_reason');
+      setC('memShowExplain', 'show_explain');
+      setV('memLimit', 'limit');
+      setV('memSort', 'sort_mode');
+      setC('memInlinePreview', 'inline_preview');
+      const adv = document.getElementById('memAdvancedBox');
+      if (adv && Object.prototype.hasOwnProperty.call(st, 'advanced_open')) adv.open = !!st.advanced_open;
+    }
+
+    function persistMemoryUiState() {
+      const readV = (id) => String(document.getElementById(id)?.value || '');
+      const readN = (id, fallback) => {
+        const n = Number(document.getElementById(id)?.value || fallback);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const readC = (id, fallback) => {
+        const el = document.getElementById(id);
+        return el ? !!el.checked : !!fallback;
+      };
+      const adv = document.getElementById('memAdvancedBox');
+      safeSetMemoryUiState({
+        project_id: readV('memProjectId'),
+        session_id: readV('memSessionId'),
+        query: readV('memQuery'),
+        layer: readV('memLayer'),
+        kind: readV('memQKind'),
+        tag: readV('memQTag'),
+        since_days: readN('memQSinceDays', 0),
+        dedup_mode: readV('memDedupMode') || 'off',
+        show_reason: readC('memShowReason', true),
+        show_explain: readC('memShowExplain', false),
+        limit: readN('memLimit', 100),
+        sort_mode: readV('memSort') || 'server',
+        inline_preview: readC('memInlinePreview', true),
+        advanced_open: !!(adv && adv.open),
+      });
+    }
+
+    function renderMemLoadMoreButton() {
+      const bMore = document.getElementById('btnMemLoadMore');
+      const bAll = document.getElementById('btnMemLoadAll');
+      if (!bMore) return;
+      bMore.style.display = memHasMore ? '' : 'none';
+      bMore.disabled = !memHasMore || !!memLoading;
+      if (memLoading) {
+        bMore.textContent = t('ui_mem_loading');
+      } else if (memHasMore && memRemainingCount > 0) {
+        bMore.textContent = tf('ui_mem_load_more_with_remaining', { n: memRemainingCount });
+      } else {
+        bMore.textContent = t('ui_mem_load_more');
+      }
+      if (bAll) {
+        bAll.disabled = !!memLoading || !!memLoadAllRunning;
+        if (memLoadAllRunning) bAll.textContent = 'Loading all...';
+        else if (memHasMore && memRemainingCount > 0) bAll.textContent = `Load All (${memRemainingCount} more)`;
+        else bAll.textContent = 'Load All (Current Query)';
+      }
+    }
+
+    async function loadMemAll() {
+      if (memLoading || memLoadAllRunning) return;
+      memLoadAllRunning = true;
+      renderMemLoadMoreButton();
+      try {
+        await loadMem();
+        let pages = 0;
+        const maxPages = 24;
+        const maxRows = 2400;
+        while (memHasMore && pages < maxPages && (Array.isArray(memLastItems) ? memLastItems.length : 0) < maxRows) {
+          await loadMem({ append: true });
+          pages += 1;
+        }
+        const loaded = Array.isArray(memLastItems) ? memLastItems.length : 0;
+        const done = !memHasMore;
+        toast('Memory', done ? `Loaded all rows (${loaded})` : `Stopped after loading ${loaded} rows (safety cap)`, true);
+      } catch (e) {
+        const msg = String((e && e.message) || e || 'load all failed');
+        toast('Memory', msg, false);
+      } finally {
+        memLoadAllRunning = false;
+        renderMemLoadMoreButton();
+      }
+    }
+
+    function buildMemorySharePayload() {
+      const rv = (id) => String(document.getElementById(id)?.value || '');
+      const rc = (id, fallback) => {
+        const el = document.getElementById(id);
+        return el ? !!el.checked : !!fallback;
+      };
+      return {
+        project_id: rv('memProjectId'),
+        session_id: rv('memSessionId'),
+        query: rv('memQuery'),
+        layer: rv('memLayer'),
+        kind: rv('memQKind'),
+        tag: rv('memQTag'),
+        since_days: rv('memQSinceDays'),
+        dedup_mode: rv('memDedupMode'),
+        mode: rv('memRetrieveMode'),
+        depth: rv('memRetrieveDepth'),
+        per_hop: rv('memRetrievePerHop'),
+        ranking_mode: rv('memRankingMode'),
+        diversify: rv('memDiversify'),
+        mmr_lambda: rv('memMmrLambda'),
+        route: rv('memRouteMode'),
+        limit: rv('memLimit'),
+        sort_mode: rv('memSort'),
+        offset: Number(memCurrentOffset || 0),
+        show_reason: rc('memShowReason', true) ? 1 : 0,
+        show_explain: rc('memShowExplain', false) ? 1 : 0,
+        inline_preview: rc('memInlinePreview', true) ? 1 : 0,
+      };
+    }
+
+    function applyMemorySharePayload(p) {
+      if (!p || typeof p !== 'object') return false;
+      const setV = (id, key) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (Object.prototype.hasOwnProperty.call(p, key)) el.value = String(p[key] ?? '');
+      };
+      const setC = (id, key, fallback) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (Object.prototype.hasOwnProperty.call(p, key)) el.checked = String(p[key]) === '1' || p[key] === 1 || p[key] === true;
+        else el.checked = !!fallback;
+      };
+      setV('memProjectId', 'project_id');
+      setV('memSessionId', 'session_id');
+      setV('memQuery', 'query');
+      setV('memLayer', 'layer');
+      setV('memQKind', 'kind');
+      setV('memQTag', 'tag');
+      setV('memQSinceDays', 'since_days');
+      setV('memDedupMode', 'dedup_mode');
+      setV('memRetrieveMode', 'mode');
+      setV('memRetrieveDepth', 'depth');
+      setV('memRetrievePerHop', 'per_hop');
+      setV('memRankingMode', 'ranking_mode');
+      setV('memDiversify', 'diversify');
+      setV('memMmrLambda', 'mmr_lambda');
+      setV('memRouteMode', 'route');
+      setV('memLimit', 'limit');
+      setV('memSort', 'sort_mode');
+      setC('memShowReason', 'show_reason', true);
+      setC('memShowExplain', 'show_explain', false);
+      setC('memInlinePreview', 'inline_preview', true);
+      if (Object.prototype.hasOwnProperty.call(p, 'offset')) {
+        const off = Number(p.offset || 0);
+        memBootOffset = Number.isFinite(off) ? Math.max(0, Math.min(10000, Math.floor(off))) : 0;
+      }
+      return true;
+    }
+
+    function buildMemoryShareUrl() {
+      const payload = buildMemorySharePayload();
+      const hash = '#mem=' + b64urlEncode(JSON.stringify(payload));
+      return `${location.origin}${location.pathname}${hash}`;
+    }
+
+    async function copyMemoryShareLink() {
+      const url = buildMemoryShareUrl();
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url);
+          toast('Memory', t('ui_mem_copy_link_ok'), true);
+          return;
+        }
+      } catch (_) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        toast('Memory', t('ui_mem_copy_link_ok'), true);
+      } catch (_) {
+        toast('Memory', t('ui_mem_copy_link_fail'), false);
+      }
+    }
+
+    function getMemoryRequestState(opts = {}) {
+      const append = !!opts.append;
+      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
+      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
+      const composed = buildComposedQuery();
+      const query = composed.query || '';
+      const layer = document.getElementById('memLayer')?.value?.trim() || '';
+      const mode = document.getElementById('memRetrieveMode')?.value?.trim() || 'basic';
+      const depth = Number(document.getElementById('memRetrieveDepth')?.value || 2);
+      const per_hop = Number(document.getElementById('memRetrievePerHop')?.value || 6);
+      const ranking_mode = document.getElementById('memRankingMode')?.value?.trim() || 'hybrid';
+      const diversify = (document.getElementById('memDiversify')?.value || 'true') !== 'false';
+      const mmr_lambda = Number(document.getElementById('memMmrLambda')?.value || 0.72);
+      const route_mode = document.getElementById('memRouteMode')?.value?.trim() || 'auto';
+      const dedup_mode = document.getElementById('memDedupMode')?.value?.trim() || 'off';
+      const show_reason = !!document.getElementById('memShowReason')?.checked;
+      const show_explain = !!document.getElementById('memShowExplain')?.checked;
+      const show_inline_preview = !!document.getElementById('memInlinePreview')?.checked;
+      const limit = Number(document.getElementById('memLimit')?.value || 100);
+      const sort_mode = document.getElementById('memSort')?.value?.trim() || 'server';
+      const reqOffsetRaw = Object.prototype.hasOwnProperty.call(opts, 'offset')
+        ? Number(opts.offset)
+        : (append
+          ? Number(memNextOffset || 0)
+          : Number(memBootOffset !== null ? memBootOffset : 0));
+      const reqOffset = Number.isFinite(reqOffsetRaw) ? Math.max(0, Math.floor(reqOffsetRaw)) : 0;
+      const params = new URLSearchParams({
+        limit: String(Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 100),
+        offset: String(reqOffset),
+        project_id: project_id,
+        session_id: session_id,
+        layer: layer,
+        query: query,
+        kind: composed.kind || '',
+        tag: composed.tag || '',
+        since_days: String(composed.since_days || 0),
+        mode: mode,
+        depth: String(Number.isFinite(depth) ? depth : 2),
+        per_hop: String(Number.isFinite(per_hop) ? per_hop : 6),
+        ranking_mode: ranking_mode,
+        diversify: diversify ? '1' : '0',
+        mmr_lambda: String(Number.isFinite(mmr_lambda) ? mmr_lambda : 0.72),
+        route: route_mode,
+        dedup: dedup_mode,
+        include_preview: show_inline_preview ? '1' : '0',
+        sort_mode: sort_mode,
+      });
+      return {
+        project_id, session_id, composed, query, layer, mode, depth, per_hop, ranking_mode,
+        diversify, mmr_lambda, route_mode, dedup_mode, show_reason, show_explain,
+        show_inline_preview, limit, sort_mode, reqOffset, params,
+      };
+    }
+
+    function buildMemoriesApiUrl(opts = {}) {
+      return '/api/memories?' + getMemoryRequestState(opts).params.toString();
+    }
+
+    async function copyMemoryApiUrl() {
+      const currentOffset = Number(memCurrentOffset || 0);
+      const url = `${location.origin}${buildMemoriesApiUrl({ offset: currentOffset })}`;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url);
+          toast('Memory', t('ui_mem_copy_api_url_ok'), true);
+          return;
+        }
+      } catch (_) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        toast('Memory', t('ui_mem_copy_api_url_ok'), true);
+      } catch (_) {
+        toast('Memory', t('ui_mem_copy_api_url_fail'), false);
+      }
+    }
+
+    async function copyMemoryIds() {
+      const items = Array.isArray(memLastItems) ? memLastItems : [];
+      const ids = items.map(x => String((x || {}).id || '')).filter(Boolean);
+      if (!ids.length) {
+        toast('Memory', t('ui_mem_copy_ids_empty'), false);
+        return;
+      }
+      const text = ids.join('\\n');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          toast('Memory', tf('ui_mem_copy_ids_ok', { n: ids.length }), true);
+          return;
+        }
+      } catch (_) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        toast('Memory', tf('ui_mem_copy_ids_ok', { n: ids.length }), true);
+      } catch (_) {
+        toast('Memory', t('ui_mem_copy_ids_empty'), false);
+      }
+    }
+
+    async function copyMemorySummaries() {
+      const items = Array.isArray(memLastItems) ? memLastItems : [];
+      const lines = items
+        .map(x => `${String((x || {}).id || '')}\t${String((x || {}).summary || '').trim()}`)
+        .filter(x => !!x.trim());
+      if (!lines.length) {
+        toast('Memory', t('ui_mem_copy_summaries_empty'), false);
+        return;
+      }
+      const text = lines.join('\\n');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          toast('Memory', tf('ui_mem_copy_summaries_ok', { n: lines.length }), true);
+          return;
+        }
+      } catch (_) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        toast('Memory', tf('ui_mem_copy_summaries_ok', { n: lines.length }), true);
+      } catch (_) {
+        toast('Memory', t('ui_mem_copy_summaries_empty'), false);
+      }
+    }
+
+    function exportMemoryResultsJson() {
+      const items = Array.isArray(memLastItems) ? memLastItems : [];
+      if (!items.length) {
+        toast('Memory', t('ui_mem_export_json_empty'), false);
+        return;
+      }
+      const payload = {
+        exported_at: new Date().toISOString(),
+        count: items.length,
+        items,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      a.href = url;
+      a.download = `omnimem-memory-results-${ts}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Memory', t('ui_mem_export_json_ok'), true);
+    }
+
+    function _csvCell(v) {
+      const s = String(v ?? '');
+      const esc = s.replaceAll('"', '""');
+      return `"${esc}"`;
+    }
+
+    function exportMemoryResultsCsv() {
+      const items = Array.isArray(memLastItems) ? memLastItems : [];
+      if (!items.length) {
+        toast('Memory', t('ui_mem_export_csv_empty'), false);
+        return;
+      }
+      const cols = ['id', 'project_id', 'layer', 'kind', 'score', 'summary', 'updated_at'];
+      const lines = [cols.join(',')];
+      items.forEach((x) => {
+        const score = Number((x?.retrieval || {}).score || 0);
+        const row = [
+          String(x?.id || ''),
+          String(x?.project_id || ''),
+          String(x?.layer || ''),
+          String(x?.kind || ''),
+          (Number.isFinite(score) && score > 0) ? score.toFixed(6) : '',
+          String(x?.summary || ''),
+          String(x?.updated_at || ''),
+        ];
+        lines.push(row.map(_csvCell).join(','));
+      });
+      const csv = lines.join('\\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      a.href = url;
+      a.download = `omnimem-memory-results-${ts}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Memory', t('ui_mem_export_csv_ok'), true);
+    }
 
 	    function loadRetrievePrefs() {
 	      const p = safeGetRetrievePrefs();
@@ -4384,43 +5344,33 @@ HTML_PAGE = """<!doctype html>
         if (routeEl) routeEl.value = String(p.route || 'auto');
 	    }
 
-	    async function loadMem() {
-	      const project_id = document.getElementById('memProjectId')?.value?.trim() || '';
-	      const session_id = document.getElementById('memSessionId')?.value?.trim() || '';
-	      const composed = buildComposedQuery();
-	      const query = composed.query || '';
-	      const layer = document.getElementById('memLayer')?.value?.trim() || '';
-	      const mode = document.getElementById('memRetrieveMode')?.value?.trim() || 'basic';
-	      const depth = Number(document.getElementById('memRetrieveDepth')?.value || 2);
-	      const per_hop = Number(document.getElementById('memRetrievePerHop')?.value || 6);
-	      const ranking_mode = document.getElementById('memRankingMode')?.value?.trim() || 'hybrid';
-        const diversify = (document.getElementById('memDiversify')?.value || 'true') !== 'false';
-        const mmr_lambda = Number(document.getElementById('memMmrLambda')?.value || 0.72);
-        const route_mode = document.getElementById('memRouteMode')?.value?.trim() || 'auto';
-        const dedup_mode = document.getElementById('memDedupMode')?.value?.trim() || 'off';
-        const show_reason = !!document.getElementById('memShowReason')?.checked;
-        const show_explain = !!document.getElementById('memShowExplain')?.checked;
-        function buildMemoriesApiUrl() {
-          const params = new URLSearchParams({
-            limit: '20',
-            project_id: project_id,
-            session_id: session_id,
-            layer: layer,
-            query: query,
-            kind: composed.kind || '',
-            tag: composed.tag || '',
-            since_days: String(composed.since_days || 0),
-            mode: mode,
-            depth: String(Number.isFinite(depth) ? depth : 2),
-            per_hop: String(Number.isFinite(per_hop) ? per_hop : 6),
-            ranking_mode: ranking_mode,
-            diversify: diversify ? '1' : '0',
-            mmr_lambda: String(Number.isFinite(mmr_lambda) ? mmr_lambda : 0.72),
-            route: route_mode,
-            dedup: dedup_mode,
-          });
-          return '/api/memories?' + params.toString();
-        }
+	    async function loadMem(opts = {}) {
+        if (memLoading) return;
+        memLoading = true;
+        renderMemLoadMoreButton();
+        const append = !!(opts && opts.append);
+        persistMemoryUiState();
+        const reqState = getMemoryRequestState({ append });
+        const project_id = reqState.project_id;
+        const session_id = reqState.session_id;
+        const composed = reqState.composed || {};
+        const query = reqState.query;
+        const layer = reqState.layer;
+        const mode = reqState.mode;
+        const depth = reqState.depth;
+        const per_hop = reqState.per_hop;
+        const ranking_mode = reqState.ranking_mode;
+        const diversify = reqState.diversify;
+        const mmr_lambda = reqState.mmr_lambda;
+        const route_mode = reqState.route_mode;
+        const dedup_mode = reqState.dedup_mode;
+        const show_reason = reqState.show_reason;
+        const show_explain = reqState.show_explain;
+        const show_inline_preview = reqState.show_inline_preview;
+        const limit = reqState.limit;
+        const sort_mode = reqState.sort_mode;
+        const reqOffset = reqState.reqOffset;
+        if (!append) memBootOffset = null;
 	      safeSetRetrievePrefs({
 	        mode,
 	        depth: Number.isFinite(depth) ? Math.max(1, Math.min(4, Math.floor(depth))) : 2,
@@ -4430,7 +5380,14 @@ HTML_PAGE = """<!doctype html>
           mmr_lambda: Number.isFinite(mmr_lambda) ? Math.max(0.05, Math.min(0.95, mmr_lambda)) : 0.72,
 	          route: route_mode || 'auto',
 	      });
-	      const d = await jget(buildMemoriesApiUrl());
+	      let d = null;
+        try {
+          d = await jget(buildMemoriesApiUrl({ offset: reqOffset }));
+        } catch (e) {
+          memLoading = false;
+          renderMemLoadMoreButton();
+          throw e;
+        }
 	      const rh = document.getElementById('memRetrieveHint');
 	      if (rh) {
 	        if (d && d.mode === 'smart' && d.explain) {
@@ -4448,21 +5405,140 @@ HTML_PAGE = """<!doctype html>
 	          rh.textContent = `basic: route=${d.route || route_mode}`;
 	        }
 	      }
-	      const b = document.getElementById('memBody');
-	      b.innerHTML = '';
-	      (d.items || []).forEach(x => {
+        const b = document.getElementById('memBody');
+        const stats = document.getElementById('memStats');
+        const af = document.getElementById('memActiveFilters');
+        const qsum = document.getElementById('memQuerySummary');
+        if (!append) b.innerHTML = '';
+        const pageShown = Number(d.displayed_count || (d.items || []).length || 0);
+        if (!append) memLoadedCount = pageShown; else memLoadedCount += pageShown;
+        memTotalAvailable = Number(d.total_available || memLoadedCount || 0);
+        memHasMore = !!d.has_more;
+        memCurrentOffset = Number(d.requested_offset || reqOffset || 0);
+        memNextOffset = Number(d.next_offset || memLoadedCount || 0);
+        memRemainingCount = Number(d.remaining_count || Math.max(0, memTotalAvailable - memNextOffset));
+        const pageItems = Array.isArray(d.items) ? d.items : [];
+        if (!append) memLastItems = [...pageItems];
+        else memLastItems = memLastItems.concat(pageItems);
+        if (stats) {
+          const dd = d?.dedup || {};
+          const reqLimit = Number(d.requested_limit || (Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 100));
+          const before = Number(dd.before || (d.items || []).length || 0);
+          const after = Number(dd.after || (d.items || []).length || 0);
+          const trunc = !!memHasMore;
+          const scanLimit = Number(d.scan_limit || 0);
+          const scanCount = Number(d.scan_count || 0);
+          const scanCapped = !!d.scan_capped;
+          const base = tf('ui_mem_loaded_stats', { shown: memLoadedCount, total: memTotalAvailable, limit: reqLimit, before, after, route: d.route || route_mode, sort: sort_mode });
+          const capNote = scanCapped
+            ? ` scan window reached (${scanCount}/${scanLimit}); narrow filters or use smarter query for fuller coverage.`
+            : '';
+          stats.textContent = trunc ? `${base} ${t('ui_mem_stats_truncated')}${capNote}` : `${base}${capNote}`;
+        }
+        renderMemLoadMoreButton();
+        if (af) {
+          const parts = [];
+          if (project_id) parts.push(`project=${project_id}`);
+          if (session_id) parts.push(`session=${session_id}`);
+          if (layer) parts.push(`layer=${layer}`);
+          if (query) parts.push(`query="${query.slice(0, 80)}${query.length > 80 ? '…' : ''}"`);
+          if (composed.kind) parts.push(`kind=${composed.kind}`);
+          if (composed.tag) parts.push(`tag=${composed.tag}`);
+          if ((composed.since_days || 0) > 0) parts.push(`since_days=${composed.since_days}`);
+          af.textContent = parts.length ? tf('ui_mem_active_filters', { filters: parts.join(' | ') }) : t('ui_mem_active_filters_none');
+        }
+        if (qsum) {
+          const modeLabel = mode === 'smart' ? `smart(graph:${ranking_mode})` : 'basic(fts/like)';
+          const scopeLabel = [
+            project_id ? `project=${project_id}` : '',
+            session_id ? `session=${session_id}` : '',
+            layer ? `layer=${layer}` : '',
+          ].filter(Boolean).join(', ') || 'all scope';
+          const qParts = [];
+          if (query) qParts.push(`query="${query.slice(0, 60)}${query.length > 60 ? '…' : ''}"`);
+          if (composed.kind) qParts.push(`kind=${composed.kind}`);
+          if (composed.tag) qParts.push(`tag=${composed.tag}`);
+          if ((composed.since_days || 0) > 0) qParts.push(`since_days=${composed.since_days}`);
+          const qLabel = qParts.length ? qParts.join(', ') : 'query=(none)';
+          const text = `mode=${modeLabel}; scope=${scopeLabel}; ${qLabel}; route=${route_mode}; dedup=${dedup_mode}; sort=${sort_mode}; limit=${String(limit)}; preview=${show_inline_preview ? 'on' : 'off'}`;
+          qsum.textContent = tf('ui_mem_query_summary', { text });
+        }
+        const items = pageItems;
+        if (!items.length && !append) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td colspan="7">
+            <div class="small"><b>${escHtml(t('ui_mem_empty_title'))}</b></div>
+            <div class="small" style="margin-top:4px">${escHtml(t('ui_mem_empty_hint'))}</div>
+            <div class="row-btn" style="margin-top:8px">
+              <button id="btnMemEmptyReset" class="secondary" style="margin-top:0">${escHtml(t('ui_mem_empty_reset'))}</button>
+              <button id="btnMemEmptySmart" class="secondary" style="margin-top:0">${escHtml(t('ui_mem_empty_smart'))}</button>
+              <button id="btnMemEmptyLimit" class="secondary" style="margin-top:0">${escHtml(t('ui_mem_empty_limit'))}</button>
+            </div>
+          </td>`;
+          b.appendChild(tr);
+          const bReset = document.getElementById('btnMemEmptyReset');
+          if (bReset) bReset.onclick = async () => { resetMemoryFilters(); await loadMem(); await loadLayerStats(); };
+          const bSmart = document.getElementById('btnMemEmptySmart');
+          if (bSmart) bSmart.onclick = async () => {
+            const m = document.getElementById('memRetrieveMode');
+            if (m) m.value = 'smart';
+            smartTuneRetrieveParams();
+            await loadMem();
+          };
+          const bLimit = document.getElementById('btnMemEmptyLimit');
+          if (bLimit) bLimit.onclick = async () => {
+            const l = document.getElementById('memLimit');
+            if (l) l.value = '200';
+            await loadMem();
+          };
+          selectedMemoryId = '';
+          const mv = document.getElementById('memView');
+          if (mv) mv.textContent = t('ui_mem_body_empty');
+          setMemoryContentMeta(null);
+          memLoading = false;
+          renderMemLoadMoreButton();
+          return;
+        }
+        const visibleSelected = items.some(x => String((x || {}).id || '') === String(selectedMemoryId || ''));
+        const autoSelectId = (!append && items.length)
+          ? (visibleSelected ? String(selectedMemoryId || '') : String((items[0] || {}).id || ''))
+          : '';
+	      items.forEach(x => {
 	        const tr = document.createElement('tr');
-	        tr.innerHTML = `<td><a href=\"#\" data-id=\"${escHtml(x.id)}\">${escHtml(String(x.id).slice(0,10))}...</a></td><td>${escHtml(x.project_id || '')}</td><td>${escHtml(x.layer || '')}</td><td>${escHtml(x.kind || '')}</td><td>${escHtml(x.summary || '')}${retrievalHintHtml(x, { showReason: show_reason, showDetail: show_explain })}</td><td>${escHtml(x.updated_at || '')}</td>`;
+          if ((selectedMemoryId && String(x.id) === String(selectedMemoryId)) || (autoSelectId && String(x.id) === autoSelectId)) {
+            tr.classList.add('row-selected');
+          }
+          const preview = show_inline_preview && String(x.body_preview || '').trim()
+            ? `<div class="small mono mem-preview">${escHtml(String(x.body_preview || ''))}</div>`
+            : '';
+          const score = Number((x.retrieval || {}).score || 0);
+          const scoreText = Number.isFinite(score) && score > 0 ? score.toFixed(3) : '-';
+          const fullId = !!document.getElementById('memShowFullId')?.checked;
+          const rawId = String(x.id || '');
+          const idText = fullId ? rawId : `${rawId.slice(0,10)}...`;
+	        tr.innerHTML = `<td><a href=\"#\" data-id=\"${escHtml(x.id)}\" title=\"${escHtml(x.id || '')}\">${escHtml(idText)}</a></td><td>${escHtml(x.project_id || '')}</td><td>${escHtml(x.layer || '')}</td><td>${escHtml(x.kind || '')}</td><td class=\"mono\">${escHtml(scoreText)}</td><td>${escHtml(x.summary || '')}${retrievalHintHtml(x, { showReason: show_reason, showDetail: show_explain })}${preview}</td><td>${escHtml(x.updated_at || '')}</td>`;
 	        tr.querySelector('a').onclick = async (e) => {
 	          e.preventDefault();
+            selectedMemoryId = String(x.id || '');
+            b.querySelectorAll('tr.row-selected').forEach(el => el.classList.remove('row-selected'));
+            tr.classList.add('row-selected');
 	          await openMemory(x.id);
 	        };
 	        tr.onclick = async (e) => {
 	          if (e.target && e.target.tagName === 'A') return;
+            selectedMemoryId = String(x.id || '');
+            b.querySelectorAll('tr.row-selected').forEach(el => el.classList.remove('row-selected'));
+            tr.classList.add('row-selected');
 	          await openMemory(x.id);
 	        };
 	        b.appendChild(tr);
 	      });
+        if (!append && autoSelectId) {
+          selectedMemoryId = autoSelectId;
+          try { await openMemory(autoSelectId, { showDrawer: false }); } catch (_) {}
+        }
+        memLoading = false;
+        renderMemLoadMoreButton();
 	    }
 
 	    function updateBoardToolbar() {
@@ -4615,6 +5691,7 @@ HTML_PAGE = """<!doctype html>
 	      liveBusy = true;
 	      try {
 	        await loadDaemon();
+        await loadContextRuntimeSummary();
 	        const active = document.querySelector('.panel.active')?.id || '';
 	        if (active === 'insightsTab') {
 	          const pid = document.getElementById('insProjectId')?.value?.trim() || '';
@@ -4699,6 +5776,17 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('btnGithubQuickSetup').onclick = async () => { await githubQuickSetup(); };
     document.getElementById('btnGithubGuideRefresh').onclick = async () => { await loadGithubSetupPlan(); };
     document.getElementById('btnGithubGuideNext').onclick = async () => { await runGithubSetupNext(); };
+    document.getElementById('btnGithubReconfigure').onclick = async () => { await openGithubReconfigure(true); };
+    document.getElementById('btnGithubClearRepo').onclick = () => { clearGithubRepoSelection(); };
+    document.getElementById('btnOpenGithubConfig').onclick = async () => { await openGithubReconfigure(false); };
+    const bMemSyncRefresh = document.getElementById('btnMemSyncRefresh');
+    if (bMemSyncRefresh) bMemSyncRefresh.onclick = async () => { await loadGithubSetupPlan(); };
+    const bMemSyncNext = document.getElementById('btnMemSyncNext');
+    if (bMemSyncNext) bMemSyncNext.onclick = async () => { await runGithubSetupNext(); };
+    const bMemSyncOpen = document.getElementById('btnMemSyncOpenConfig');
+    if (bMemSyncOpen) bMemSyncOpen.onclick = async () => { await openGithubReconfigure(false); };
+    const bMemCopyBody = document.getElementById('btnMemCopyBody');
+    if (bMemCopyBody) bMemCopyBody.onclick = async () => { await copyMemoryBody(); };
 
     async function runSync(mode) {
       const d = await jpost('/api/sync', {mode});
@@ -4727,6 +5815,68 @@ HTML_PAGE = """<!doctype html>
       const d = await jget('/api/daemon');
       daemonCache = d;
       renderDaemonState();
+    }
+
+    async function loadContextRuntimeSummary() {
+      const statsEl = document.getElementById('ctxRuntimeStats');
+      const hintEl = document.getElementById('ctxRuntimeHint');
+      const recoEl = document.getElementById('ctxRuntimeReco');
+      const toolEl = document.getElementById('ctxRuntimeTool');
+      if (!statsEl || !hintEl || !recoEl) return;
+      const project = document.getElementById('memProjectId')?.value?.trim() || document.getElementById('insProjectId')?.value?.trim() || '';
+      const tool = String(toolEl?.value || '').trim();
+      const q = new URLSearchParams({ project_id: project, window: '12', tool });
+      const d = await jget('/api/context-runtime?' + q.toString());
+      if (!d || !d.ok) {
+        statsEl.textContent = String((d && d.error) || t('ui_ctx_runtime_unavailable'));
+        hintEl.textContent = '';
+        recoEl.textContent = '';
+        return;
+      }
+      const c = Number(d.count || 0);
+      const util = Number(d.avg_context_utilization || 0);
+      const p95 = Number(d.p95_context_utilization || 0);
+      const tf = Number(d.transient_failures_sum || 0);
+      const at = Number(d.attempts_sum || 0);
+      const outTok = Number(d.avg_output_tokens || 0);
+      const p95Out = Number(d.p95_output_tokens || 0);
+      const risk = String(d.risk_level || 'unknown');
+      statsEl.textContent = tf('ui_ctx_runtime_stats', {
+        runs: String(c),
+        avg_util: util.toFixed(3),
+        p95_util: p95.toFixed(3),
+        transient: String(tf),
+        attempts: String(at),
+        avg_output_tokens: String(Math.round(outTok)),
+        p95_output_tokens: String(Math.round(p95Out)),
+        risk: risk,
+      });
+      if (c <= 0) {
+        hintEl.textContent = t('ui_ctx_runtime_no_rows');
+      } else if (risk === 'critical') {
+        hintEl.textContent = t('ui_ctx_runtime_hint_critical');
+      } else if (risk === 'high') {
+        hintEl.textContent = t('ui_ctx_runtime_hint_high');
+      } else if (util <= 0.45) {
+        hintEl.textContent = t('ui_ctx_runtime_hint_low');
+      } else {
+        hintEl.textContent = t('ui_ctx_runtime_hint_balanced');
+      }
+      const rq = String(d.recommended_quota_mode || 'normal');
+      const rp = String(d.recommended_context_profile || 'balanced');
+      recoEl.textContent = tf('ui_ctx_runtime_recommended', { rq, rp });
+      if (toolEl && Array.isArray(d.by_tool) && !tool) {
+        const seen = new Set(Array.from(toolEl.options || []).map(o => String(o.value || '')));
+        (d.by_tool || []).forEach((it) => {
+          const nm = String((it || {}).tool || '').trim();
+          if (!nm || seen.has(nm)) return;
+          const op = document.createElement('option');
+          op.value = nm;
+          op.textContent = nm;
+          toolEl.appendChild(op);
+          seen.add(nm);
+        });
+      }
     }
 
 		    async function loadLayerStats() {
@@ -6097,18 +7247,18 @@ HTML_PAGE = """<!doctype html>
 	      const btns = document.querySelectorAll('.tab-btn');
 	      btns.forEach(btn => {
 	        btn.onclick = () => {
-	          btns.forEach(x => x.classList.remove('active'));
-	          btn.classList.add('active');
-	          document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-	          document.getElementById(btn.dataset.tab).classList.add('active');
+	          setActiveTab(btn.dataset.tab);
 	        };
 	      });
 	    }
 
 	    function setActiveTab(tabId) {
+        const valid = new Set(['statusTab', 'insightsTab', 'configTab', 'projectTab', 'memoryTab']);
+        const target = valid.has(String(tabId || '')) ? String(tabId) : 'statusTab';
 	      const btns = document.querySelectorAll('.tab-btn');
-	      btns.forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
-	      document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === tabId));
+	      btns.forEach(b => b.classList.toggle('active', b.dataset.tab === target));
+	      document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === target));
+        safeSetActiveTab(target);
 	    }
 
     document.getElementById('langSelect').onchange = (e) => {
@@ -6133,6 +7283,8 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('btnConflictRecovery').onclick = () => runConflictRecovery();
       const bHealth = document.getElementById('btnHealthCheck');
       if (bHealth) bHealth.onclick = () => runHealthCheck();
+      const bCtxRun = document.getElementById('btnCtxRuntimeRefresh');
+      if (bCtxRun) bCtxRun.onclick = () => loadContextRuntimeSummary();
 	      const bGuide = document.getElementById('btnGuideRun');
 	      if (bGuide) bGuide.onclick = () => runGuidedCheck();
       const bQ = document.getElementById('btnQualityRefresh');
@@ -6146,7 +7298,25 @@ HTML_PAGE = """<!doctype html>
       if (bQA) bQA.onclick = () => runAutoMaintenance(true);
 	          document.getElementById('btnProjectAttach').onclick = () => attachProject();
 	          document.getElementById('btnProjectDetach').onclick = () => detachProject();
-	          document.getElementById('btnMemReload').onclick = () => loadMem();
+          document.getElementById('btnMemReload').onclick = () => loadMem();
+          const bCopyMemLink = document.getElementById('btnMemCopyLink');
+          if (bCopyMemLink) bCopyMemLink.onclick = async () => { await copyMemoryShareLink(); };
+          const bCopyMemIds = document.getElementById('btnMemCopyIds');
+          if (bCopyMemIds) bCopyMemIds.onclick = async () => { await copyMemoryIds(); };
+          const bCopyMemSummaries = document.getElementById('btnMemCopySummaries');
+          if (bCopyMemSummaries) bCopyMemSummaries.onclick = async () => { await copyMemorySummaries(); };
+          const bCopyMemApi = document.getElementById('btnMemCopyApiUrl');
+          if (bCopyMemApi) bCopyMemApi.onclick = async () => { await copyMemoryApiUrl(); };
+          const bExportMemJson = document.getElementById('btnMemExportJson');
+          if (bExportMemJson) bExportMemJson.onclick = () => { exportMemoryResultsJson(); };
+          const bExportMemCsv = document.getElementById('btnMemExportCsv');
+          if (bExportMemCsv) bExportMemCsv.onclick = () => { exportMemoryResultsCsv(); };
+          const bMoreMem = document.getElementById('btnMemLoadMore');
+          if (bMoreMem) bMoreMem.onclick = async () => { await loadMem({ append: true }); };
+          const bAllMem = document.getElementById('btnMemLoadAll');
+          if (bAllMem) bAllMem.onclick = async () => { await loadMemAll(); };
+          const bResetMem = document.getElementById('btnMemResetFilters');
+          if (bResetMem) bResetMem.onclick = async () => { resetMemoryFilters(); await loadMem(); await loadLayerStats(); };
 	          document.getElementById('btnMemOpenBoard').onclick = async () => { setActiveTab('insightsTab'); await loadInsights(); };
           document.getElementById('btnMemAutoTune').onclick = async () => { smartTuneRetrieveParams(); await loadMem(); };
           const bPresetQuick = document.getElementById('btnPresetQuick');
@@ -6155,6 +7325,14 @@ HTML_PAGE = """<!doctype html>
           if (bPresetQuick) bPresetQuick.onclick = async () => { applyRetrievePreset('quick'); await loadMem(); };
           if (bPresetDeep) bPresetDeep.onclick = async () => { applyRetrievePreset('deep'); await loadMem(); };
           if (bPresetPrecise) bPresetPrecise.onclick = async () => { applyRetrievePreset('precise'); await loadMem(); };
+          const bScopeRecent7 = document.getElementById('btnMemScopeRecent7');
+          const bScopeDecision = document.getElementById('btnMemScopeDecision');
+          const bScopeNote = document.getElementById('btnMemScopeNote');
+          const bScopeClear = document.getElementById('btnMemScopeClear');
+          if (bScopeRecent7) bScopeRecent7.onclick = async () => { applyMemoryScope('recent7'); await loadMem(); };
+          if (bScopeDecision) bScopeDecision.onclick = async () => { applyMemoryScope('decision'); await loadMem(); };
+          if (bScopeNote) bScopeNote.onclick = async () => { applyMemoryScope('note'); await loadMem(); };
+          if (bScopeClear) bScopeClear.onclick = async () => { applyMemoryScope('clear'); await loadMem(); };
           const bBuildQ = document.getElementById('btnMemBuildQuery');
           if (bBuildQ) bBuildQ.onclick = async () => {
             const c = buildComposedQuery();
@@ -6176,12 +7354,28 @@ HTML_PAGE = """<!doctype html>
           document.getElementById('memDedupMode').onchange = () => loadMem();
           document.getElementById('memShowReason').onchange = () => loadMem();
           document.getElementById('memShowExplain').onchange = () => loadMem();
+          const memLimit = document.getElementById('memLimit');
+          if (memLimit) memLimit.onchange = () => loadMem();
+          const memSort = document.getElementById('memSort');
+          if (memSort) memSort.onchange = () => loadMem();
+          const memInlinePreview = document.getElementById('memInlinePreview');
+          if (memInlinePreview) memInlinePreview.onchange = () => loadMem();
+          const memShowFullId = document.getElementById('memShowFullId');
+          if (memShowFullId) memShowFullId.onchange = () => loadMem();
+          const memAdv = document.getElementById('memAdvancedBox');
+          if (memAdv) memAdv.ontoggle = () => persistMemoryUiState();
           document.getElementById('memSessionId').onchange = () => { loadMem(); loadLayerStats(); };
           document.getElementById('memProjectId').onchange = () => { loadMem(); loadLayerStats(); };
           const mq = document.getElementById('memQuery');
           if (mq) {
             mq.onkeydown = (e) => { if (e.key === 'Enter') loadMem(); };
           }
+          const bStatusSyncRefresh = document.getElementById('btnStatusSyncRefresh');
+          if (bStatusSyncRefresh) bStatusSyncRefresh.onclick = async () => { await loadGithubSetupPlan(); };
+          const bStatusSyncNext = document.getElementById('btnStatusSyncNext');
+          if (bStatusSyncNext) bStatusSyncNext.onclick = async () => { await runGithubSetupNext(); };
+          const bStatusSyncOpen = document.getElementById('btnStatusSyncOpenConfig');
+          if (bStatusSyncOpen) bStatusSyncOpen.onclick = async () => { await openGithubReconfigure(false); };
           document.getElementById('btnInsightsReload').onclick = () => loadInsights();
           document.getElementById('insProjectId').onchange = () => { lockMaintGate(); opsPreviewCache = null; renderOpsDefaultsProfileHint(); loadInsights(); };
           document.getElementById('insSessionId').onchange = () => { lockMaintGate(); opsPreviewCache = null; renderOpsDefaultsProfileHint(); loadInsights(); };
@@ -6774,8 +7968,13 @@ HTML_PAGE = """<!doctype html>
 	    bindActions();
 	    bindTabs();
 	    applyI18n();
+        try {
+          const t = safeGetActiveTab();
+          if (t) setActiveTab(t);
+        } catch (_) {}
         loadBuildInfo();
 	    loadRetrievePrefs();
+        applyMemoryUiState();
         refreshRouteTemplateSelect();
         loadRouteTemplatesRemote();
 		    loadThrFromStorage();
@@ -6819,7 +8018,15 @@ HTML_PAGE = """<!doctype html>
 	    // Hash import: #ws=base64url(JSON)
 	    try {
 	      const h = (location.hash || '').trim();
-	      if (h.startsWith('#ws=')) {
+        if (h.startsWith('#mem=')) {
+          const raw = b64urlDecode(h.slice(5));
+          const obj = JSON.parse(raw);
+          if (applyMemorySharePayload(obj)) {
+            setActiveTab('memoryTab');
+            toast('Memory', t('ui_mem_link_applied'), true);
+            clearMemHash();
+          }
+        } else if (h.startsWith('#ws=')) {
 	        const raw = b64urlDecode(h.slice(4));
 	        const obj = JSON.parse(raw);
 	        beginWorksetImportReview(obj, 'share link');
@@ -6828,6 +8035,7 @@ HTML_PAGE = """<!doctype html>
         loadCfg();
         loadMem();
         loadDaemon();
+        loadContextRuntimeSummary();
         runHealthCheck();
         loadLayerStats();
         loadInsights();
@@ -8028,6 +9236,152 @@ def _normalize_dedup_mode(raw: str) -> str:
     return s if s in {"off", "summary_kind"} else "off"
 
 
+
+
+def _context_runtime_summary(*, paths_root: Path, project_id: str = "", tool: str = "", window: int = 12) -> dict[str, Any]:
+    runtime_fp = Path(paths_root) / "runtime" / "context_strategy_stats.json"
+
+    def _empty() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "count": 0,
+            "avg_context_utilization": 0.0,
+            "p95_context_utilization": 0.0,
+            "transient_failures_sum": 0,
+            "attempts_sum": 0,
+            "avg_output_tokens": 0.0,
+            "p95_output_tokens": 0.0,
+            "risk_level": "none",
+            "recommended_quota_mode": "normal",
+            "recommended_context_profile": "balanced",
+            "by_tool": [],
+        }
+
+    if not runtime_fp.exists():
+        return _empty()
+
+    try:
+        obj = json.loads(runtime_fp.read_text(encoding="utf-8"))
+    except Exception:
+        obj = {}
+    items = obj.get("items") if isinstance(obj, dict) else []
+    if not isinstance(items, list):
+        items = []
+
+    p_filter = str(project_id or "").strip()
+    t_filter = str(tool or "").strip().lower()
+    rows: list[dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        key = str(it.get("key", "") or "")
+        if "|" not in key:
+            continue
+        k_tool, k_project = key.split("|", 1)
+        if p_filter and k_project != p_filter:
+            continue
+        if t_filter and str(k_tool).lower() != t_filter:
+            continue
+        rows.append(it)
+
+    w = max(1, min(120, int(window or 12)))
+    rows = rows[-w:]
+    count = len(rows)
+    if count <= 0:
+        return _empty()
+
+    tf_sum = 0
+    at_sum = 0
+    util_vals: list[float] = []
+    out_vals: list[float] = []
+    by_tool: dict[str, dict[str, Any]] = {}
+
+    for r in rows:
+        key = str(r.get("key", "") or "")
+        k_tool = key.split("|", 1)[0] if "|" in key else ""
+        tf = max(0, int(r.get("transient_failures", 0) or 0))
+        at = max(0, int(r.get("attempts", 0) or 0))
+        util = max(0.0, min(1.2, float(r.get("context_utilization", 0.0) or 0.0)))
+        out_t = max(0.0, float(r.get("output_tokens", 0) or 0))
+
+        tf_sum += tf
+        at_sum += at
+        util_vals.append(util)
+        out_vals.append(out_t)
+
+        slot = by_tool.setdefault(
+            k_tool,
+            {
+                "tool": k_tool,
+                "count": 0,
+                "avg_context_utilization": 0.0,
+                "avg_output_tokens": 0.0,
+            },
+        )
+        slot["count"] = int(slot.get("count", 0)) + 1
+        slot["avg_context_utilization"] = float(slot.get("avg_context_utilization", 0.0)) + util
+        slot["avg_output_tokens"] = float(slot.get("avg_output_tokens", 0.0)) + out_t
+
+    util_vals.sort()
+    out_vals.sort()
+
+    def _p95(vals: list[float]) -> float:
+        if not vals:
+            return 0.0
+        idx = max(0, min(len(vals) - 1, int(round((len(vals) - 1) * 0.95))))
+        return float(vals[idx])
+
+    avg_util = sum(util_vals) / float(count)
+    p95_util = _p95(util_vals)
+    avg_out = sum(out_vals) / float(count)
+    p95_out = _p95(out_vals)
+
+    risk_level = "balanced"
+    if p95_util >= 0.98 or tf_sum >= max(3, count // 2):
+        risk_level = "critical"
+    elif p95_util >= 0.90 or avg_util >= 0.82 or tf_sum >= 2:
+        risk_level = "high"
+
+    recommended_quota_mode = "normal"
+    recommended_context_profile = "balanced"
+    if risk_level == "critical":
+        recommended_quota_mode = "critical"
+        recommended_context_profile = "low_quota"
+    elif risk_level == "high":
+        recommended_quota_mode = "low"
+        recommended_context_profile = "balanced"
+    elif avg_util <= 0.45 and tf_sum == 0:
+        recommended_quota_mode = "normal"
+        recommended_context_profile = "deep_research"
+
+    by_tool_items: list[dict[str, Any]] = []
+    for v in by_tool.values():
+        c = max(1, int(v.get("count", 0) or 0))
+        by_tool_items.append(
+            {
+                "tool": str(v.get("tool", "") or ""),
+                "count": c,
+                "avg_context_utilization": float(v.get("avg_context_utilization", 0.0)) / float(c),
+                "avg_output_tokens": float(v.get("avg_output_tokens", 0.0)) / float(c),
+            }
+        )
+    by_tool_items.sort(key=lambda x: str(x.get("tool", "")))
+
+    return {
+        "ok": True,
+        "count": count,
+        "avg_context_utilization": avg_util,
+        "p95_context_utilization": p95_util,
+        "transient_failures_sum": tf_sum,
+        "attempts_sum": at_sum,
+        "avg_output_tokens": avg_out,
+        "p95_output_tokens": p95_out,
+        "risk_level": risk_level,
+        "recommended_quota_mode": recommended_quota_mode,
+        "recommended_context_profile": recommended_context_profile,
+        "by_tool": by_tool_items,
+    }
+
 def _parse_int_param(raw: Any, *, default: int, lo: int, hi: int) -> int:
     try:
         v = int(float(raw))
@@ -8076,8 +9430,12 @@ def _parse_memories_request(q: dict[str, list[str]]) -> dict[str, Any]:
     route = _infer_memory_route(query) if route_raw == "auto" else route_raw
     include_core_blocks, core_block_limit, core_merge_by_topic = _parse_retrieve_core_options(q)
     drift_aware, drift_recent_days, drift_baseline_days, drift_weight = _parse_retrieve_drift_options(q)
+    sort_mode = str(q.get("sort_mode", ["server"])[0] or "").strip().lower()
+    if sort_mode not in {"server", "updated_desc", "updated_asc", "score_desc"}:
+        sort_mode = "server"
     return {
         "limit": _parse_int_param(q.get("limit", ["20"])[0], default=20, lo=1, hi=200),
+        "offset": _parse_int_param(q.get("offset", ["0"])[0], default=0, lo=0, hi=10000),
         "project_id": q.get("project_id", [""])[0].strip(),
         "session_id": q.get("session_id", [""])[0].strip(),
         "layer": q.get("layer", [""])[0].strip() or None,
@@ -8102,7 +9460,19 @@ def _parse_memories_request(q: dict[str, list[str]]) -> dict[str, Any]:
         "drift_weight": drift_weight,
         "dedup_mode": _normalize_dedup_mode(q.get("dedup", ["off"])[0]),
         "mmr_lambda": _parse_float_param(q.get("mmr_lambda", ["0.72"])[0], default=0.72, lo=0.05, hi=0.95),
+        "include_preview": _parse_bool_param(q.get("include_preview", ["1"])[0], default=True),
+        "sort_mode": sort_mode,
     }
+
+
+def _resolve_memories_scan_limit(*, req_limit: int, req_offset: int, sort_mode: str, mode: str) -> int:
+    base = max(1, int(req_limit)) + max(0, int(req_offset))
+    mode_s = str(mode or "basic").strip().lower()
+    if mode_s == "smart":
+        return max(8, min(1000, base + 120))
+    if str(sort_mode or "server").strip().lower() != "server":
+        base = max(base, 400)
+    return max(50, min(2000, base))
 
 
 def _build_smart_memories_cache_key(req: dict[str, Any]) -> tuple[Any, ...]:
@@ -8110,7 +9480,15 @@ def _build_smart_memories_cache_key(req: dict[str, Any]) -> tuple[Any, ...]:
     hop_i = int(req["per_hop"])
     rank_i = str(req.get("ranking_mode") or "").lower().strip()
     rank_i = rank_i if rank_i in {"path", "ppr", "hybrid"} else "hybrid"
-    limit_i = max(8, min(30, int(req["limit"])))
+    req_limit = max(1, min(200, int(req.get("limit", 20))))
+    req_offset = max(0, min(10000, int(req.get("offset", 0))))
+    limit_i = max(8, min(200, req_limit))
+    scan_limit = _resolve_memories_scan_limit(
+        req_limit=req_limit,
+        req_offset=req_offset,
+        sort_mode=str(req.get("sort_mode", "server")),
+        mode="smart",
+    )
     return (
         str(req.get("project_id") or ""),
         str(req.get("session_id") or ""),
@@ -8130,6 +9508,7 @@ def _build_smart_memories_cache_key(req: dict[str, Any]) -> tuple[Any, ...]:
         int(req.get("drift_recent_days", 14)),
         int(req.get("drift_baseline_days", 120)),
         float(req.get("drift_weight", 0.35)),
+        scan_limit,
     )
 
 
@@ -8153,6 +9532,55 @@ def _process_memories_items(
     before_dedup = len(out)
     out = _dedup_memory_items(out, mode=dedup_mode)
     return out, before_dedup
+
+
+def _sort_memory_items(items: list[dict[str, Any]], *, sort_mode: str) -> list[dict[str, Any]]:
+    mode = str(sort_mode or "server").strip().lower()
+    if mode == "updated_desc":
+        return sorted(items, key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+    if mode == "updated_asc":
+        return sorted(items, key=lambda x: str(x.get("updated_at") or ""))
+    if mode == "score_desc":
+        return sorted(items, key=lambda x: float((x.get("retrieval") or {}).get("score", 0.0)), reverse=True)
+    return items
+
+
+def _read_memory_body_preview(paths: Any, body_md_path: str, *, max_chars: int = 260) -> str:
+    rel = str(body_md_path or "").strip()
+    if not rel:
+        return ""
+    try:
+        root = Path(str(paths.markdown_root)).resolve()
+        fp = (root / rel).resolve()
+        if root not in fp.parents and fp != root:
+            return ""
+        if not fp.exists() or not fp.is_file():
+            return ""
+        txt = fp.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+    txt = re.sub(r"^# .*?\n\n", "", txt, count=1, flags=re.DOTALL)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if not txt:
+        return ""
+    max_chars = max(60, min(1200, int(max_chars)))
+    if len(txt) <= max_chars:
+        return txt
+    return txt[: max_chars - 1].rstrip() + "…"
+
+
+def _attach_memory_previews(paths: Any, items: list[dict[str, Any]], *, max_chars: int = 260, max_items: int = 120) -> list[dict[str, Any]]:
+    if not items:
+        return items
+    cap = max(1, min(int(max_items), len(items)))
+    for idx, item in enumerate(items):
+        if idx >= cap:
+            break
+        rel = str((item or {}).get("body_md_path") or "").strip()
+        if not rel:
+            continue
+        item["body_preview"] = _read_memory_body_preview(paths, rel, max_chars=max_chars)
+    return items
 
 
 def _parse_governance_request(q: dict[str, list[str]]) -> dict[str, Any]:
@@ -9117,6 +10545,26 @@ def run_webui(
                 self._send_json({"ok": True, **daemon_state})
                 return
 
+            if parsed.path == "/api/context-runtime":
+                try:
+                    q = parse_qs(parsed.query)
+                    project_id = str(q.get("project_id", [""])[0] or "").strip()
+                    tool = str(q.get("tool", [""])[0] or "").strip()
+                    window = _parse_int_param(q.get("window", ["12"])[0], default=12, lo=1, hi=120)
+                    out = _context_runtime_summary(
+                        paths_root=paths.root,
+                        project_id=project_id,
+                        tool=tool,
+                        window=window,
+                    )
+                    out["project_id"] = project_id
+                    out["tool"] = tool
+                    out["window"] = int(window)
+                    self._send_json(out)
+                except Exception as exc:  # pragma: no cover
+                    self._send_json({"ok": False, "error": str(exc)}, 500)
+                return
+
             if parsed.path == "/api/fs/cwd":
                 self._send_json({"ok": True, "cwd": str(Path.cwd())})
                 return
@@ -9162,6 +10610,8 @@ def run_webui(
 
             if parsed.path == "/api/memories":
                 req = _parse_memories_request(parse_qs(parsed.query))
+                req_limit = max(1, min(200, int(req["limit"])))
+                req_offset = max(0, min(10000, int(req.get("offset", 0))))
                 if str(req["mode"]) == "smart" and str(req["query"]):
                     cache_key = _build_smart_memories_cache_key(req)
                     depth_i = int(req["depth"])
@@ -9169,7 +10619,12 @@ def run_webui(
                     rank_i = str(req["ranking_mode"]).lower()
                     if rank_i not in {"path", "ppr", "hybrid"}:
                         rank_i = "hybrid"
-                    limit_i = max(8, min(30, int(req["limit"])))
+                    limit_i = _resolve_memories_scan_limit(
+                        req_limit=req_limit,
+                        req_offset=req_offset,
+                        sort_mode=str(req.get("sort_mode", "server")),
+                        mode="smart",
+                    )
                     out: dict[str, Any] | None = None
                     now = time.time()
                     with smart_retrieve_lock:
@@ -9203,7 +10658,10 @@ def run_webui(
                         )
                         with smart_retrieve_lock:
                             _cache_set(smart_retrieve_cache, cache_key, out, now=now, max_items=96)
-                    items = list(out.get("items") or [])
+                    pre_items = list(out.get("items") or [])
+                    scan_count = len(pre_items)
+                    scan_capped = bool(scan_count >= max(1, int(limit_i)))
+                    items = list(pre_items)
                     if req["layer"]:
                         items = [x for x in items if str(x.get("layer") or "") == str(req["layer"])]
                     items, before_dedup = _process_memories_items(
@@ -9215,26 +10673,52 @@ def run_webui(
                         since_days=int(req["since_days"]),
                         dedup_mode=str(req["dedup_mode"]),
                     )
+                    items = _sort_memory_items(items, sort_mode=str(req.get("sort_mode", "server")))
+                    if bool(req.get("include_preview", True)):
+                        items = _attach_memory_previews(paths, items, max_chars=300, max_items=120)
+                    total_available = len(items)
+                    shown_items = items[req_offset : req_offset + req_limit]
+                    next_offset = req_offset + len(shown_items)
+                    remaining_count = max(0, total_available - next_offset)
                     self._send_json(
                         {
                             "ok": True,
-                            "items": items[: max(1, min(200, int(req["limit"])))],
+                            "items": shown_items,
                             "mode": "smart",
                             "route": str(req["route"]),
                             "dedup": {"mode": str(req["dedup_mode"]), "before": before_dedup, "after": len(items)},
+                            "requested_limit": req_limit,
+                            "requested_offset": req_offset,
+                            "total_available": total_available,
+                            "displayed_count": len(shown_items),
+                            "scan_limit": int(limit_i),
+                            "scan_count": int(scan_count),
+                            "scan_capped": bool(scan_capped),
+                            "truncated": bool(total_available > next_offset),
+                            "has_more": bool(total_available > next_offset),
+                            "next_offset": next_offset,
+                            "remaining_count": remaining_count,
                             "explain": out.get("explain", {}),
                         }
                     )
                 else:
+                    basic_limit = _resolve_memories_scan_limit(
+                        req_limit=req_limit,
+                        req_offset=req_offset,
+                        sort_mode=str(req.get("sort_mode", "server")),
+                        mode="basic",
+                    )
                     items = find_memories(
                         paths,
                         schema_sql_path,
                         query=str(req["query"]),
                         layer=str(req["layer"] or "") or None,
-                        limit=int(req["limit"]),
+                        limit=basic_limit,
                         project_id=str(req["project_id"]),
                         session_id=str(req["session_id"]),
                     )
+                    scan_count = len(items)
+                    scan_capped = bool(scan_count >= max(1, int(basic_limit)))
                     items, before_dedup = _process_memories_items(
                         paths=paths,
                         items=items,
@@ -9244,13 +10728,31 @@ def run_webui(
                         since_days=int(req["since_days"]),
                         dedup_mode=str(req["dedup_mode"]),
                     )
+                    items = _sort_memory_items(items, sort_mode=str(req.get("sort_mode", "server")))
+                    if bool(req.get("include_preview", True)):
+                        items = _attach_memory_previews(paths, items, max_chars=300, max_items=120)
+                    total_available = len(items)
+                    shown_items = items[req_offset : req_offset + req_limit]
+                    next_offset = req_offset + len(shown_items)
+                    remaining_count = max(0, total_available - next_offset)
                     self._send_json(
                         {
                             "ok": True,
-                            "items": items,
+                            "items": shown_items,
                             "mode": "basic",
                             "route": str(req["route"]),
                             "dedup": {"mode": str(req["dedup_mode"]), "before": before_dedup, "after": len(items)},
+                            "requested_limit": req_limit,
+                            "requested_offset": req_offset,
+                            "total_available": total_available,
+                            "displayed_count": len(shown_items),
+                            "scan_limit": int(basic_limit),
+                            "scan_count": int(scan_count),
+                            "scan_capped": bool(scan_capped),
+                            "truncated": bool(total_available > next_offset),
+                            "has_more": bool(total_available > next_offset),
+                            "next_offset": next_offset,
+                            "remaining_count": remaining_count,
                         }
                     )
                 return

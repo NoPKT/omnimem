@@ -123,10 +123,11 @@ Target version: \`$NEXT_VER\`
 $UNREL_BODY
 
 ## Publish Checklist
-1. \`npm run release:gate\`
+1. \`npm run release:gate:formal\`
 2. \`git add -A && git commit -m "release: v$NEXT_VER"\`
 3. \`git tag v$NEXT_VER && git push origin main && git push origin v$NEXT_VER\`
-4. \`npm publish --access public\`
+4. \`npm run ci:watch\` (fix CI failures before publish)
+5. \`npm publish --access public\`
 EOF
 
 if [[ "$APPLY" -eq 1 ]]; then

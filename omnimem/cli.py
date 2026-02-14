@@ -20,7 +20,8 @@ from pathlib import Path
 
 from .agent import interactive_chat, run_turn
 from .codex_watch import WatchOptions
-from .memory_context import build_budgeted_memory_context
+from .memory_context import build_budgeted_memory_context, estimate_tokens
+from .context_strategy import resolve_context_plan
 from .adapters import (
     notion_query_database,
     notion_write_page,
@@ -170,6 +171,130 @@ def cli_error_hint(msg: str) -> str:
     return ""
 
 
+def _context_stats_path(paths_root: Path) -> Path:
+    d = paths_root / "runtime"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "context_strategy_stats.json"
+
+
+def _load_context_stats(paths_root: Path) -> dict[str, object]:
+    fp = _context_stats_path(paths_root)
+    if not fp.exists():
+        return {"items": []}
+    try:
+        obj = json.loads(fp.read_text(encoding="utf-8"))
+        if isinstance(obj, dict) and isinstance(obj.get("items"), list):
+            return obj
+    except Exception:
+        pass
+    return {"items": []}
+
+
+def _save_context_stats(paths_root: Path, data: dict[str, object]) -> None:
+    fp = _context_stats_path(paths_root)
+    fp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _recent_transient_failures(paths_root: Path, *, key: str, window: int = 8) -> int:
+    obj = _load_context_stats(paths_root)
+    items = obj.get("items") if isinstance(obj, dict) else []
+    if not isinstance(items, list):
+        return 0
+    rows = [x for x in items if isinstance(x, dict) and str(x.get("key", "")) == str(key)]
+    if window > 0:
+        rows = rows[-int(window) :]
+    total = 0
+    for r in rows:
+        try:
+            total += max(0, int(r.get("transient_failures", 0) or 0))
+        except Exception:
+            pass
+    return max(0, total)
+
+
+def _recent_context_utilization(paths_root: Path, *, key: str, window: int = 8) -> float:
+    obj = _load_context_stats(paths_root)
+    items = obj.get("items") if isinstance(obj, dict) else []
+    if not isinstance(items, list):
+        return 0.0
+    rows = [x for x in items if isinstance(x, dict) and str(x.get("key", "")) == str(key)]
+    if window > 0:
+        rows = rows[-int(window) :]
+    vals: list[float] = []
+    for r in rows:
+        try:
+            v = float(r.get("context_utilization", 0.0) or 0.0)
+        except Exception:
+            continue
+        if 0.0 <= v <= 1.2:
+            vals.append(v)
+    if not vals:
+        return 0.0
+    return max(0.0, min(1.2, sum(vals) / float(len(vals))))
+
+
+def _record_context_stat(
+    paths_root: Path,
+    *,
+    key: str,
+    transient_failures: int,
+    attempts: int,
+    profile: str,
+    quota_mode: str,
+    output_tokens: int = 0,
+    context_utilization: float = 0.0,
+    max_items: int = 240,
+) -> None:
+    obj = _load_context_stats(paths_root)
+    items = obj.get("items") if isinstance(obj, dict) else []
+    if not isinstance(items, list):
+        items = []
+    items.append(
+        {
+            "ts": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "key": str(key),
+            "transient_failures": max(0, int(transient_failures)),
+            "attempts": max(1, int(attempts)),
+            "profile": str(profile),
+            "quota_mode": str(quota_mode),
+            "output_tokens": max(0, int(output_tokens)),
+            "context_utilization": max(0.0, min(1.2, float(context_utilization or 0.0))),
+        }
+    )
+    if len(items) > max_items:
+        items = items[-max_items:]
+    _save_context_stats(paths_root, {"items": items})
+
+
+def _runtime_tuning_hints(run_out: dict[str, object]) -> list[str]:
+    hints: list[str] = []
+    if bool(run_out.get("tool_retried", False)):
+        attempts = int(run_out.get("tool_attempts", 1) or 1)
+        tf = int(run_out.get("tool_transient_failures", 0) or 0)
+        hints.append(
+            f"transient recovery observed (attempts={attempts}, transient_failures={tf}); "
+            "if frequent, lower quota-mode or reduce request burst"
+        )
+    pressure = str(run_out.get("context_pressure", "") or "").strip().lower()
+    if pressure == "high":
+        hints.append("context pressure is high; reduce retrieve-limit or use quota-mode=low/critical")
+    elif pressure == "low":
+        hints.append("context pressure is low; consider context-profile=deep_research for broader recall")
+    route = str(run_out.get("context_route", "") or "").strip().lower()
+    if route and route not in {"general"}:
+        hints.append(f"context route inferred as {route}; verify query intent matches this route")
+    answer = str(run_out.get("answer", "") or "").strip()
+    if answer:
+        out_toks = max(1, int(estimate_tokens(answer)))
+        suggested = int(max(64, min(4096, round(out_toks * 1.25))))
+        hints.append(
+            f"observed output size is ~{out_toks} tokens; set max_output_tokens close to expected size (e.g. {suggested})"
+        )
+        if bool(run_out.get("tool_retried", False)) and out_toks >= 900:
+            hints.append("large outputs under retry pressure: ask for concise output or use stop sequences to reduce quota spikes")
+    return hints
+
+
 def cmd_write(args: argparse.Namespace) -> int:
     cfg = load_config(cfg_path_arg(args))
     paths = resolve_paths(cfg)
@@ -313,6 +438,55 @@ def cmd_brief(args: argparse.Namespace) -> int:
     paths = resolve_paths(cfg)
     result = build_brief(paths, schema_sql_path(), args.project_id, args.limit)
     print_json({"ok": True, **result})
+    return 0
+
+
+def cmd_context_plan(args: argparse.Namespace) -> int:
+    prompt = str(getattr(args, "prompt", "") or "")
+    prompt_file = str(getattr(args, "prompt_file", "") or "").strip()
+    if prompt_file:
+        prompt = Path(prompt_file).read_text(encoding="utf-8")
+    prompt_tokens = estimate_tokens(prompt)
+    recent_tf = max(0, int(getattr(args, "recent_transient_failures", 0) or 0))
+    recent_cu = 0.0
+    recent_tf_source = "arg"
+    if bool(getattr(args, "from_runtime", False)):
+        try:
+            cfg_stats = load_config(cfg_path_arg(args))
+            stats_root = resolve_paths(cfg_stats).root
+            k = f"{str(getattr(args, 'tool', 'codex') or 'codex')}|{str(getattr(args, 'project_id', 'global') or 'global')}"
+            recent_tf = _recent_transient_failures(stats_root, key=k, window=8)
+            recent_cu = _recent_context_utilization(stats_root, key=k, window=8)
+            recent_tf_source = "runtime"
+        except Exception:
+            recent_tf_source = "runtime-fallback-arg"
+    plan = resolve_context_plan(
+        profile=str(getattr(args, "context_profile", "balanced") or "balanced"),
+        quota_mode=str(getattr(args, "quota_mode", "normal") or "normal"),
+        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+        retrieve_limit=int(getattr(args, "retrieve_limit", 8)),
+        prompt_tokens_estimate=prompt_tokens,
+        recent_transient_failures=recent_tf,
+        recent_context_utilization=recent_cu,
+    )
+    print_json(
+        {
+            "ok": True,
+            "prompt_tokens_estimate": int(prompt_tokens),
+            "recent_transient_failures_used": int(recent_tf),
+            "recent_transient_failures_source": recent_tf_source,
+            "recent_context_utilization_used": round(float(recent_cu), 4),
+            "effective": {
+                "profile": plan.profile,
+                "quota_mode": plan.quota_mode,
+                "context_budget_tokens": int(plan.context_budget_tokens),
+                "retrieve_limit": int(plan.retrieve_limit),
+                "delta_enabled": bool(plan.prefer_delta_context),
+                "stable_prefix": bool(plan.stable_prefix),
+                "decision_reason": str(plan.decision_reason),
+            },
+        }
+    )
     return 0
 
 
@@ -1674,28 +1848,111 @@ def cmd_adapter_r2_get(args: argparse.Namespace) -> int:
 
 
 def cmd_agent_run(args: argparse.Namespace) -> int:
+    prompt_txt = str(getattr(args, "prompt", "") or "")
+    stats_root: Path | None = None
+    recent_tf = 0
+    recent_cu = 0.0
+    try:
+        cfg_stats = load_config(cfg_path_arg(args))
+        stats_root = resolve_paths(cfg_stats).root
+        stats_key = f"{str(args.tool)}|{str(args.project_id)}"
+        recent_tf = _recent_transient_failures(stats_root, key=stats_key, window=8)
+        recent_cu = _recent_context_utilization(stats_root, key=stats_key, window=8)
+    except Exception:
+        stats_root = None
+        recent_tf = 0
+        recent_cu = 0.0
+    plan = resolve_context_plan(
+        profile=str(getattr(args, "context_profile", "balanced") or "balanced"),
+        quota_mode=str(getattr(args, "quota_mode", "normal") or "normal"),
+        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+        retrieve_limit=int(getattr(args, "retrieve_limit", 8)),
+        prompt_tokens_estimate=estimate_tokens(prompt_txt),
+        recent_transient_failures=recent_tf,
+        recent_context_utilization=recent_cu,
+    )
+    delta_enabled = (not bool(getattr(args, "no_delta_context", False))) and bool(plan.prefer_delta_context)
     out = run_turn(
         tool=args.tool,
         project_id=args.project_id,
         user_prompt=args.prompt,
         drift_threshold=args.drift_threshold,
         cwd=args.cwd,
-        limit=args.retrieve_limit,
-        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
-        delta_enabled=not bool(getattr(args, "no_delta_context", False)),
+        limit=int(plan.retrieve_limit),
+        context_budget_tokens=int(plan.context_budget_tokens),
+        delta_enabled=delta_enabled,
+        retry_max_attempts=int(getattr(args, "retry_max_attempts", 3)),
+        retry_initial_backoff_s=float(getattr(args, "retry_initial_backoff", 1.0)),
+        retry_max_backoff_s=float(getattr(args, "retry_max_backoff", 8.0)),
     )
+    out["context_plan"] = {
+        "profile": plan.profile,
+        "quota_mode": plan.quota_mode,
+        "context_budget_tokens": plan.context_budget_tokens,
+        "retrieve_limit": plan.retrieve_limit,
+        "delta_enabled": delta_enabled,
+        "stable_prefix": bool(plan.stable_prefix),
+        "decision_reason": str(plan.decision_reason),
+    }
+    if stats_root is not None:
+        try:
+            _record_context_stat(
+                stats_root,
+                key=f"{str(args.tool)}|{str(args.project_id)}",
+                transient_failures=int(out.get("tool_transient_failures", 0) or 0),
+                attempts=int(out.get("tool_attempts", 1) or 1),
+                profile=plan.profile,
+                quota_mode=plan.quota_mode,
+                output_tokens=estimate_tokens(str(out.get("answer", "") or "")),
+                context_utilization=float(out.get("context_utilization", 0.0) or 0.0),
+            )
+        except Exception:
+            pass
+    out["runtime_hints"] = _runtime_tuning_hints(out)
     print_json(out)
     return 0
 
 
 def cmd_agent_chat(args: argparse.Namespace) -> int:
+    recent_tf = 0
+    recent_cu = 0.0
+    try:
+        cfg_stats = load_config(cfg_path_arg(args))
+        stats_root = resolve_paths(cfg_stats).root
+        stats_key = f"{str(args.tool)}|{str(args.project_id)}"
+        recent_tf = _recent_transient_failures(stats_root, key=stats_key, window=8)
+        recent_cu = _recent_context_utilization(stats_root, key=stats_key, window=8)
+    except Exception:
+        recent_tf = 0
+        recent_cu = 0.0
+    plan = resolve_context_plan(
+        profile=str(getattr(args, "context_profile", "balanced") or "balanced"),
+        quota_mode=str(getattr(args, "quota_mode", "normal") or "normal"),
+        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+        retrieve_limit=int(getattr(args, "retrieve_limit", 8)),
+        prompt_tokens_estimate=0,
+        recent_transient_failures=recent_tf,
+        recent_context_utilization=recent_cu,
+    )
+    delta_enabled = (not bool(getattr(args, "no_delta_context", False))) and bool(plan.prefer_delta_context)
+    if bool(getattr(args, "show_context_plan", False)):
+        sys.stderr.write(
+            f"[omnimem] context_plan profile={plan.profile} quota_mode={plan.quota_mode} "
+            f"budget={plan.context_budget_tokens} retrieve_limit={plan.retrieve_limit} "
+            f"delta={'on' if delta_enabled else 'off'} stable_prefix={'on' if plan.stable_prefix else 'off'} "
+            f"reason=\"{plan.decision_reason}\"\n"
+        )
+        sys.stderr.flush()
     return interactive_chat(
         tool=args.tool,
         project_id=args.project_id,
         drift_threshold=args.drift_threshold,
         cwd=args.cwd,
-        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
-        delta_enabled=not bool(getattr(args, "no_delta_context", False)),
+        context_budget_tokens=int(plan.context_budget_tokens),
+        delta_enabled=delta_enabled,
+        retry_max_attempts=int(getattr(args, "retry_max_attempts", 3)),
+        retry_initial_backoff_s=float(getattr(args, "retry_initial_backoff", 1.0)),
+        retry_max_backoff_s=float(getattr(args, "retry_max_backoff", 8.0)),
     )
 
 
@@ -1751,6 +2008,7 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
     cwd = args.cwd
     project_id = infer_project_id(cwd, args.project_id)
     tool_args = list(getattr(args, "tool_args", []) or [])
+    prompt = " ".join(args.prompt).strip()
 
     run_cwd_path = Path(cwd).expanduser().resolve() if cwd else Path.cwd().resolve()
 
@@ -1797,6 +2055,48 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
+    stats_root: Path | None = None
+    recent_tf = 0
+    recent_cu = 0.0
+    try:
+        cfg_stats = load_config(cfg_path_arg(args))
+        stats_root = resolve_paths(cfg_stats).root
+        recent_tf = _recent_transient_failures(
+            stats_root,
+            key=f"{tool}|{project_id}",
+            window=8,
+        )
+        recent_cu = _recent_context_utilization(
+            stats_root,
+            key=f"{tool}|{project_id}",
+            window=8,
+        )
+    except Exception:
+        stats_root = None
+        recent_tf = 0
+        recent_cu = 0.0
+
+    context_plan = resolve_context_plan(
+        profile=str(getattr(args, "context_profile", "balanced") or "balanced"),
+        quota_mode=str(getattr(args, "quota_mode", "normal") or "normal"),
+        context_budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+        retrieve_limit=int(getattr(args, "retrieve_limit", 8)),
+        prompt_tokens_estimate=estimate_tokens(prompt),
+        recent_transient_failures=recent_tf,
+        recent_context_utilization=recent_cu,
+    )
+    effective_delta_enabled = (not bool(getattr(args, "no_delta_context", False))) and bool(context_plan.prefer_delta_context)
+    effective_budget = int(context_plan.context_budget_tokens)
+    effective_retrieve_limit = int(context_plan.retrieve_limit)
+    if bool(getattr(args, "show_context_plan", False)):
+        sys.stderr.write(
+            f"[omnimem] context_plan profile={context_plan.profile} quota_mode={context_plan.quota_mode} "
+            f"budget={effective_budget} retrieve_limit={effective_retrieve_limit} "
+            f"delta={'on' if effective_delta_enabled else 'off'} stable_prefix={'on' if context_plan.stable_prefix else 'off'} "
+            f"reason=\"{context_plan.decision_reason}\"\n"
+        )
+        sys.stderr.flush()
+
     # Optional one-shot path kept for automation scripts.
     if args.oneshot:
         prompt = " ".join(args.prompt).strip()
@@ -1809,8 +2109,27 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
             user_prompt=prompt,
             drift_threshold=args.drift_threshold,
             cwd=cwd,
-            limit=args.retrieve_limit,
+            limit=effective_retrieve_limit,
+            context_budget_tokens=effective_budget,
+            delta_enabled=effective_delta_enabled,
+            retry_max_attempts=int(getattr(args, "retry_max_attempts", 3)),
+            retry_initial_backoff_s=float(getattr(args, "retry_initial_backoff", 1.0)),
+            retry_max_backoff_s=float(getattr(args, "retry_max_backoff", 8.0)),
         )
+        if stats_root is not None:
+            try:
+                _record_context_stat(
+                    stats_root,
+                    key=f"{tool}|{project_id}",
+                    transient_failures=int(out.get("tool_transient_failures", 0) or 0),
+                    attempts=int(out.get("tool_attempts", 1) or 1),
+                    profile=context_plan.profile,
+                    quota_mode=context_plan.quota_mode,
+                    output_tokens=estimate_tokens(str(out.get("answer", "") or "")),
+                    context_utilization=float(out.get("context_utilization", 0.0) or 0.0),
+                )
+            except Exception:
+                pass
         print_json(out)
         return 0
 
@@ -1904,7 +2223,6 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
                 env=dict(os.environ),
             )
 
-    prompt = " ".join(args.prompt).strip()
     use_agent = bool(getattr(args, "agent", False))
     if getattr(args, "native", False):
         use_agent = False
@@ -1917,15 +2235,52 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
                 user_prompt=prompt,
                 drift_threshold=args.drift_threshold,
                 cwd=cwd,
-                limit=args.retrieve_limit,
+                limit=effective_retrieve_limit,
+                context_budget_tokens=effective_budget,
+                delta_enabled=effective_delta_enabled,
+                retry_max_attempts=int(getattr(args, "retry_max_attempts", 3)),
+                retry_initial_backoff_s=float(getattr(args, "retry_initial_backoff", 1.0)),
+                retry_max_backoff_s=float(getattr(args, "retry_max_backoff", 8.0)),
             )
+            if stats_root is not None:
+                try:
+                    _record_context_stat(
+                        stats_root,
+                        key=f"{tool}|{project_id}",
+                        transient_failures=int(out.get("tool_transient_failures", 0) or 0),
+                        attempts=int(out.get("tool_attempts", 1) or 1),
+                        profile=context_plan.profile,
+                        quota_mode=context_plan.quota_mode,
+                        output_tokens=estimate_tokens(str(out.get("answer", "") or "")),
+                        context_utilization=float(out.get("context_utilization", 0.0) or 0.0),
+                    )
+                except Exception:
+                    pass
             print(out["answer"])
+            if bool(out.get("tool_retried", False)):
+                sys.stderr.write(
+                    "[omnimem] transient recovery: "
+                    f"attempts={int(out.get('tool_attempts', 1) or 1)} "
+                    f"transient_failures={int(out.get('tool_transient_failures', 0) or 0)}\n"
+                )
+                sys.stderr.flush()
+            hints = _runtime_tuning_hints(out)
+            if hints:
+                sys.stderr.write("[omnimem] runtime hints:\n")
+                for h in hints[:3]:
+                    sys.stderr.write(f"- {h}\n")
+                sys.stderr.flush()
             return 0
         return interactive_chat(
             tool=tool,
             project_id=project_id,
             drift_threshold=args.drift_threshold,
             cwd=cwd,
+            context_budget_tokens=effective_budget,
+            delta_enabled=effective_delta_enabled,
+            retry_max_attempts=int(getattr(args, "retry_max_attempts", 3)),
+            retry_initial_backoff_s=float(getattr(args, "retry_initial_backoff", 1.0)),
+            retry_max_backoff_s=float(getattr(args, "retry_max_backoff", 8.0)),
         )
 
     smart = bool(getattr(args, "smart", False))
@@ -1946,7 +2301,7 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
                 query=prompt,
                 project_id=project_id,
                 session_id="",
-                seed_limit=min(12, max(4, int(args.retrieve_limit))),
+                seed_limit=min(12, max(4, int(effective_retrieve_limit))),
                 depth=2,
                 per_hop=6,
                 min_weight=0.18,
@@ -1954,7 +2309,7 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
             )
             mems = list(rel_out.get("items") or [])
         else:
-            mems = find_memories(paths, schema, query="", layer=None, limit=max(10, int(args.retrieve_limit)), project_id=project_id)
+            mems = find_memories(paths, schema, query="", layer=None, limit=max(10, int(effective_retrieve_limit)), project_id=project_id)
         place = run_cwd_path.name or "workspace"
         ctx = build_budgeted_memory_context(
             paths_root=paths.root,
@@ -1964,12 +2319,13 @@ def cmd_tool_shortcut(args: argparse.Namespace) -> int:
             user_prompt=prompt,
             brief=brief,
             candidates=mems,
-            budget_tokens=int(getattr(args, "context_budget_tokens", 420)),
+            budget_tokens=effective_budget,
             include_protocol=True,
             include_user_request=(tool == "codex" and bool(prompt)),
-            delta_enabled=(not bool(getattr(args, "no_delta_context", False))) and bool(prompt),
+            delta_enabled=effective_delta_enabled and bool(prompt),
             max_checkpoints=3,
-            max_memories=min(10, max(3, int(args.retrieve_limit))),
+            max_memories=min(10, max(3, int(effective_retrieve_limit))),
+            include_runtime_timestamp=not bool(context_plan.stable_prefix),
         )
         memory_context = str(ctx.get("text", "") or "")
 
@@ -2822,6 +3178,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_brief.add_argument("--limit", type=int, default=8)
     p_brief.set_defaults(func=cmd_brief)
 
+    p_ctx_plan = sub.add_parser("context-plan", help="preview effective context/quota strategy")
+    p_ctx_plan.add_argument("--config", help="path to omnimem config json")
+    p_ctx_plan.add_argument("--prompt", default="")
+    p_ctx_plan.add_argument("--prompt-file", help="optional file path for prompt text")
+    p_ctx_plan.add_argument("--context-budget-tokens", type=int, default=420)
+    p_ctx_plan.add_argument("--retrieve-limit", type=int, default=8)
+    p_ctx_plan.add_argument("--context-profile", choices=["balanced", "low_quota", "deep_research", "high_throughput"], default="balanced")
+    p_ctx_plan.add_argument("--quota-mode", choices=["normal", "low", "critical", "auto"], default="normal")
+    p_ctx_plan.add_argument("--recent-transient-failures", type=int, default=0, help="optional recent transient failure count for auto mode simulation")
+    p_ctx_plan.add_argument("--from-runtime", action="store_true", help="read recent transient failures from runtime stats")
+    p_ctx_plan.add_argument("--tool", choices=["codex", "claude"], default="codex")
+    p_ctx_plan.add_argument("--project-id", default="global")
+    p_ctx_plan.set_defaults(func=cmd_context_plan)
+
     p_weave = sub.add_parser("weave", help="build/refresh memory relationship links (graph)")
     p_weave.add_argument("--config", help="path to omnimem config json")
     p_weave.add_argument("--project-id", default="", help="optional project filter")
@@ -3367,7 +3737,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_run.add_argument("--cwd", help="optional working directory for underlying tool")
     p_agent_run.add_argument("--retrieve-limit", type=int, default=8)
     p_agent_run.add_argument("--context-budget-tokens", type=int, default=420)
+    p_agent_run.add_argument("--context-profile", choices=["balanced", "low_quota", "deep_research", "high_throughput"], default="balanced")
+    p_agent_run.add_argument("--quota-mode", choices=["normal", "low", "critical", "auto"], default="normal")
+    p_agent_run.add_argument("--show-context-plan", action="store_true")
     p_agent_run.add_argument("--no-delta-context", action="store_true")
+    p_agent_run.add_argument("--retry-max-attempts", type=int, default=3)
+    p_agent_run.add_argument("--retry-initial-backoff", type=float, default=1.0)
+    p_agent_run.add_argument("--retry-max-backoff", type=float, default=8.0)
     p_agent_run.set_defaults(func=cmd_agent_run)
 
     p_agent_chat = agent_sub.add_parser("chat", help="interactive auto-memory chat loop")
@@ -3376,7 +3752,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_chat.add_argument("--drift-threshold", type=float, default=0.62)
     p_agent_chat.add_argument("--cwd", help="optional working directory for underlying tool")
     p_agent_chat.add_argument("--context-budget-tokens", type=int, default=420)
+    p_agent_chat.add_argument("--retrieve-limit", type=int, default=8)
+    p_agent_chat.add_argument("--context-profile", choices=["balanced", "low_quota", "deep_research", "high_throughput"], default="balanced")
+    p_agent_chat.add_argument("--quota-mode", choices=["normal", "low", "critical", "auto"], default="normal")
+    p_agent_chat.add_argument("--show-context-plan", action="store_true")
     p_agent_chat.add_argument("--no-delta-context", action="store_true")
+    p_agent_chat.add_argument("--retry-max-attempts", type=int, default=3)
+    p_agent_chat.add_argument("--retry-initial-backoff", type=float, default=1.0)
+    p_agent_chat.add_argument("--retry-max-backoff", type=float, default=8.0)
     p_agent_chat.set_defaults(func=cmd_agent_chat)
 
     for tool_name in ["codex", "claude"]:
@@ -3387,7 +3770,13 @@ def build_parser() -> argparse.ArgumentParser:
         p_short.add_argument("--cwd", help="optional working directory for underlying tool")
         p_short.add_argument("--retrieve-limit", type=int, default=8)
         p_short.add_argument("--context-budget-tokens", type=int, default=420, help="max tokens for injected memory context")
+        p_short.add_argument("--context-profile", choices=["balanced", "low_quota", "deep_research", "high_throughput"], default="balanced")
+        p_short.add_argument("--quota-mode", choices=["normal", "low", "critical", "auto"], default="normal")
+        p_short.add_argument("--show-context-plan", action="store_true", help="print effective context/retrieval plan to stderr")
         p_short.add_argument("--no-delta-context", action="store_true", help="disable delta-only memory injection")
+        p_short.add_argument("--retry-max-attempts", type=int, default=3, help="max retries for transient tool failures in --agent/--oneshot paths")
+        p_short.add_argument("--retry-initial-backoff", type=float, default=1.0, help="initial retry backoff seconds for transient failures")
+        p_short.add_argument("--retry-max-backoff", type=float, default=8.0, help="max retry backoff seconds for transient failures")
         p_short.add_argument("--oneshot", action="store_true", help="use internal one-shot orchestrator path")
         p_short.add_argument("--native", action="store_true", help="launch native tool directly (no per-turn memory orchestration)")
         p_short.add_argument("--agent", action="store_true", help="run the OmniMem agent for auto memory context and checkpoints")

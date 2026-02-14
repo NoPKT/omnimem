@@ -25,6 +25,7 @@ __pycache__/
 .tmp-omnimem-home*/
 eval/*.json
 .release/
+/omnimem-*.tgz
 
 # Project attach artifacts (repo-root only; don't ignore templates/)
 /.omnimem-home/

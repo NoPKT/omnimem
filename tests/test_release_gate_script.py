@@ -24,6 +24,8 @@ class ReleaseGateScriptTest(unittest.TestCase):
         self.assertIn("python3 -m omnimem.cli", txt)
         self.assertIn("\"${OM[@]}\" preflight --path", txt)
         self.assertIn("\"${OM[@]}\" doctor", txt)
+        self.assertIn("--formal-release", txt)
+        self.assertIn("--require-clean", txt)
         self.assertIn("npm run pack:check", txt)
         self.assertIn("python3 scripts/check_docs_i18n.py", txt)
         self.assertIn("python3 scripts/report_docs_health.py", txt)

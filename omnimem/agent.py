@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
 import re
 import shlex
 import subprocess
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass
@@ -25,6 +27,11 @@ from .memory_context import build_budgeted_memory_context
 
 
 WORD_RE = re.compile(r"[A-Za-z0-9_]{2,}")
+TRANSIENT_TOOL_ERR_RE = re.compile(
+    r"(429|rate\s*limit|too\s*many\s*requests|overloaded|temporar(?:y|ily)|timeout|try\s*again|service\s*unavailable|\b5\d\d\b)",
+    flags=re.IGNORECASE,
+)
+RETRY_AFTER_RE = re.compile(r"(?:retry[-_ ]after|retry_after)\s*[:=]?\s*(\d+(?:\.\d+)?)", flags=re.IGNORECASE)
 
 
 @dataclass
@@ -35,6 +42,14 @@ class AgentState:
     topic_vector: dict[str, float]
     turns: int
     last_checkpoint_turn: int
+
+
+@dataclass(frozen=True)
+class ToolRunResult:
+    process: subprocess.CompletedProcess[str]
+    attempts: int
+    retried: int
+    transient_failures: int
 
 
 def _state_path(paths_root: Path, tool: str, project_id: str) -> Path:
@@ -125,6 +140,77 @@ def _tool_command(tool: str, prompt: str) -> list[str]:
     raise ValueError(f"unsupported tool: {tool}")
 
 
+def _is_transient_tool_error(msg: str) -> bool:
+    return bool(TRANSIENT_TOOL_ERR_RE.search(str(msg or "")))
+
+
+def _extract_retry_after_seconds(msg: str) -> float | None:
+    m = RETRY_AFTER_RE.search(str(msg or ""))
+    if not m:
+        return None
+    try:
+        v = float(m.group(1))
+    except Exception:
+        return None
+    if not math.isfinite(v):
+        return None
+    return max(0.0, min(120.0, v))
+
+
+def _run_tool_with_retry(
+    *,
+    cmd: list[str],
+    cwd: str | None,
+    retry_max_attempts: int = 3,
+    retry_initial_backoff_s: float = 1.0,
+    retry_max_backoff_s: float = 8.0,
+    retry_jitter_ratio: float = 0.15,
+) -> ToolRunResult:
+    attempts = max(1, int(retry_max_attempts))
+    backoff = max(0.1, float(retry_initial_backoff_s))
+    backoff_cap = max(backoff, float(retry_max_backoff_s))
+    jitter = max(0.0, min(0.5, float(retry_jitter_ratio)))
+    last: subprocess.CompletedProcess[str] | None = None
+    transient_failures = 0
+    for idx in range(attempts):
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+        last = proc
+        if int(proc.returncode) == 0:
+            used = idx + 1
+            return ToolRunResult(
+                process=proc,
+                attempts=used,
+                retried=max(0, used - 1),
+                transient_failures=transient_failures,
+            )
+        msg = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()
+        transient = _is_transient_tool_error(msg)
+        if (idx + 1) >= attempts or not transient:
+            used = idx + 1
+            return ToolRunResult(
+                process=proc,
+                attempts=used,
+                retried=max(0, used - 1),
+                transient_failures=transient_failures,
+            )
+        transient_failures += 1
+        sleep_for = min(backoff_cap, backoff)
+        retry_after_s = _extract_retry_after_seconds(msg)
+        if retry_after_s is not None:
+            sleep_for = min(backoff_cap, max(sleep_for, retry_after_s))
+        if jitter > 0:
+            sleep_for = min(backoff_cap, sleep_for * (1.0 + random.uniform(0.0, jitter)))
+        time.sleep(sleep_for)
+        backoff = min(backoff_cap, backoff * 2.0)
+    fallback = last if last is not None else subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="tool failed")
+    return ToolRunResult(
+        process=fallback,
+        attempts=max(1, attempts),
+        retried=max(0, attempts - 1),
+        transient_failures=transient_failures,
+    )
+
+
 def _build_injected_prompt(*, project_id: str, user_prompt: str, brief: dict[str, Any], mems: list[dict[str, Any]]) -> str:
     blocks = []
     blocks.append(f"Project ID: {project_id}")
@@ -140,6 +226,35 @@ def _build_injected_prompt(*, project_id: str, user_prompt: str, brief: dict[str
     blocks.append("User request:")
     blocks.append(user_prompt)
     return "\n".join(blocks)
+
+
+def _context_observability(ctx: dict[str, Any]) -> dict[str, Any]:
+    budget = max(1, int(ctx.get("budget_tokens", 0) or 0))
+    est = max(0, int(ctx.get("estimated_tokens", 0) or 0))
+    util = max(0.0, min(1.0, float(est) / float(budget)))
+    if util >= 0.92:
+        pressure = "high"
+        hint = "context near budget cap; consider lower retrieve_limit or quota_mode=low/critical"
+    elif util <= 0.45:
+        pressure = "low"
+        hint = "context has spare budget; consider deep_research profile for broader retrieval"
+    else:
+        pressure = "balanced"
+        hint = "context budget utilization is balanced"
+    return {
+        "context_budget_tokens": budget,
+        "context_estimated_tokens": est,
+        "context_utilization": round(util, 4),
+        "context_pressure": pressure,
+        "context_hint": hint,
+        "context_selected_count": int(ctx.get("selected_count", 0) or 0),
+        "context_selected_core_count": int(ctx.get("selected_core_count", 0) or 0),
+        "context_selected_expand_count": int(ctx.get("selected_expand_count", 0) or 0),
+        "context_delta_new_count": int(ctx.get("delta_new_count", 0) or 0),
+        "context_delta_seen_count": int(ctx.get("delta_seen_count", 0) or 0),
+        "context_carry_queued_count": int(ctx.get("carry_queued_count", 0) or 0),
+        "context_route": str(ctx.get("route", "") or ""),
+    }
 
 
 def _choose_layer(summary: str, response: str, drift: float) -> tuple[str, float, float, float]:
@@ -182,6 +297,9 @@ def run_turn(
     limit: int = 8,
     context_budget_tokens: int = 420,
     delta_enabled: bool = True,
+    retry_max_attempts: int = 3,
+    retry_initial_backoff_s: float = 1.0,
+    retry_max_backoff_s: float = 8.0,
 ) -> dict[str, Any]:
     cfg = load_config(None)
     paths = resolve_paths(cfg)
@@ -269,7 +387,14 @@ def run_turn(
     injected = str(ctx.get("text") or _build_injected_prompt(project_id=project_id, user_prompt=user_prompt, brief=brief, mems=rel))
 
     cmd = _tool_command(tool, injected)
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    tool_run = _run_tool_with_retry(
+        cmd=cmd,
+        cwd=cwd,
+        retry_max_attempts=retry_max_attempts,
+        retry_initial_backoff_s=retry_initial_backoff_s,
+        retry_max_backoff_s=retry_max_backoff_s,
+    )
+    proc = tool_run.process
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "").strip() or f"{tool} failed with code {proc.returncode}")
     answer = (proc.stdout or "").strip()
@@ -352,6 +477,10 @@ def run_turn(
         "switched": switched,
         "answer": answer,
         "retrieved_count": len(rel),
+        "tool_attempts": int(tool_run.attempts),
+        "tool_retried": bool(tool_run.retried > 0),
+        "tool_transient_failures": int(tool_run.transient_failures),
+        **_context_observability(ctx),
     }
 
 
@@ -363,6 +492,9 @@ def interactive_chat(
     cwd: str | None = None,
     context_budget_tokens: int = 420,
     delta_enabled: bool = True,
+    retry_max_attempts: int = 3,
+    retry_initial_backoff_s: float = 1.0,
+    retry_max_backoff_s: float = 8.0,
 ) -> int:
     print(f"[omnimem-agent] tool={tool} project={project_id} drift_threshold={drift_threshold}")
     print("[omnimem-agent] type /exit to quit")
@@ -383,6 +515,9 @@ def interactive_chat(
             cwd=cwd,
             context_budget_tokens=context_budget_tokens,
             delta_enabled=delta_enabled,
+            retry_max_attempts=retry_max_attempts,
+            retry_initial_backoff_s=retry_initial_backoff_s,
+            retry_max_backoff_s=retry_max_backoff_s,
         )
         marker = " [session-switched]" if out.get("switched") else ""
         print(f"assistant>{marker}\n{out['answer']}\n")

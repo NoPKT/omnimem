@@ -91,8 +91,11 @@ def main() -> int:
     keys_literals = _collect_locale_keys(block_literals, quoted=True)
 
     per_locale = {}
+    # UI runtime always falls back to English keys (t(): patch -> locale -> enPatch -> en),
+    # so coverage should treat en keys as a valid baseline for every locale.
+    en_merged = set(keys_i18n.get("en", set())) | set(keys_patch.get("en", set()))
     for lc in LOCALES:
-        merged = set(keys_i18n.get(lc, set())) | set(keys_patch.get(lc, set()))
+        merged = set(keys_i18n.get(lc, set())) | set(keys_patch.get(lc, set())) | en_merged
         missing = sorted([k for k in keys_data_i18n if k not in merged])
         per_locale[lc] = {
             "data_i18n_keys": len(keys_data_i18n),
