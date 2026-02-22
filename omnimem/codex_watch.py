@@ -235,8 +235,22 @@ def watch_codex_sessions_and_write(
                             state.setdefault(key, {})
                             state[key]["last_asst_sha"] = h
 
-                            # Construct memory payload.
+                                # Construct memory payload.
                             summary = (user_txt.strip().splitlines()[0] if user_txt else "codex turn")[:120]
+
+                            # Apply ignore logic if .omnimem-ignore exists in the workspace
+                            if opts.workspace:
+                                ignore_file = Path(opts.workspace) / ".omnimem-ignore"
+                                if ignore_file.exists():
+                                    ignore_patterns = [p.strip() for p in ignore_file.read_text().splitlines() if p.strip() and not p.startswith("#")]
+                                    should_ignore = False
+                                    for pattern in ignore_patterns:
+                                        if pattern.lower() in summary.lower() or pattern.lower() in user_txt.lower():
+                                            should_ignore = True
+                                            break
+                                    if should_ignore:
+                                        continue
+
                             body = (
                                 "Auto-captured Codex turn.\n\n"
                                 f"- codex_session_id: {sid}\n"
