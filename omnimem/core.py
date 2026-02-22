@@ -4297,6 +4297,49 @@ def find_memories_ex(
                 "profile": {"enabled": p_enabled, "terms": len(p_terms), "tags": len(p_tags), "weight": float(profile_weight)},
             }
 
+        # Hook for external semantic/vector search
+        sem_ids = _attempt_semantic_search(query, limit, project_id)
+        if sem_ids:
+            placeholders = ','.join(['?'] * len(sem_ids))
+            sql = f"""
+                SELECT id, layer, kind, summary, updated_at, body_md_path,
+                       COALESCE(json_extract(scope_json, '$.project_id'), '') AS project_id,
+                       COALESCE(json_extract(source_json, '$.session_id'), '') AS session_id,
+                       importance_score, confidence_score, stability_score, reuse_count, volatility_score
+                FROM memories
+                WHERE id IN ({placeholders})
+            """
+            if layer:
+                sql += f" AND layer = '{layer}'"
+            sql += " ORDER BY updated_at DESC"
+            sem_rows = conn.execute(sql, tuple(sem_ids)).fetchall()
+            if sem_rows:
+                tried.append({"strategy": "semantic_vector", "query_used": query})
+                items = [_signals_from_row(dict(r)) for r in sem_rows]
+                # We map the results back through cognitive retrieval to ensure they match constraints
+                reranked = _attach_cognitive_retrieval(
+                    items,
+                    strategy="semantic_vector",
+                    query_tokens=_query_tokens(query),
+                    profile_terms=p_terms,
+                    profile_tags=p_tags,
+                    profile_weight=profile_weight if p_enabled else 0.0,
+                )
+                if reranked:
+                    return {
+                        "ok": True,
+                        "strategy": "semantic_vector",
+                        "query_used": query,
+                        "tried": tried,
+                        "items": reranked,
+                        "metrics": {
+                            "pipeline_ms": {
+                                "total": int((time.perf_counter() - t0) * 1000),
+                            }
+                        },
+                        "profile": {"enabled": p_enabled, "terms": len(p_terms), "tags": len(p_tags), "weight": float(profile_weight)},
+                    }
+
         tokens = _query_tokens(query)
         normalized = _normalize_fts_query(query)
         candidates: list[tuple[str, str]] = [("fts_raw", query)]
@@ -6899,3 +6942,26 @@ def run_sync_daemon(
     }
     log_system_event(paths, schema_sql_path, "memory.sync", {"daemon": result}, portable=False)
     return result
+
+# --- Semantic Search Extension Hook ---
+# This serves as a lightweight integration point for vector search.
+# If a compatible vector engine is registered (e.g. ChromaDB via a plugin),
+# it can replace or supplement the standard FTS matching.
+
+_SEMANTIC_SEARCH_PROVIDER = None
+
+def register_semantic_search_provider(provider_func):
+    """
+    Register a callable that takes (query, limit, project_id) and returns
+    a list of memory IDs sorted by semantic relevance.
+    """
+    global _SEMANTIC_SEARCH_PROVIDER
+    _SEMANTIC_SEARCH_PROVIDER = provider_func
+
+def _attempt_semantic_search(query: str, limit: int, project_id: str) -> list[str] | None:
+    if _SEMANTIC_SEARCH_PROVIDER is None:
+        return None
+    try:
+        return _SEMANTIC_SEARCH_PROVIDER(query, limit, project_id)
+    except Exception:
+        return None
