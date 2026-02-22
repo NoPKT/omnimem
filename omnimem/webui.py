@@ -9779,6 +9779,7 @@ def _aggregate_event_stats(
     return {"total": int(total), "types": types, "days": days_out}
 
 
+from .daemon import _daemon_should_attempt_push
 def _run_health_check(paths, daemon_state: dict[str, Any]) -> dict[str, Any]:
     checked_at = utc_now()
     db_ok = False

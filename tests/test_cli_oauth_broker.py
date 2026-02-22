@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+from omnimem.oauth import _detect_broker_url_from_deploy_output, _extract_https_urls
 from omnimem.cli import (
-    _detect_broker_url_from_deploy_output,
-    _extract_https_urls,
+
+
     _find_provider_status,
     _provider_install_hint,
     _startup_guide_can_autorun,

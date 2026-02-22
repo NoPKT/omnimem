@@ -3,9 +3,10 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from omnimem.daemon import _daemon_should_attempt_push, run_sync_daemon
 from omnimem.core import (
     MemoryPaths,
-    _daemon_should_attempt_push,
+
     classify_sync_error,
     run_sync_with_retry,
     should_retry_sync_error,
