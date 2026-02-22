@@ -44,6 +44,8 @@ def _http_json(method: str, url: str, headers: dict[str, str], payload: dict[str
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"http {exc.code}: {body}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"network error: {exc.reason}") from exc
 
 
 def notion_write_page(
