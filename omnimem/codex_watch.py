@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,8 +32,34 @@ _SENSITIVE_RE = re.compile(
 )
 
 
+def _shannon_entropy(data: str) -> float:
+    if not data:
+        return 0.0
+    entropy = 0.0
+    for count in Counter(data).values():
+        p = count / len(data)
+        entropy -= p * math.log2(p)
+    return entropy
+
+
+_HIGH_ENTROPY_TOKEN_RE = re.compile(r"[A-Za-z0-9+/=]{20,}")
+
+
 def _looks_sensitive(text: str) -> bool:
-    return bool(_SENSITIVE_RE.search(text or ""))
+    if not text:
+        return False
+    if _SENSITIVE_RE.search(text):
+        return True
+    
+    # 增加基于信息熵的高危凭证检测（例如 base64 或 随机 token）
+    # 在文本中提取长度 >= 20 的候选词
+    for match in _HIGH_ENTROPY_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        # 如果信息熵较高 (如字母表分布非常均匀，> 4.5 bit) 认为是高危 Token
+        if _shannon_entropy(token) > 4.5:
+            return True
+            
+    return False
 
 
 def _extract_text(msg: dict[str, Any], *, allow_types: set[str]) -> str:
@@ -134,7 +162,15 @@ def watch_codex_sessions_and_write(
                     with fp.open("r", encoding="utf-8") as f:
                         if off:
                             f.seek(off)
-                        for line in f:
+                        while True:
+                            off_before = f.tell()
+                            line = f.readline()
+                            if not line:
+                                break
+                            if not line.endswith("\n"):
+                                f.seek(off_before)
+                                break
+                                
                             off = f.tell()
                             line = line.strip()
                             if not line:

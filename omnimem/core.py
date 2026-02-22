@@ -64,6 +64,8 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+import threading
+
 @contextmanager
 def repo_lock(root: Path, timeout_s: float = 12.0):
     """
@@ -73,14 +75,20 @@ def repo_lock(root: Path, timeout_s: float = 12.0):
     concurrently, which is a common source of sync conflicts and corrupted indexes.
     """
     key = str(root.expanduser().resolve())
-    depth = _REPO_LOCK_DEPTH.get(key, 0)
+    
+    # Thread-local storage to track reentrancy per-thread
+    if not hasattr(_REPO_LOCK_LOCAL, "depths"):
+        _REPO_LOCK_LOCAL.depths = {}
+        
+    depth = _REPO_LOCK_LOCAL.depths.get(key, 0)
     if depth > 0:
-        _REPO_LOCK_DEPTH[key] = depth + 1
+        _REPO_LOCK_LOCAL.depths[key] = depth + 1
         try:
             yield
         finally:
-            _REPO_LOCK_DEPTH[key] = max(0, _REPO_LOCK_DEPTH.get(key, 1) - 1)
+            _REPO_LOCK_LOCAL.depths[key] = max(0, _REPO_LOCK_LOCAL.depths.get(key, 1) - 1)
         return
+        
     lock_path = root / "runtime" / "omnimem.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     if fcntl is None:  # pragma: no cover
@@ -89,7 +97,7 @@ def repo_lock(root: Path, timeout_s: float = 12.0):
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
     start = time.time()
     try:
-        _REPO_LOCK_DEPTH[key] = 1
+        _REPO_LOCK_LOCAL.depths[key] = 1
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -102,14 +110,14 @@ def repo_lock(root: Path, timeout_s: float = 12.0):
                 time.sleep(0.12)
         yield
     finally:
-        _REPO_LOCK_DEPTH[key] = 0
+        _REPO_LOCK_LOCAL.depths[key] = 0
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
 
 
-_REPO_LOCK_DEPTH: dict[str, int] = {}
+_REPO_LOCK_LOCAL = threading.local()
 _SCHEMA_SQL_TEXT_CACHE: dict[str, str] = {}
 _SYSTEM_MEMORY_READY: set[str] = set()
 
@@ -249,7 +257,13 @@ def _schema_sql_text(schema_sql_path: Path) -> str:
     return txt
 
 
+_STORAGE_READY: set[str] = set()
+
 def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
+    key = _cache_key_for_paths(paths)
+    if key in _STORAGE_READY:
+        return
+        
     for layer in sorted(LAYER_SET):
         (paths.markdown_root / layer).mkdir(parents=True, exist_ok=True)
     paths.jsonl_root.mkdir(parents=True, exist_ok=True)
@@ -300,6 +314,8 @@ def ensure_storage(paths: MemoryPaths, schema_sql_path: Path) -> None:
         _maybe_migrate_memories_table(conn)
         _maybe_repair_fk_targets(conn)
         _maybe_create_memory_links_table(conn)
+    
+    _STORAGE_READY.add(key)
 
 
 def _maybe_create_memory_links_table(conn: sqlite3.Connection) -> None:

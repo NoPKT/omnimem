@@ -22,8 +22,13 @@ def resolve_cred_ref(ref: str) -> str:
         return val
 
     if ref.startswith("op://"):
-        proc = subprocess.run(["op", "read", ref], check=True, capture_output=True, text=True)
-        return proc.stdout.strip()
+        try:
+            proc = subprocess.run(["op", "read", ref], check=True, capture_output=True, text=True)
+            return proc.stdout.strip()
+        except FileNotFoundError:
+            raise ValueError("1Password CLI ('op') not found in PATH")
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"1Password CLI error: {e.stderr.strip() if e.stderr else 'auth failed or item not found'}")
 
     raise ValueError("unsupported cred ref, expected env:// or op://")
 
