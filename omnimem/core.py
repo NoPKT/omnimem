@@ -2128,6 +2128,21 @@ def distill_session_memory(
         facts = [str(x.get("summary") or "").strip() for x in items[:8] if str(x.get("summary") or "").strip()]
     if not steps:
         steps = [str(x.get("summary") or "").strip() for x in items[:8] if str(x.get("summary") or "").strip()]
+
+    # If an LLM summarization provider is registered, use it to generate a better abstraction
+    llm_sem = _attempt_llm_summarize(
+        "\n".join(f"- {f}" for f in facts),
+        "Synthesize these facts into a few core, high-level semantic rules."
+    )
+    if llm_sem:
+        facts = [ln.lstrip("-* ") for ln in llm_sem.splitlines() if ln.strip()]
+
+    llm_proc = _attempt_llm_summarize(
+        "\n".join(f"- {s}" for s in steps),
+        "Synthesize these steps into a coherent, high-level procedural workflow."
+    )
+    if llm_proc:
+        steps = [ln.lstrip("-* ") for ln in llm_proc.splitlines() if ln.strip()]
     facts = facts[:14]
     steps = steps[:14]
 
@@ -6963,5 +6978,24 @@ def _attempt_semantic_search(query: str, limit: int, project_id: str) -> list[st
         return None
     try:
         return _SEMANTIC_SEARCH_PROVIDER(query, limit, project_id)
+    except Exception:
+        return None
+
+# --- Summarization/Enhancement Hook ---
+_LLM_SUMMARIZATION_PROVIDER = None
+
+def register_llm_summarization_provider(provider_func):
+    """
+    Register a callable that takes (text: str, instruction: str) -> str
+    to perform deep summarization/distillation using a local/remote LLM.
+    """
+    global _LLM_SUMMARIZATION_PROVIDER
+    _LLM_SUMMARIZATION_PROVIDER = provider_func
+
+def _attempt_llm_summarize(text: str, instruction: str) -> str | None:
+    if _LLM_SUMMARIZATION_PROVIDER is None:
+        return None
+    try:
+        return _LLM_SUMMARIZATION_PROVIDER(text, instruction)
     except Exception:
         return None
