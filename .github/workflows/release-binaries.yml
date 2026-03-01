@@ -1,0 +1,57 @@
+name: Release Binaries
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-13
+            asset_name: omnimem-macos-x64
+          - os: macos-14
+            asset_name: omnimem-macos-arm64
+          - os: ubuntu-latest
+            asset_name: omnimem-linux-x64
+          - os: windows-latest
+            asset_name: omnimem-windows-x64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build Standalone Binary
+        run: pyinstaller omnimem.spec
+
+      - name: Rename Binary
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv dist/omnimem.exe dist/${{ matrix.asset_name }}
+          else
+            mv dist/omnimem dist/${{ matrix.asset_name }}
+          fi
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.asset_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

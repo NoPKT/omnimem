@@ -75,6 +75,10 @@ def schema_sql_path() -> Path:
         here.parent.parent.parent / "db" / "schema.sql",
         Path.cwd() / "db" / "schema.sql",
     ]
+    # Support PyInstaller bundle
+    _meipass = getattr(sys, '_MEIPASS', None)
+    if _meipass:
+        candidates.insert(0, Path(_meipass) / "db" / "schema.sql")
     for c in candidates:
         if c.exists():
             return c
